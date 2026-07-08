@@ -1,0 +1,1 @@
+"""组织 NoviceSynapse 的 doctor 检查模块。"""
