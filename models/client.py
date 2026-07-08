@@ -28,8 +28,12 @@ class OpenAIClient:
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
     ) -> Any:
+        model_name = self.config.model_name.strip()
+        if not model_name:
+            raise ValueError("model_name is empty. Please run config and choose a model.")
+
         kwargs: dict[str, Any] = {
-            "model": getattr(self.config, "model_name", "gpt-4o-mini"),
+            "model": model_name,
             "messages": messages,
         }
         if tools:

@@ -32,9 +32,14 @@ def run_config_flow() -> None:
         "请输入 api-key",
         default=config.client.api_key,
     ).strip()
+    model_name = typer.prompt(
+        "请输入 model_name",
+        default=config.client.model_name or "qwen-chat",
+    ).strip()
 
     config.client.base_url = base_url or None
     config.client.api_key = api_key
+    config.client.model_name = model_name
 
     try:
         save_config(config)

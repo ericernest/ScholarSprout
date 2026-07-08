@@ -11,7 +11,7 @@ from typing import Any
 class OpenAIClientConfig:
     api_key: str = ""
     base_url: str | None = None
-    model_name: str = "gpt-4o-mini"
+    model_name: str = ""
     timeout: float = 60.0
     max_retries: int = 2
 

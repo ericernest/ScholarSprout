@@ -46,9 +46,17 @@ def check_api_key(config: AppConfig) -> CheckResult:
     return CheckResult("api-key", True, "api-key is set.")
 
 
+# 检查 model_name 配置。
+def check_model_name(config: AppConfig) -> CheckResult:
+    if not config.client.model_name.strip():
+        return CheckResult("model_name", False, "model_name is empty.")
+
+    return CheckResult("model_name", True, "model_name is set.")
+
+
 # 聚合执行所有配置检查。
 def check_config(config: AppConfig) -> list[CheckResult]:
-    checks = [check_base_url, check_api_key]
+    checks = [check_base_url, check_api_key, check_model_name]
     return [check(config) for check in checks]
 
 

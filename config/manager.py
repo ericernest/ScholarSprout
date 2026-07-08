@@ -29,7 +29,7 @@ def load_config() -> AppConfig:
         client=OpenAIClientConfig(
             api_key=client_data.get("api_key", ""),
             base_url=client_data.get("base_url") or None,
-            model_name=client_data.get("model_name", "gpt-4o-mini"),
+            model_name=client_data.get("model_name", ""),
             timeout=client_data.get("timeout", 60.0),
             max_retries=client_data.get("max_retries", 2),
         )

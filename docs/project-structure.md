@@ -113,6 +113,7 @@ gateway 层负责：
 当前配置只保留 `client`：
 - `api_key`
 - `base_url`
+- `model_name`
 - `timeout`
 - `max_retries`
 
