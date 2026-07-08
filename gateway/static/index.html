@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NoviceSynapse</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div id="cursor-glow" aria-hidden="true"></div>
+
+    <main id="home-page" class="page home-page">
+      <section class="hero-card">
+        <p class="eyebrow">AI Research Assistant</p>
+        <h1>NoviceSynapse</h1>
+        <p class="hero-copy">
+          帮助科研新手建立第一批“科研知识连接”，把零散的方向、论文、概念、方法和实验串联起来，
+          逐步成长为能够独立理解论文和研究方向的人。
+        </p>
+        <div class="hero-meta">
+          <span>Knowledge Graph</span>
+          <span>Paper Reading</span>
+          <span>Research Chat</span>
+        </div>
+        <a class="primary-button" href="/app">开始体验</a>
+      </section>
+    </main>
+
+    <main id="chat-page" class="page chat-page" hidden>
+      <header class="chat-header">
+        <a class="brand" href="/">NoviceSynapse</a>
+        <span id="mode-pill" class="mode-pill">当前模式：日常聊天</span>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite">
+        <article class="message assistant">
+          <div class="bubble">你好，我是 NoviceSynapse。可以从科研讨论、代码思路或方向规划开始。</div>
+        </article>
+      </section>
+
+      <form id="chat-form" class="composer">
+        <div class="mode-menu-wrap">
+          <button id="mode-button" class="icon-button" type="button" aria-label="选择模式">+</button>
+          <div id="mode-menu" class="mode-menu" hidden>
+            <button type="button" data-mode="chat">日常聊天</button>
+            <button type="button" data-mode="paper_reading">论文精读</button>
+            <button type="button" data-mode="domain_onboarding">方向入门</button>
+          </div>
+        </div>
+        <textarea id="message-input" rows="1" placeholder="输入你的问题..." required></textarea>
+        <button id="send-button" class="send-button" type="submit">发送</button>
+      </form>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

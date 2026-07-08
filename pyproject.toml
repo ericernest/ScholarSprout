@@ -24,3 +24,4 @@ include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "gatewa
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
+gateway = ["static/*"]

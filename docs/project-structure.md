@@ -157,7 +157,11 @@ NoviceSynapse/
 |   |-- __init__.py
 |   `-- agent_runner.py
 |-- gateway/
-|   `-- app.py
+|   |-- app.py
+|   `-- static/
+|       |-- index.html
+|       |-- app.js
+|       `-- style.css
 ```
 
 `channels` 的边界：
@@ -209,6 +213,11 @@ chat handler 流程：
 - `POST /paper_reading`
 - `POST /domain_onboarding`
 - 请求体包含 `session_id`、`content`、`user_id`、`metadata`
+
+Web UI：
+- `GET /` 返回首页
+- `GET /app` 返回聊天页
+- 页面只调用现有 HTTP route，不直接操作 channel、bus、agent 或 tool
 
 请求流程：
 1. 三个 HTTP 入口直接写在 `gateway/app.py`

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from agents.agent import create_agent
 from bus.events import OUTBOUND
@@ -19,7 +22,10 @@ from handlers.paper_reading_handler import handle_paper_reading_message
 from models.client import OpenAIClient
 from tools.registry import create_builtin_tool_registry
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 app = FastAPI(title="NoviceSynapse Gateway")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # 从请求体中读取 session_id。
@@ -70,6 +76,18 @@ def send_channel_output(request: Request, message: ChannelMessage) -> ChannelMes
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "novicesynapse-gateway"}
+
+
+# 返回首页。
+@app.get("/")
+def home_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+# 返回聊天页。
+@app.get("/app")
+def chat_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 # chat 功能入口。
