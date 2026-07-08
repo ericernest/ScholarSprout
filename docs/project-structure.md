@@ -1,160 +1,47 @@
-# NoviceSynapse 当前结构记录
+# NoviceSynapse 架构介绍
 
-这份文档用于记录当前可运行框架，方便后续在额度切换或换工具时继续开发。
+这份文档用于说明 NoviceSynapse 当前框架结构、目录职责和消息流。功能开发细节请看 [development-guide.md](development-guide.md)。
 
 ## 当前范围
 
-当前已实现：
-- CLI 层
-- 交互式 config 命令
-- doctor 配置检查聚合
-- OpenAI SDK client 声明
-- gateway 模块级 app 与 start_gateway_server
-- JSON agent profile 加载
-- 默认 chat agent 初始化
-- WebChannel 和内存 MessageBus
-- chat agent runner 和一轮工具调用
-- 简单 Web UI
+当前已经完成：
 
-## 当前 CLI TODO
+- Typer CLI：`config`、`doctor`、`gateway`、`agent`
+- 本地配置读取与保存
+- OpenAI SDK 兼容模型客户端
+- FastAPI gateway
+- Web UI 首页和聊天页
+- channel 和 bus 的第一版骨架
+- chat agent、agent runner 和工具调用骨架
+- 内置工具 `get_current_time`
 
-- CLI 这一层当前有 4 个入口：`gateway()`、`config()`、`doctor()`、`agent()`
-- `agent()` 待做
-- `config()` 当前为交互式模型配置流程
-- `doctor()` 当前检查 `base_url` 和 `api-key` 是否可用
-- 当前正在开发 `gateway()`
+当前主要业务功能：
 
-当前未实现：
-- 多 channel
-- 论文精读真实业务
-- 方向入门真实业务
+- 论文精读：`paper_reading`
+- 领域入门：`domain_onboarding`
 
-## 当前目录结构
+## 目录职责
 
 ```text
 NoviceSynapse/
-├─ agents/
-│  ├─ __init__.py
-│  ├─ agent.py
-│  ├─ profiles.py
-│  └─ profiles.json
-├─ cli/
-│  ├─ __init__.py
-│  └─ main.py
-├─ config/
-│  ├─ __init__.py
-│  ├─ app.py
-│  ├─ manager.py
-│  └─ schema.py
-├─ doctor/
-│  ├─ __init__.py
-│  └─ app.py
-├─ docs/
-│  └─ project-structure.md
-├─ gateway/
-│  ├─ __init__.py
-│  └─ app.py
-├─ models/
-│  ├─ __init__.py
-│  └─ client.py
-├─ tools/
-│  └─ __init__.py
-├─ LICENSE
-├─ README.md
-└─ pyproject.toml
-```
-
-## gateway 启动流程
-
-`gateway/app.py` 当前按以下方式组织：
-
-1. 模块级声明 `app = FastAPI(title="NoviceSynapse Gateway")`
-2. 路由保留 `/health` 和预留 `/ask`
-3. `start_gateway_server()` 内部读取配置
-4. 用 `config.client` 创建 `OpenAIClient`
-5. 用 `create_agent(model, "chat")` 创建默认 chat agent
-6. 将 `model` 写入 `app.state.model`
-7. 将 `chat_agent` 写入 `app.state.chat_agent`
-8. 调用 `uvicorn.run(app, host=host, port=port)`
-
-## 分层边界
-
-CLI 层负责：
-- 挂载命令入口
-- 调用 gateway 启动函数
-- 调用 doctor 检查函数
-- 调用 config 交互流程
-
-config 层负责：
-- 配置 schema
-- 配置加载与保存
-- 配置命令逻辑
-
-doctor 层负责：
-- 聚合配置检查项
-- 检查 `base_url` 是否为空或格式错误
-- 检查 `api-key` 是否为空
-
-models 层负责：
-- 从配置读取连接信息
-- 用 `api_key`、`base_url`、`timeout`、`max_retries` 创建 OpenAI SDK client
-
-agents 层负责：
-- 从 JSON 读取 agent profile
-- 根据 `agent_type` 生成 system_prompt、role、tools
-- 绑定 llm 得到运行时 agent
-
-gateway 层负责：
-- 声明 FastAPI app
-- 在 `start_gateway_server()` 内初始化 client 和默认 chat agent
-- 将后续路由要用的对象挂到 `app.state`
-- 暴露基础路由
-
-## 当前配置结构
-
-当前配置只保留 `client`：
-- `api_key`
-- `base_url`
-- `model_name`
-- `timeout`
-- `max_retries`
-
-## 当前命令
-
-源码目录下可直接运行：
-
-```bash
-python -m cli.main --help
-python -m cli.main config
-python -m cli.main gateway --host 127.0.0.1 --port 8000
-python -m cli.main doctor
-python -m cli.main agent
-```
-
-## channels、bus 和 session message API
-
-当前以本节为准。
-
-新增目录：
-
-```text
-NoviceSynapse/
+|-- agents/
+|   |-- agent.py
+|   |-- profiles.py
+|   `-- profiles.json
 |-- bus/
-|   |-- __init__.py
 |   |-- events.py
 |   `-- message_bus.py
 |-- channels/
-|   |-- __init__.py
 |   |-- base.py
 |   `-- web.py
-|-- handlers/
-|   |-- __init__.py
-|   |-- chat_handler.py
-|   |-- paper_reading_handler.py
-|   `-- domain_onboarding_handler.py
-|-- runtime/
-|   |-- __init__.py
-|   `-- agent_runner.py
+|-- cli/
+|   `-- main.py
+|-- config/
+|   |-- app.py
+|   |-- manager.py
+|   `-- schema.py
+|-- doctor/
+|   `-- app.py
 |-- gateway/
 |   |-- app.py
 |   |-- message_flow.py
@@ -163,76 +50,243 @@ NoviceSynapse/
 |       |-- chat.html
 |       |-- app.js
 |       `-- style.css
+|-- handlers/
+|   |-- chat_handler.py
+|   |-- paper_reading_handler.py
+|   `-- domain_onboarding_handler.py
+|-- models/
+|   `-- client.py
+|-- runtime/
+|   `-- agent_runner.py
+|-- tools/
+|   |-- base.py
+|   |-- registry.py
+|   `-- builtin/
+|       `-- time_tool.py
+|-- README.md
+`-- pyproject.toml
 ```
 
-`channels` 的边界：
-- channel 是外部平台适配器，负责 Web/QQ/CLI 等外部渠道进入和出去
-- 当前只实现 `WebChannel`
-- `WebChannel.create_inbound_message()` 将 Web 请求创建为 inbound `ChannelMessage`
-- `WebChannel.publish_inbound()` 将 inbound message 发布到共享 `MessageBus`
-- `WebChannel.send_outbound()` 第一版只记录 outbound，HTTP response 由 route 返回
-- channel 不调用 model、agent，不判断 mode，不实现业务流程
+## CLI 层
 
-`bus` 的边界：
-- 当前只实现内存 `MessageBus`
-- `publish()` 保存 `BusEvent`
-- `publish_message()` 根据 `message.direction` 生成 `MESSAGE_RECEIVED` 或 `MESSAGE_SENT`
-- `get_events()` 返回全部事件或指定 session 的事件
-- bus 不调用 model、agent，不判断 mode，不处理 Web/QQ/CLI 协议，不做持久化
+位置：`cli/main.py`
 
-`tools` 的边界：
-- `tools/base.py` 定义 `ToolSpec` 和 `BaseTool`
-- `tools/registry.py` 定义 `ToolRegistry` 和 `create_builtin_tool_registry()`
-- `tools/builtin/time_tool.py` 实现 `get_current_time`
-- 工具只负责执行自身能力，不调用 agent、LLM、route，不判断 mode
+职责：
 
-gateway 启动阶段挂载：
-- `app.state.model = model`
-- `app.state.tool_registry = tool_registry`
-- `app.state.message_bus = message_bus`
-- `app.state.default_channel_name = input_channel.name`
-- `app.state.channels = {input_channel.name: input_channel}`
-- `input_channel.start()` 在启动阶段调用，当前第一版为 no-op
+- 注册命令入口
+- 调用配置流程
+- 调用 doctor 检查
+- 启动 gateway
 
-当前 chat agent profile：
-- `name`: `default_chat`
-- `type`: `chat`
-- `role`: `chat`
-- `tools`: `["get_current_time"]`
+当前命令：
 
-chat handler 流程：
-1. `handle_chat_message()` 只调用 `run_agent()`
-2. `runtime/agent_runner.py` 负责单次 agent 执行
-3. `run_agent()` 从 agent profile 读取 system_prompt 和 tools
-4. `run_agent()` 调用 `model.chat()` 并处理 tool calls
-5. 工具必须通过 `tool_registry.get()` 获取
-6. `max_steps` 控制工具调用循环上限
-7. route 不直接调用工具，不直接调用模型，不拼接 prompt
+- `novicesynapse config`
+- `novicesynapse doctor`
+- `novicesynapse gateway --host 127.0.0.1 --port 8000`
+- `novicesynapse agent`
 
-新入口：
+`agent` 当前只是占位命令。
+
+## config 层
+
+位置：`config/`
+
+职责：
+
+- 定义配置结构
+- 从 `~/.novicesynapse/config.json` 读取配置
+- 保存模型配置
+- 提供交互式配置流程
+
+当前配置重点是 `client`：
+
+- `api_key`
+- `base_url`
+- `model_name`
+- `timeout`
+- `max_retries`
+
+## doctor 层
+
+位置：`doctor/app.py`
+
+职责：
+
+- 聚合项目检查项
+- 当前检查 `base_url`、`api-key`、`model_name`
+- 后续可以增加功能级轻量测试
+
+## gateway 层
+
+位置：`gateway/`
+
+职责：
+
+- 声明 FastAPI app
+- 注册 Web 页面和 HTTP 功能入口
+- 启动模型、agent、tool registry、message bus 和默认 channel
+- 将 route 指定的 handler 交给统一消息流程
+
+当前入口：
+
+- `GET /`
+- `GET /app`
+- `GET /health`
 - `POST /chat`
 - `POST /paper_reading`
 - `POST /domain_onboarding`
-- 请求体包含 `session_id`、`content`、`user_id`、`metadata`
 
-Web UI：
-- `GET /` 返回首页
-- `GET /app` 返回聊天页
-- 页面只调用现有 HTTP route，不直接操作 channel、bus、agent 或 tool
+`gateway/app.py` 只注册功能入口，不直接写功能业务。
 
-请求流程：
-1. 三个 HTTP 入口直接写在 `gateway/app.py`
-2. route 调用 `process_channel_input()`，不直接绑定具体 channel 实例
-3. `process_channel_input()` 根据 `app.state.default_channel_name` 从 `app.state.channels` 取出默认 channel
-4. channel 调用 `receive_message()` 将外部输入转换为 inbound `ChannelMessage`
-5. `process_channel_message()` 调用 `channel.publish_inbound()`，bus 记录 `MESSAGE_RECEIVED`
-6. `process_channel_message()` 调用 route 指定的 handler 完成处理
-7. `process_channel_message()` 包装 outbound message 并调用 `channel.send_outbound()`，bus 记录 `MESSAGE_SENT`
-8. route 返回 outbound `ChannelMessage` 给 Web UI
+`gateway/message_flow.py` 负责统一流程：
 
-当前第一版中，bus 负责记录和承接消息事件，不主动调度 handler；handler 由 gateway route 以注册路由的形式传入统一消息流程。
+```text
+外部输入 source
+-> channel.receive_message()
+-> channel.publish_inbound()
+-> bus 记录 MESSAGE_RECEIVED
+-> route 指定的 handler
+-> build outbound ChannelMessage
+-> channel.send_outbound()
+-> bus 记录 MESSAGE_SENT
+```
 
-已废弃入口：
-- `POST /api/sessions/{session_id}/messages` 已从 gateway 中删除
-- `GET /api/sessions/{session_id}/events` 已从 gateway 中删除
-- `POST /ask` 已从 gateway 中删除
+公共流程不绑定 Web，也不绑定 QQ。当前 Web route 传入的是 FastAPI `Request`，以后 QQ channel 可以传入 QQ 原始事件。
+
+## channels 层
+
+位置：`channels/`
+
+职责：
+
+- 将外部平台输入转换为统一 `ChannelMessage`
+- 将系统输出发送回外部平台
+- 不调用 agent
+- 不调用 LLM
+- 不判断具体业务 mode
+
+当前只有 `WebChannel`。
+
+`BaseChannel.receive_message(source, mode)` 是渠道输入适配入口。不同 channel 可以有不同的 `source`，但最终都应该返回 `ChannelMessage`。
+
+## bus 层
+
+位置：`bus/`
+
+职责：
+
+- 记录消息事件
+- 区分 inbound 和 outbound
+- 当前只做内存记录
+
+bus 不负责：
+
+- handler 分发
+- mode 判断
+- agent 调用
+- 持久化
+
+## handlers 层
+
+位置：`handlers/`
+
+职责：
+
+- 每个功能 mode 的业务入口
+- 接收 `ChannelMessage`
+- 使用 `app_state` 取已有模型、agent、tool registry 等对象
+- 返回 JSON 风格的结果
+
+当前文件：
+
+- `chat_handler.py`：已接入 chat agent 和 agent runner
+- `paper_reading_handler.py`：论文精读功能开发入口
+- `domain_onboarding_handler.py`：领域入门功能开发入口
+
+## agents 层
+
+位置：`agents/`
+
+职责：
+
+- 定义 agent profile
+- 从 `profiles.json` 读取预设 profile
+- 根据 agent type 创建 agent
+
+用户模型配置属于 `config`，agent profile 只描述角色、提示词和工具权限。
+
+## models 层
+
+位置：`models/client.py`
+
+职责：
+
+- 根据配置创建 OpenAI SDK client
+- 使用 `api_key`、`base_url`、`model_name` 调用模型
+- 对外提供 `chat()` 方法
+
+模型调用不要写在 gateway route 中。
+
+## runtime 层
+
+位置：`runtime/agent_runner.py`
+
+职责：
+
+- 执行 agent
+- 拼接 system prompt 和 user message
+- 调用模型
+- 处理一轮或有限轮工具调用
+
+## tools 层
+
+位置：`tools/`
+
+职责：
+
+- 定义工具基类
+- 注册内置工具
+- 将工具转换为 OpenAI tools schema
+
+当前内置工具：
+
+- `get_current_time`
+
+## Web UI
+
+位置：`gateway/static/`
+
+职责：
+
+- 提供首页
+- 提供聊天页
+- 调用当前 gateway HTTP route
+
+当前页面：
+
+- `GET /` 首页
+- `GET /app` 聊天页
+
+UI 当前可以选择：
+
+- 日常聊天：`chat`
+- 论文精读：`paper_reading`
+- 领域入门：`domain_onboarding`
+
+## 当前消息流
+
+以 Web UI 调用论文精读为例：
+
+```text
+Web UI
+-> POST /paper_reading
+-> gateway route 指定 handle_paper_reading_message
+-> process_channel_input()
+-> WebChannel.receive_message()
+-> ChannelMessage(direction="inbound", mode="paper_reading")
+-> MessageBus 记录 MESSAGE_RECEIVED
+-> handle_paper_reading_message(message, app_state)
+-> ChannelMessage(direction="outbound", content=handler_result)
+-> MessageBus 记录 MESSAGE_SENT
+-> 返回给 Web UI
+```
