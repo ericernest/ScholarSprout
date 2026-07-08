@@ -26,18 +26,13 @@ const modeMenu = document.querySelector("#mode-menu");
 const modePill = document.querySelector("#mode-pill");
 const sendButton = document.querySelector("#send-button");
 const cursorGlow = document.querySelector("#cursor-glow");
+const selectedModeChip = document.querySelector("#selected-mode-chip");
+const selectedModeLabel = document.querySelector("#selected-mode-label");
+const clearModeButton = document.querySelector("#clear-mode-button");
 
-showPage();
 bindChatPage();
 startParticleField();
 bindCursorGlow();
-
-// Show home or chat page by current path.
-function showPage() {
-  const isChatPage = window.location.pathname === "/app";
-  homePage.hidden = isChatPage;
-  chatPage.hidden = !isChatPage;
-}
 
 // Bind chat page interactions.
 function bindChatPage() {
@@ -56,8 +51,14 @@ function bindChatPage() {
     }
 
     currentMode = mode;
-    modePill.textContent = `当前模式：${modeMap[currentMode].label}`;
+    updateModeView();
     modeMenu.hidden = true;
+    input.focus();
+  });
+
+  clearModeButton.addEventListener("click", () => {
+    currentMode = "chat";
+    updateModeView();
     input.focus();
   });
 
@@ -70,6 +71,16 @@ function bindChatPage() {
     event.preventDefault();
     await sendMessage();
   });
+
+  updateModeView();
+}
+
+// Update visible mode label and chip.
+function updateModeView() {
+  const label = modeMap[currentMode].label;
+  modePill.textContent = `当前模式：${label}`;
+  selectedModeLabel.textContent = label;
+  selectedModeChip.hidden = currentMode === "chat";
 }
 
 // Send user message to current backend endpoint.

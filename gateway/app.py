@@ -87,7 +87,7 @@ def home_page() -> FileResponse:
 # 返回聊天页。
 @app.get("/app")
 def chat_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "chat.html")
 
 
 # chat 功能入口。

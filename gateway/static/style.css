@@ -274,7 +274,8 @@ h1 {
 textarea {
   min-height: 44px;
   max-height: 180px;
-  padding: 0.7rem 0.2rem;
+  width: 100%;
+  padding: 0.3rem 0.2rem 0.7rem;
   border: 0;
   outline: 0;
   resize: none;
@@ -286,6 +287,43 @@ textarea {
 
 textarea::placeholder {
   color: rgba(234, 255, 247, 0.46);
+}
+
+.input-shell {
+  display: grid;
+  align-self: stretch;
+  align-content: center;
+  gap: 0.35rem;
+}
+
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.35rem;
+  padding: 0.28rem 0.38rem 0.28rem 0.58rem;
+  border: 1px solid rgba(102, 245, 214, 0.3);
+  border-radius: 999px;
+  color: #d8fff6;
+  background: rgba(102, 245, 214, 0.1);
+  box-shadow: 0 0 18px rgba(102, 245, 214, 0.12);
+  font-size: 0.78rem;
+}
+
+.mode-chip button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+
+.mode-chip button:hover {
+  background: rgba(102, 245, 214, 0.22);
 }
 
 .icon-button,

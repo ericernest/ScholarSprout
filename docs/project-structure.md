@@ -160,6 +160,7 @@ NoviceSynapse/
 |   |-- app.py
 |   `-- static/
 |       |-- index.html
+|       |-- chat.html
 |       |-- app.js
 |       `-- style.css
 ```

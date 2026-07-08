@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NoviceSynapse Chat</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div id="cursor-glow" aria-hidden="true"></div>
+
+    <main class="page chat-page">
+      <header class="chat-header">
+        <a class="brand" href="/">NoviceSynapse</a>
+        <span id="mode-pill" class="mode-pill">当前模式：日常聊天</span>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite">
+        <article class="message assistant">
+          <div class="bubble">你好，我是 NoviceSynapse。可以从科研讨论、代码思路或方向规划开始。</div>
+        </article>
+      </section>
+
+      <form id="chat-form" class="composer">
+        <div class="mode-menu-wrap">
+          <button id="mode-button" class="icon-button" type="button" aria-label="选择模式">+</button>
+          <div id="mode-menu" class="mode-menu" hidden>
+            <button type="button" data-mode="chat">日常聊天</button>
+            <button type="button" data-mode="domain_onboarding">方向入门</button>
+            <button type="button" data-mode="paper_reading">论文精读</button>
+          </div>
+        </div>
+        <div class="input-shell">
+          <div id="selected-mode-chip" class="mode-chip" hidden>
+            <span id="selected-mode-label">日常聊天</span>
+            <button id="clear-mode-button" type="button" aria-label="取消当前模式">×</button>
+          </div>
+          <textarea id="message-input" rows="1" placeholder="输入你的问题..." required></textarea>
+        </div>
+        <button id="send-button" class="send-button" type="submit">发送</button>
+      </form>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
