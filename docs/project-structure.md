@@ -12,6 +12,9 @@
 - gateway 模块级 app 与 start_gateway_server
 - JSON agent profile 加载
 - 默认 chat agent 初始化
+- WebChannel 和内存 MessageBus
+- chat agent runner 和一轮工具调用
+- 简单 Web UI
 
 ## 当前 CLI TODO
 
@@ -22,10 +25,9 @@
 - 当前正在开发 `gateway()`
 
 当前未实现：
-- 真实 OpenAI 请求发送
-- runtime
-- 消息总线
 - 多 channel
+- 论文精读真实业务
+- 方向入门真实业务
 
 ## 当前目录结构
 
@@ -150,14 +152,12 @@ NoviceSynapse/
 |   |-- chat_handler.py
 |   |-- paper_reading_handler.py
 |   `-- domain_onboarding_handler.py
-|-- services/
-|   |-- __init__.py
-|   `-- message_service.py
 |-- runtime/
 |   |-- __init__.py
 |   `-- agent_runner.py
 |-- gateway/
 |   |-- app.py
+|   |-- message_flow.py
 |   `-- static/
 |       |-- index.html
 |       |-- chat.html
@@ -190,9 +190,9 @@ gateway 启动阶段挂载：
 - `app.state.model = model`
 - `app.state.tool_registry = tool_registry`
 - `app.state.message_bus = message_bus`
-- `app.state.web_channel = web_channel`
-- `app.state.channels = {"web": web_channel}`
-- `web_channel.start()` 在启动阶段调用，当前第一版为 no-op
+- `app.state.default_channel_name = input_channel.name`
+- `app.state.channels = {input_channel.name: input_channel}`
+- `input_channel.start()` 在启动阶段调用，当前第一版为 no-op
 
 当前 chat agent profile：
 - `name`: `default_chat`
@@ -222,12 +222,15 @@ Web UI：
 
 请求流程：
 1. 三个 HTTP 入口直接写在 `gateway/app.py`
-2. route 调用 `receive_channel_input()` 创建 inbound `ChannelMessage`
-3. `receive_channel_input()` 调用 `publish_inbound()`，bus 记录 `MESSAGE_RECEIVED`
-4. route 直接调用对应 handler
-5. route 调用 `build_channel_output()` 包装 outbound `ChannelMessage`
-6. route 调用 `send_channel_output()`，bus 记录 `MESSAGE_SENT`
-7. route 返回 outbound `ChannelMessage`
+2. route 调用 `process_channel_input()`，不直接绑定具体 channel 实例
+3. `process_channel_input()` 根据 `app.state.default_channel_name` 从 `app.state.channels` 取出默认 channel
+4. channel 调用 `receive_message()` 将外部输入转换为 inbound `ChannelMessage`
+5. `process_channel_message()` 调用 `channel.publish_inbound()`，bus 记录 `MESSAGE_RECEIVED`
+6. `process_channel_message()` 调用 route 指定的 handler 完成处理
+7. `process_channel_message()` 包装 outbound message 并调用 `channel.send_outbound()`，bus 记录 `MESSAGE_SENT`
+8. route 返回 outbound `ChannelMessage` 给 Web UI
+
+当前第一版中，bus 负责记录和承接消息事件，不主动调度 handler；handler 由 gateway route 以注册路由的形式传入统一消息流程。
 
 已废弃入口：
 - `POST /api/sessions/{session_id}/messages` 已从 gateway 中删除

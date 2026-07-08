@@ -40,11 +40,13 @@ function bindChatPage() {
     return;
   }
 
-  modeButton.addEventListener("click", () => {
+  modeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
     modeMenu.hidden = !modeMenu.hidden;
   });
 
   modeMenu.addEventListener("click", (event) => {
+    event.stopPropagation();
     const mode = event.target.dataset.mode;
     if (!mode) {
       return;
@@ -59,7 +61,18 @@ function bindChatPage() {
   clearModeButton.addEventListener("click", () => {
     currentMode = "chat";
     updateModeView();
+    modeMenu.hidden = true;
     input.focus();
+  });
+
+  document.addEventListener("click", () => {
+    modeMenu.hidden = true;
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      modeMenu.hidden = true;
+    }
   });
 
   input.addEventListener("input", () => {

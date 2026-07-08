@@ -38,6 +38,10 @@ class BaseChannel:
     def stop(self) -> None:
         raise NotImplementedError
 
+    # 将外部原始输入转换为统一 ChannelMessage。
+    async def receive_message(self, source: Any, mode: str) -> ChannelMessage:
+        raise NotImplementedError
+
     # 将外部收到的 inbound message 发布到 bus。
     def publish_inbound(self, message: ChannelMessage) -> None:
         raise NotImplementedError

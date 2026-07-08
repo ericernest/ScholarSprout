@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fastapi import HTTPException, Request
 from bus.events import INBOUND
 
 from .base import BaseChannel, ChannelMessage
@@ -20,7 +21,7 @@ class WebChannel(BaseChannel):
     def __init__(self, bus: MessageBus):
         self.bus = bus
 
-    # 启动 WebChannel，第一版由 FastAPI route 接收请求。
+    # 启动 WebChannel，HTTP 监听由 gateway route 统一注册。
     def start(self) -> None:
         return None
 
@@ -47,6 +48,20 @@ class WebChannel(BaseChannel):
             metadata=metadata or {},
         )
 
+    # 从 FastAPI 请求中解析 Web inbound message。
+    async def receive_message(self, source: Request, mode: str) -> ChannelMessage:
+        request = source
+        body = await request.json()
+        metadata = body.get("metadata")
+
+        return self.create_inbound_message(
+            session_id=self._read_session_id(body),
+            content=str(body.get("content") or ""),
+            mode=mode,
+            user_id=body.get("user_id"),
+            metadata=metadata if isinstance(metadata, dict) else None,
+        )
+
     # 将 Web inbound message 发布到 bus。
     def publish_inbound(self, message: ChannelMessage) -> None:
         self.bus.publish_message(message)
@@ -54,3 +69,11 @@ class WebChannel(BaseChannel):
     # 第一版只记录 outbound，HTTP response 由 route 返回。
     def send_outbound(self, message: ChannelMessage) -> None:
         self.bus.publish_message(message)
+
+    # 从请求体中读取 session_id。
+    def _read_session_id(self, body: dict[str, Any]) -> str:
+        session_id = str(body.get("session_id") or "").strip()
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required.")
+
+        return session_id
