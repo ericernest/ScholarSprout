@@ -1,16 +1,13 @@
-const modeMap = {
-  chat: {
-    label: "日常聊天",
-    endpoint: "/chat",
-  },
-  paper_reading: {
-    label: "论文精读",
-    endpoint: "/paper_reading",
-  },
-  domain_onboarding: {
-    label: "方向入门",
-    endpoint: "/domain_onboarding",
-  },
+const modeLabels = {
+  chat: "日常聊天",
+  domain_onboarding: "方向入门",
+  paper_reading: "论文精读",
+};
+
+const modeEndpoints = {
+  chat: "/chat",
+  domain_onboarding: "/domain_onboarding",
+  paper_reading: "/paper_reading",
 };
 
 let currentMode = "chat";
@@ -42,36 +39,35 @@ function bindChatPage() {
 
   modeButton.addEventListener("click", (event) => {
     event.stopPropagation();
-    modeMenu.hidden = !modeMenu.hidden;
+    toggleModeMenu();
   });
 
   modeMenu.addEventListener("click", (event) => {
     event.stopPropagation();
-    const mode = event.target.dataset.mode;
-    if (!mode) {
+    const button = event.target.closest("button[data-mode]");
+    if (!button) {
       return;
     }
 
-    currentMode = mode;
-    updateModeView();
-    modeMenu.hidden = true;
+    setMode(button.dataset.mode);
     input.focus();
   });
 
-  clearModeButton.addEventListener("click", () => {
-    currentMode = "chat";
-    updateModeView();
-    modeMenu.hidden = true;
+  clearModeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setMode("chat");
     input.focus();
   });
 
-  document.addEventListener("click", () => {
-    modeMenu.hidden = true;
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".mode-menu-wrap")) {
+      closeModeMenu();
+    }
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      modeMenu.hidden = true;
+      closeModeMenu();
     }
   });
 
@@ -85,15 +81,30 @@ function bindChatPage() {
     await sendMessage();
   });
 
-  updateModeView();
+  setMode(currentMode);
 }
 
-// Update visible mode label and chip.
-function updateModeView() {
-  const label = modeMap[currentMode].label;
+// Close mode menu and sync accessibility state.
+function closeModeMenu() {
+  modeMenu.hidden = true;
+  modeButton.setAttribute("aria-expanded", "false");
+}
+
+// Toggle mode menu visibility.
+function toggleModeMenu() {
+  modeMenu.hidden = !modeMenu.hidden;
+  modeButton.setAttribute("aria-expanded", String(!modeMenu.hidden));
+}
+
+// Set current mode and update visible labels.
+function setMode(mode) {
+  currentMode = mode in modeLabels ? mode : "chat";
+  const label = modeLabels[currentMode] || modeLabels.chat;
+
   modePill.textContent = `当前模式：${label}`;
   selectedModeLabel.textContent = label;
   selectedModeChip.hidden = currentMode === "chat";
+  closeModeMenu();
 }
 
 // Send user message to current backend endpoint.
@@ -109,7 +120,7 @@ async function sendMessage() {
   setLoading(true);
 
   try {
-    const response = await fetch(modeMap[currentMode].endpoint, {
+    const response = await fetch(modeEndpoints[currentMode], {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

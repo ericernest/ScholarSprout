@@ -390,6 +390,10 @@ textarea::placeholder {
   backdrop-filter: blur(18px);
 }
 
+.mode-menu[hidden] {
+  display: none !important;
+}
+
 .mode-menu button {
   padding: 0.78rem 0.85rem;
   border-radius: 14px;
