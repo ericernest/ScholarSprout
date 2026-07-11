@@ -3,7 +3,31 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from time import perf_counter
 from typing import Any
+
+
+@dataclass(slots=True)
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    reported: bool = False
+
+    def add(self, other: "TokenUsage") -> None:
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.total_tokens += other.total_tokens
+        self.reported = self.reported or other.reported
+
+
+@dataclass(slots=True)
+class AgentRunResult:
+    text: str
+    duration_ms: float
+    usage: TokenUsage
+    model_calls: int
 
 
 # 从对象或字典中读取字段。
@@ -24,6 +48,32 @@ def get_response_message(response: Any) -> Any:
 # 从 assistant message 中读取文本内容。
 def get_message_content(message: Any) -> str:
     return str(get_value(message, "content", "") or "")
+
+
+def get_response_usage(response: Any) -> TokenUsage:
+    raw_usage = get_value(response, "usage", None)
+    usage = raw_usage or {}
+    prompt_tokens = int(
+        get_value(usage, "prompt_tokens", get_value(usage, "input_tokens", 0)) or 0
+    )
+    completion_tokens = int(
+        get_value(
+            usage,
+            "completion_tokens",
+            get_value(usage, "output_tokens", 0),
+        )
+        or 0
+    )
+    total_tokens = int(
+        get_value(usage, "total_tokens", prompt_tokens + completion_tokens)
+        or prompt_tokens + completion_tokens
+    )
+    return TokenUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        reported=raw_usage is not None,
+    )
 
 
 # 从 assistant message 中读取 tool calls。
@@ -114,14 +164,26 @@ def run_tool_call(tool_call: Any, tool_registry: Any) -> dict[str, str]:
     }
 
 
-# 执行一次 agent，包含最多 max_steps 轮工具调用。
-def run_agent(
+# 执行一次 agent，并返回文本、耗时与模型 token usage。
+def run_agent_detailed(
     agent: Any,
     user_content: str,
     model: Any,
     tool_registry: Any,
     max_steps: int = 3,
-) -> str:
+) -> AgentRunResult:
+    started_at = perf_counter()
+    usage = TokenUsage()
+    model_calls = 0
+
+    def build_result(text: str) -> AgentRunResult:
+        return AgentRunResult(
+            text=text,
+            duration_ms=round((perf_counter() - started_at) * 1000, 3),
+            usage=usage,
+            model_calls=model_calls,
+        )
+
     tool_schemas = tool_registry.to_openai_tools(agent.profile.tools)
     messages: list[dict[str, Any]] = [
         {
@@ -135,23 +197,45 @@ def run_agent(
     ]
 
     for _ in range(max_steps):
+        model_calls += 1
         try:
-            response = model.chat(
-                messages=messages,
-                tools=tool_schemas,
-                tool_choice="auto",
-            )
+            if tool_schemas:
+                response = model.chat(
+                    messages=messages,
+                    tools=tool_schemas,
+                    tool_choice="auto",
+                )
+            else:
+                response = model.chat(messages=messages)
         except Exception as error:
-            return f"LLM 调用失败：{error}"
+            return build_result(f"LLM 调用失败：{error}")
 
+        usage.add(get_response_usage(response))
         assistant_message = get_response_message(response)
         tool_calls = get_tool_calls(assistant_message)
 
         if not tool_calls:
-            return get_message_content(assistant_message)
+            return build_result(get_message_content(assistant_message))
 
         messages.append(to_assistant_message(assistant_message))
         for tool_call in tool_calls:
             messages.append(run_tool_call(tool_call, tool_registry))
 
-    return "工具调用次数过多，已停止。"
+    return build_result("工具调用次数过多，已停止。")
+
+
+# 保持原有调用接口，只返回 assistant 文本。
+def run_agent(
+    agent: Any,
+    user_content: str,
+    model: Any,
+    tool_registry: Any,
+    max_steps: int = 3,
+) -> str:
+    return run_agent_detailed(
+        agent=agent,
+        user_content=user_content,
+        model=model,
+        tool_registry=tool_registry,
+        max_steps=max_steps,
+    ).text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from openai import OpenAI
 
 from config.schema import OpenAIClientConfig
@@ -14,11 +15,13 @@ class OpenAIClient:
     # 初始化 OpenAI SDK client。
     def __init__(self, config: OpenAIClientConfig):
         self.config = config
+        self.http_client = httpx.Client(trust_env=False)
         self.client = OpenAI(
             api_key=config.api_key,
             base_url=config.base_url,
             timeout=config.timeout,
             max_retries=config.max_retries,
+            http_client=self.http_client,
         )
 
     # 调用 OpenAI chat completions。

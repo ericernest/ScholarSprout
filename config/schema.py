@@ -14,6 +14,8 @@ class OpenAIClientConfig:
     model_name: str = ""
     timeout: float = 60.0
     max_retries: int = 2
+    input_cost_per_million_tokens: float | None = None
+    output_cost_per_million_tokens: float | None = None
 
 
 # 描述当前应用配置。

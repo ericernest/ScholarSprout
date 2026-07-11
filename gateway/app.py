@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,6 +16,7 @@ from channels.web import WebChannel
 from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
+from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
 from gateway.message_flow import process_channel_input
 from models.client import OpenAIClient
@@ -78,11 +79,20 @@ async def domain_onboarding(request: Request) -> ChannelMessage:
     )
 
 
+@app.get("/metrics/domain_onboarding")
+def domain_onboarding_metrics(request: Request) -> dict:
+    metrics = getattr(request.app.state, "domain_onboarding_metrics", None)
+    if metrics is None:
+        raise HTTPException(status_code=503, detail="Domain onboarding is not initialized.")
+    return metrics.snapshot()
+
+
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
     model = OpenAIClient(config.client)
     chat_agent = create_agent(model, "chat")
+    domain_onboarding_agent = create_agent(model, "domain_onboarding")
     message_bus = MessageBus()
     input_channel = WebChannel(bus=message_bus)
     tool_registry = create_builtin_tool_registry()
@@ -90,6 +100,11 @@ def start_gateway_server(host: str, port: int) -> None:
 
     app.state.model = model
     app.state.chat_agent = chat_agent
+    app.state.domain_onboarding_agent = domain_onboarding_agent
+    app.state.domain_onboarding_metrics = DomainOnboardingMetrics(
+        input_cost_per_million_tokens=config.client.input_cost_per_million_tokens,
+        output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
+    )
     app.state.tool_registry = tool_registry
     app.state.message_bus = message_bus
     app.state.default_channel_name = input_channel.name

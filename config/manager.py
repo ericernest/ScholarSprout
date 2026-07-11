@@ -32,6 +32,12 @@ def load_config() -> AppConfig:
             model_name=client_data.get("model_name", ""),
             timeout=client_data.get("timeout", 60.0),
             max_retries=client_data.get("max_retries", 2),
+            input_cost_per_million_tokens=client_data.get(
+                "input_cost_per_million_tokens"
+            ),
+            output_cost_per_million_tokens=client_data.get(
+                "output_cost_per_million_tokens"
+            ),
         )
     )
 
