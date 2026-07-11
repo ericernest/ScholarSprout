@@ -57,16 +57,22 @@ novicesynapse config
 ```json
 {
   "client": {
-    "api_key": "sk-Aa4XOCejP_1JMzBl_qFFDQ",
+    "api_key": "<your-ustc-api-key>",
     "base_url": "https://api.llm.ustc.edu.cn/v1",
-    "model_name": "deepseek-v4-pro",
+    "model_name": "qwen-chat",
     "timeout": 60.0,
-    "max_retries": 2
+    "max_retries": 2,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null
   }
 }
 ```
 
+注意：配置文件中的 `api_key` 只填写 key 本身，不需要加 `Bearer ` 前缀；OpenAI SDK 会自动生成 `Authorization: Bearer <api_key>` 请求头。
+
 也可以使用其它兼容 OpenAI SDK 的模型服务，只要提供 `base_url`、`api_key` 和可用的 `model_name`。
+
+如需估算领域入门重试产生的额外货币成本，可以按模型计价填写每百万输入、输出 token 单价。未配置单价时仍会记录实际 token，但 `estimated_cost` 返回 `null`。
 
 ## CLI 命令
 
@@ -122,6 +128,14 @@ curl -X POST http://127.0.0.1:8000/domain_onboarding -H "Content-Type: applicati
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+领域入门运行指标：
+
+```bash
+curl http://127.0.0.1:8000/metrics/domain_onboarding
+```
+
+该接口返回请求耗时、重试率、改善率、额外模型调用次数、额外 token 和可选费用估算。指标保存在当前 Gateway 进程内，服务重启后重新计数。
 
 ## Web UI
 
