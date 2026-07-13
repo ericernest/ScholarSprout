@@ -33,6 +33,11 @@ body {
   overflow-x: hidden;
 }
 
+.chat-body {
+  height: 100vh;
+  overflow: hidden;
+}
+
 body::before {
   position: fixed;
   inset: 0;
@@ -223,6 +228,25 @@ h1 {
   margin: 0 auto;
   padding: 2rem 1rem 8rem;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(102, 245, 214, 0.36) transparent;
+}
+
+.messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(102, 245, 214, 0.44), rgba(135, 167, 255, 0.26));
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(102, 245, 214, 0.68), rgba(135, 167, 255, 0.42));
 }
 
 .message {

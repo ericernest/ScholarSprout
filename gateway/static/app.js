@@ -1,6 +1,6 @@
 const modeLabels = {
   chat: "日常聊天",
-  domain_onboarding: "方向入门",
+  domain_onboarding: "领域入门",
   paper_reading: "论文精读",
 };
 
@@ -76,6 +76,13 @@ function bindChatPage() {
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   });
 
+  input.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      await sendMessage();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     await sendMessage();
@@ -114,13 +121,19 @@ async function sendMessage() {
     return;
   }
 
+  const requestMode = currentMode;
+  const endpoint = modeEndpoints[requestMode];
+
   appendMessage("user", content);
   input.value = "";
   input.style.height = "auto";
+  if (requestMode !== "chat") {
+    setMode("chat");
+  }
   setLoading(true);
 
   try {
-    const response = await fetch(modeEndpoints[currentMode], {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -183,7 +196,7 @@ function appendMessage(role, content) {
 // Toggle request state.
 function setLoading(isLoading) {
   sendButton.disabled = isLoading;
-  sendButton.textContent = isLoading ? "发送中" : "发送";
+  sendButton.textContent = isLoading ? "生成中" : "发送";
 }
 
 // Get persistent local session id.
