@@ -46,6 +46,12 @@ def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
 
 
+# 返回浏览器标签页图标。
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
 # chat 功能入口。
 @app.post("/chat")
 async def chat(request: Request) -> ChannelMessage:

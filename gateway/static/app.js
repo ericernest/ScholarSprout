@@ -11,6 +11,7 @@ const modeEndpoints = {
 };
 
 let currentMode = "chat";
+let isGenerating = false;
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -116,6 +117,10 @@ function setMode(mode) {
 
 // Send user message to current backend endpoint.
 async function sendMessage() {
+  if (isGenerating) {
+    return;
+  }
+
   const content = input.value.trim();
   if (!content) {
     return;
@@ -195,6 +200,7 @@ function appendMessage(role, content) {
 
 // Toggle request state.
 function setLoading(isLoading) {
+  isGenerating = isLoading;
   sendButton.disabled = isLoading;
   sendButton.textContent = isLoading ? "生成中" : "发送";
 }

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from starlette.concurrency import run_in_threadpool
+
 from bus.events import OUTBOUND
 from channels.base import BaseChannel, ChannelMessage
 
@@ -49,7 +51,8 @@ async def process_channel_input(
     channel = app_state.channels[selected_channel_name]
     inbound_message = await channel.receive_message(source, mode)
 
-    return process_channel_message(
+    return await run_in_threadpool(
+        process_channel_message,
         channel=channel,
         message=inbound_message,
         handler=handler,
