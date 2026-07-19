@@ -202,8 +202,9 @@ def _handle_domain_onboarding_message(
     first_run = run_agent_detailed(
         agent=app_state.domain_onboarding_agent,
         user_content=query,
-        model=app_state.model,
         tool_registry=app_state.tool_registry,
+        skill_registry=app_state.skill_registry,
+        capability_selector=app_state.capability_selector,
         max_steps=1,
     )
     trace.first_call_duration_ms = first_run.duration_ms
@@ -231,8 +232,9 @@ def _handle_domain_onboarding_message(
     retry_run = run_agent_detailed(
         agent=app_state.domain_onboarding_agent,
         user_content=build_quality_retry_prompt(query, first_quality),
-        model=app_state.model,
         tool_registry=app_state.tool_registry,
+        skill_registry=app_state.skill_registry,
+        capability_selector=app_state.capability_selector,
         max_steps=1,
     )
     trace.retry_call_duration_ms = retry_run.duration_ms

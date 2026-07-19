@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
+
+from skills.selector import validate_capability_selection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -145,15 +150,23 @@ def parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
 
 
 # 执行一个 tool call 并返回 tool message。
-def run_tool_call(tool_call: Any, tool_registry: Any) -> dict[str, str]:
+def run_tool_call(
+    tool_call: Any,
+    tool_registry: Any,
+    allowed_tool_names: set[str],
+) -> dict[str, str]:
     tool_name = get_tool_call_name(tool_call)
     arguments = parse_tool_arguments(get_tool_call_arguments(tool_call))
 
     try:
+        if tool_name not in allowed_tool_names:
+            raise PermissionError(f"Tool is not active for this request: {tool_name}")
         tool = tool_registry.get(tool_name)
         tool_result = tool.run(arguments)
     except KeyError:
         tool_result = {"error": f"Tool not found: {tool_name}"}
+    except PermissionError as error:
+        tool_result = {"error": str(error)}
     except Exception as error:
         tool_result = {"error": f"Tool execution failed: {error}"}
 
@@ -164,12 +177,110 @@ def run_tool_call(tool_call: Any, tool_registry: Any) -> dict[str, str]:
     }
 
 
+# 将 Agent 身份、默认 Skill 和可选专项 Skill 组合成 system prompt。
+def build_system_prompt(
+    system_prompt: str,
+    default_skill: str = "",
+    selected_skill: str = "",
+) -> str:
+    if not default_skill and not selected_skill:
+        return system_prompt
+
+    prompt_parts = [f"[Agent Role]\n\n{system_prompt.strip()}"]
+    if default_skill:
+        prompt_parts.append(default_skill.strip())
+    if selected_skill:
+        prompt_parts.append(selected_skill.strip())
+    return "\n\n".join(prompt_parts)
+
+
+# 加载默认 Skill，并为当前请求选择零个或一个专项 Skill。
+def resolve_runtime_capabilities(
+    agent: Any,
+    user_content: str,
+    skill_registry: Any | None,
+    capability_selector: Any | None,
+) -> str:
+    profile = agent.profile
+    default_skill_id = str(getattr(profile, "default_skill", "") or "").strip()
+    registered_skills = list(getattr(profile, "skills", []) or [])
+
+    if not default_skill_id and not registered_skills:
+        return profile.system_prompt
+
+    if skill_registry is None:
+        logger.warning(
+            "SkillRegistry is not initialized for agent %s; using Agent Role only.",
+            getattr(profile, "name", getattr(agent, "agent_type", "unknown")),
+        )
+        return profile.system_prompt
+
+    try:
+        default_skill = (
+            skill_registry.get_instructions(default_skill_id)
+            if default_skill_id
+            else ""
+        )
+    except Exception as error:
+        logger.warning(
+            "Default Skill loading failed for agent %s; using Agent Role only: %s",
+            getattr(profile, "name", getattr(agent, "agent_type", "unknown")),
+            error,
+        )
+        return profile.system_prompt
+
+    if not registered_skills:
+        return build_system_prompt(profile.system_prompt, default_skill=default_skill)
+
+    try:
+        if capability_selector is None:
+            raise RuntimeError("CapabilitySelector is not initialized.")
+
+        skill_summaries = [
+            summary
+            for summary in skill_registry.list_summaries(registered_skills)
+            if summary.id != default_skill_id
+        ]
+        if not skill_summaries:
+            return build_system_prompt(profile.system_prompt, default_skill=default_skill)
+
+        candidate_skill_ids = [summary.id for summary in skill_summaries]
+        selection = capability_selector.select(
+            model=agent.llm,
+            role=profile.role,
+            user_task=user_content,
+            skill_summaries=skill_summaries,
+        )
+        validate_capability_selection(
+            selection,
+            allowed_skill_ids=candidate_skill_ids,
+        )
+        selected_skill = (
+            skill_registry.get_instructions(selection.skill)
+            if selection.skill is not None
+            else ""
+        )
+        return build_system_prompt(
+            profile.system_prompt,
+            default_skill=default_skill,
+            selected_skill=selected_skill,
+        )
+    except Exception as error:
+        logger.warning(
+            "Special Skill selection failed for agent %s; using Default Skill only: %s",
+            getattr(profile, "name", getattr(agent, "agent_type", "unknown")),
+            error,
+        )
+        return build_system_prompt(profile.system_prompt, default_skill=default_skill)
+
+
 # 执行一次 agent，并返回文本、耗时与模型 token usage。
 def run_agent_detailed(
     agent: Any,
     user_content: str,
-    model: Any,
     tool_registry: Any,
+    skill_registry: Any | None = None,
+    capability_selector: Any | None = None,
     max_steps: int = 3,
 ) -> AgentRunResult:
     started_at = perf_counter()
@@ -184,11 +295,20 @@ def run_agent_detailed(
             model_calls=model_calls,
         )
 
-    tool_schemas = tool_registry.to_openai_tools(agent.profile.tools)
+    model = agent.llm
+    system_prompt = resolve_runtime_capabilities(
+        agent=agent,
+        user_content=user_content,
+        skill_registry=skill_registry,
+        capability_selector=capability_selector,
+    )
+    active_tool_names = list(agent.profile.tools)
+    tool_schemas = tool_registry.to_openai_tools(active_tool_names)
+    active_tool_name_set = set(active_tool_names)
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": agent.profile.system_prompt,
+            "content": system_prompt,
         },
         {
             "role": "user",
@@ -219,7 +339,13 @@ def run_agent_detailed(
 
         messages.append(to_assistant_message(assistant_message))
         for tool_call in tool_calls:
-            messages.append(run_tool_call(tool_call, tool_registry))
+            messages.append(
+                run_tool_call(
+                    tool_call,
+                    tool_registry,
+                    allowed_tool_names=active_tool_name_set,
+                )
+            )
 
     return build_result("工具调用次数过多，已停止。")
 
@@ -228,14 +354,16 @@ def run_agent_detailed(
 def run_agent(
     agent: Any,
     user_content: str,
-    model: Any,
     tool_registry: Any,
+    skill_registry: Any | None = None,
+    capability_selector: Any | None = None,
     max_steps: int = 3,
 ) -> str:
     return run_agent_detailed(
         agent=agent,
         user_content=user_content,
-        model=model,
         tool_registry=tool_registry,
+        skill_registry=skill_registry,
+        capability_selector=capability_selector,
         max_steps=max_steps,
     ).text

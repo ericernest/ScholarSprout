@@ -65,15 +65,21 @@ def make_app_state(
     metrics: DomainOnboardingMetrics | None = None,
 ) -> SimpleNamespace:
     agent = SimpleNamespace(
+        llm=model,
         profile=SimpleNamespace(
+            name="domain_onboarding",
+            role="domain_onboarding",
             system_prompt="Return a JSON object.",
             tools=[],
+            skills=[],
         )
     )
     return SimpleNamespace(
         domain_onboarding_agent=agent,
         model=model,
         tool_registry=ToolRegistry(),
+        skill_registry=None,
+        capability_selector=None,
         domain_onboarding_metrics=metrics or DomainOnboardingMetrics(),
     )
 

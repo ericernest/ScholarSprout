@@ -20,6 +20,8 @@ from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
 from gateway.message_flow import process_channel_input
 from models.client import OpenAIClient
+from skills.registry import create_skill_registry
+from skills.selector import CapabilitySelector
 from tools.registry import create_builtin_tool_registry
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -102,6 +104,8 @@ def start_gateway_server(host: str, port: int) -> None:
     message_bus = MessageBus()
     input_channel = WebChannel(bus=message_bus)
     tool_registry = create_builtin_tool_registry()
+    skill_registry = create_skill_registry()
+    capability_selector = CapabilitySelector()
     input_channel.start()
 
     app.state.model = model
@@ -112,6 +116,8 @@ def start_gateway_server(host: str, port: int) -> None:
         output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
     )
     app.state.tool_registry = tool_registry
+    app.state.skill_registry = skill_registry
+    app.state.capability_selector = capability_selector
     app.state.message_bus = message_bus
     app.state.default_channel_name = input_channel.name
     app.state.channels = {input_channel.name: input_channel}
