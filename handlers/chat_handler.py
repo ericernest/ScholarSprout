@@ -13,8 +13,9 @@ def handle_chat_message(message: ChannelMessage, app_state: Any) -> dict[str, st
     text = run_agent(
         agent=app_state.chat_agent,
         user_content=str(message.content),
-        model=app_state.model,
         tool_registry=app_state.tool_registry,
+        skill_registry=app_state.skill_registry,
+        capability_selector=app_state.capability_selector,
         max_steps=3,
     )
 

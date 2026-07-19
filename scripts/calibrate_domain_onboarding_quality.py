@@ -63,7 +63,6 @@ def collect_real_sample(
     run = run_agent_detailed(
         agent=agent,
         user_content=f"我想入门{domain}方向",
-        model=model,
         tool_registry=create_builtin_tool_registry(),
         max_steps=1,
     )

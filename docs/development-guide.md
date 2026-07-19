@@ -44,6 +44,8 @@ agents/agent.py
 tools/base.py
 tools/registry.py
 tools/builtin/time_tool.py
+skills/registry.py
+skills/selector.py
 ```
 
 ## 功能开发约定
@@ -85,9 +87,9 @@ runtime/agent_runner.py
 建议方式：
 
 - 在 `agents/profiles.json` 中增加对应 profile
-- profile 只描述 `name`、`type`、`role`、`system_prompt`、`tools`
+- profile 只描述 `name`、`type`、`role`、`system_prompt`、`tools`、`default_skill`、`skills`
 - 不要把用户 API key、base_url、model_name 写进 profile
-- 模型配置属于 `config`，运行时模型对象从 `app_state.model` 获取
+- 模型配置属于 `config`，Runtime 通过 `agent.llm` 使用模型
 - 需要统一 agent 执行时，参考 `chat_handler.py` 调用 `run_agent()`
 
 示例方向：
@@ -124,13 +126,61 @@ tools/builtin/time_tool.py
 - LLM client
 - handler 的临时分支里
 
+### Skill 约定
+
+Skill 用于描述任务的执行方法、步骤和输出要求。内置 Skill 放在：
+
+```text
+skills/builtin/domain/
+skills/builtin/reading/
+skills/builtin/chat/
+skills/builtin/custom/
+```
+
+每个 Skill 使用独立目录和 `SKILL.md`。Skill 只保存元数据和执行方法，不声明 Tool，也不直接执行 Python。
+
+Agent Profile 中有两类 Skill 配置：
+
+- `default_skill`：可选的模式通用方法；配置后每次运行都加载，不经过 Selector
+- `skills`：可以按任务选择的专项 Skill 列表，支持精确 ID 和 `domain.*` 等分类通配
+
+Selector 只从当前 Agent 的 `skills` 中选择零个或一个专项 Skill。没有合适的专项 Skill 时返回空选择；如果 Profile 配置了 `default_skill`，它仍然加载。
+
+当前 chat Profile 配置：
+
+```text
+Default Skill: chat.default
+Special Skill: chat.research_discussion
+```
+
+`chat.research_discussion` 用于需要梳理科研问题、实现路径或方案取舍的请求。领域入门当前仍将完整执行要求保存在 Profile 的 `system_prompt` 中；论文精读 Handler 仍是占位实现，暂未配置 Agent Profile 或 Skill。
+
+Profile 示例：
+
+```json
+{
+  "name": "default_chat",
+  "type": "chat",
+  "role": "chat",
+  "system_prompt": "你是 NoviceSynapse 的默认科研聊天助手。",
+  "tools": ["get_current_time"],
+  "default_skill": "chat.default",
+  "skills": ["chat.research_discussion"]
+}
+```
+
+最终 system 消息按以下顺序组合：Agent Role、Default Skill 正文、可选的 Special Skill 正文。`[Default Skill]` 和 `[Selected Skill]` 只是架构概念，不会作为标签写入实际 prompt。
+
+Tool 权限只由 Agent Profile 的 `tools` 决定。Runtime 将该列表中的全部 Tool schema 交给主模型，由主模型按需调用；Selector 不选择 Tool，Skill 也不能扩大 Tool 权限。
+
 ### runtime 约定
 
 `runtime/agent_runner.py` 当前负责：
 
 - 构造 system 和 user messages
-- 调用模型
-- 根据 agent profile 读取工具权限
+- 通过 `agent.llm` 调用模型
+- 加载 Profile 可选的 Default Skill，并按需选择零个或一个 Special Skill
+- 将 agent profile 授权的全部 Tool schema 交给主模型
 - 执行有限轮工具调用
 
 如果论文精读或领域入门需要 LLM + tools 的 agent 流程，优先参考 `run_agent()`。如果第一版只是整理结构化输出，也可以先在 handler 中写清楚最小逻辑。

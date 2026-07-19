@@ -30,7 +30,8 @@ def gateway(
     try:
         from gateway.app import start_gateway_server
     except ModuleNotFoundError as error:
-        typer.echo("Gateway dependencies are not installed. Please install project dependencies first.")
+        typer.echo(f"Gateway import failed: missing module '{error.name}'.")
+        typer.echo("Please install or refresh the project with: python -m pip install -e .")
         raise typer.Exit(code=1) from error
 
     if open_browser:

@@ -13,6 +13,7 @@
 - Web UI 首页和聊天页
 - channel 和 bus 的第一版骨架
 - chat agent、agent runner 和工具调用骨架
+- Default Skill、Special Skill 注册与按需加载骨架
 - 内置工具 `get_current_time`
 
 当前主要业务功能：
@@ -58,6 +59,17 @@ NoviceSynapse/
 |   `-- client.py
 |-- runtime/
 |   `-- agent_runner.py
+|-- skills/
+|   |-- models.py
+|   |-- loader.py
+|   |-- registry.py
+|   |-- selector.py
+|   `-- builtin/
+|       |-- domain/
+|       |-- reading/
+|       |-- chat/default_chat/SKILL.md
+|       |-- chat/research_discussion/SKILL.md
+|       `-- custom/
 |-- tools/
 |   |-- base.py
 |   |-- registry.py
@@ -124,7 +136,7 @@ NoviceSynapse/
 
 - 声明 FastAPI app
 - 注册 Web 页面和 HTTP 功能入口
-- 启动模型、agent、tool registry、message bus 和默认 channel
+- 启动模型、agent、Skill/Tool Registry、Capability Selector、message bus 和默认 channel
 - 将 route 指定的 handler 交给统一消息流程
 
 当前入口：
@@ -194,7 +206,7 @@ bus 不负责：
 
 - 每个功能 mode 的业务入口
 - 接收 `ChannelMessage`
-- 使用 `app_state` 取已有模型、agent、tool registry 等对象
+- 使用 `app_state` 取已有 agent、Skill/Tool Registry 等对象
 - 返回 JSON 风格的结果
 
 当前文件：
@@ -213,7 +225,7 @@ bus 不负责：
 - 从 `profiles.json` 读取预设 profile
 - 根据 agent type 创建 agent
 
-用户模型配置属于 `config`，agent profile 只描述角色、提示词和工具权限。
+用户模型配置属于 `config`。Agent Profile 描述角色、提示词、Default Skill、候选 Special Skill 和工具权限，Agent 运行时持有对应的 LLM 实例。
 
 ## models 层
 
@@ -234,9 +246,31 @@ bus 不负责：
 职责：
 
 - 执行 agent
-- 拼接 system prompt 和 user message
-- 调用模型
+- 加载 Agent Profile 指定的 Default Skill
+- 从候选列表中按需选择零个或一个 Special Skill
+- 拼接 Agent Role、Default Skill、Special Skill 和 user message
+- 将 Profile 授权的全部 Tool schema 交给主模型
+- 通过 `agent.llm` 调用模型
 - 处理一轮或有限轮工具调用
+
+Profile 只有 Default Skill 时，Runtime 直接加载它，不调用 Selector。Profile 没有任何 Skill 配置时保留基础 Prompt 行为。无论是否选择 Special Skill，Runtime 都会提供 Profile 中全部授权 Tool。
+
+## skills 层
+
+位置：`skills/`
+
+职责：
+
+- 从内置目录和 `~/.novicesynapse/skills/` 扫描 Skill
+- 解析并校验 `SKILL.md` 的 YAML Front Matter
+- 初始扫描只建立元数据索引，被选中后再加载完整正文
+- 按 Profile 的可选 `default_skill` 加载模式通用 Skill
+- 根据精确 ID 或 `domain.*` 等分类通配解析候选 Special Skill
+- 为当前任务选择零个或一个 Special Skill
+
+Default Skill 保存当前模式每次都需要的通用方法，Profile 配置后由 Runtime 固定加载。Special Skill 保存只对部分任务生效的专项方法，由 Selector 按当前任务选择。Skill 描述方法、步骤和输出要求，不声明 Tool，也不执行 Python。
+
+当前只有 chat Agent 配置 Default Skill `chat.default`，并注册 Special Skill `chat.research_discussion`。领域入门执行要求保存在其 Profile 的 `system_prompt` 中；论文精读暂未配置 Agent Profile 或 Skill。
 
 ## tools 层
 
@@ -247,6 +281,7 @@ bus 不负责：
 - 定义工具基类
 - 注册内置工具
 - 将工具转换为 OpenAI tools schema
+- 将 Agent Profile 授权的全部 Tool 提供给主模型，并在执行时再次校验权限
 
 当前内置工具：
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from models.client import OpenAIClient
 
@@ -17,6 +17,8 @@ class AgentProfile:
     role: str
     system_prompt: str
     tools: list[str]
+    default_skill: str = ""
+    skills: list[str] = field(default_factory=list)
 
 
 # 根据 agent type 和 llm 生成运行时 agent。
@@ -30,6 +32,8 @@ class Agent:
             role=str(profile["role"]),
             system_prompt=str(profile["system_prompt"]),
             tools=list(profile["tools"]),
+            default_skill=str(profile.get("default_skill", "")).strip(),
+            skills=list(profile.get("skills", [])),
         )
 
         self.agent_type = agent_type
@@ -37,6 +41,8 @@ class Agent:
         self.system_prompt = self.profile.system_prompt
         self.role = self.profile.role
         self.tools = self.profile.tools
+        self.default_skill = self.profile.default_skill
+        self.skills = self.profile.skills
 
 
 # 根据 llm 和 agent type 获取可用 agent。
