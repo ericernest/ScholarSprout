@@ -1,0 +1,1 @@
+"""组织 NoviceSynapse 的配置模块。"""
