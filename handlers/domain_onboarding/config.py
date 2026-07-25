@@ -23,6 +23,13 @@ class DomainOnboardingConfig(BaseModel):
     recency_weight: float = Field(default=0.15, ge=0.0, le=1.0)
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     retrieval_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
+    retrieval_max_attempts: int = Field(default=3, ge=1, le=5)
+    retrieval_backoff_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
+    retrieval_max_backoff_seconds: float = Field(default=8.0, ge=0.0, le=60.0)
+    retrieval_cache_ttl_seconds: float = Field(default=3600.0, ge=0.0, le=86400.0)
+    retrieval_cache_max_entries: int = Field(default=256, ge=0, le=4096)
+    retrieval_source_workers: int = Field(default=3, ge=1, le=8)
+    arxiv_min_interval_seconds: float = Field(default=3.0, ge=0.0, le=10.0)
 
     @model_validator(mode="after")
     def validate_settings(self) -> "DomainOnboardingConfig":
@@ -36,4 +43,6 @@ class DomainOnboardingConfig(BaseModel):
         )
         if abs(total - 1.0) > 1e-9:
             raise ValueError("ranking weights must sum to 1.0")
+        if self.retrieval_max_backoff_seconds < self.retrieval_backoff_seconds:
+            raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
         return self

@@ -23,6 +23,7 @@ from .retrieval import (
     PaperRetrievalError,
     SemanticScholarRetriever,
 )
+from .retrieval_resilience import RetrievalRetryPolicy
 from .schemas import ContentQuality, DomainOnboardingRequest, ModelCallStats, PipelineResult
 
 
@@ -65,10 +66,11 @@ class DomainOnboardingPipeline:
                     limit_per_query=self.config.papers_per_query,
                 )
             except PaperRetrievalError as error:
-                trace.retrieval_error_count = len(getattr(self.retriever, "last_errors", []))
+                self._record_retrieval_stats(trace)
                 return PipelineResult(status="retrieval_failed", query=request.query, error=str(error))
 
             trace.retrieved_paper_count = len(candidates)
+            self._record_retrieval_stats(trace)
             ranked, trace.ranking_duration_ms = self._timed(
                 self.ranker.rank,
                 candidates,
@@ -79,7 +81,6 @@ class DomainOnboardingPipeline:
             trace.invalid_paper_count = getattr(self.ranker, "last_invalid_count", 0)
             trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
             trace.selected_paper_count = len(ranked)
-            trace.retrieval_error_count = len(getattr(self.retriever, "last_errors", []))
             if not ranked:
                 return PipelineResult(
                     status="retrieval_failed",
@@ -170,9 +171,10 @@ class DomainOnboardingPipeline:
                 limit_per_query=self.config.papers_per_query,
             )
         except PaperRetrievalError:
-            trace.retrieval_error_count += len(getattr(self.retriever, "last_errors", []))
+            self._record_retrieval_stats(trace, accumulate=True)
             return ranked
         trace.retrieval_duration_ms += duration
+        self._record_retrieval_stats(trace, accumulate=True)
         trace.search_query_count += len(queries)
         trace.retrieved_paper_count += len(extra)
         reranked, duration = self._timed(
@@ -230,6 +232,30 @@ class DomainOnboardingPipeline:
         trace.first_score = quality.score
         trace.first_dimensions = dict(quality.dimensions)
 
+    def _record_retrieval_stats(
+        self,
+        trace: DomainOnboardingRequestTrace,
+        *,
+        accumulate: bool = False,
+    ) -> None:
+        values = {
+            "retrieval_error_count": len(getattr(self.retriever, "last_errors", [])),
+            "retrieval_retry_count": int(getattr(self.retriever, "last_retry_count", 0)),
+            "retrieval_cache_hit_count": int(getattr(self.retriever, "last_cache_hits", 0)),
+            "retrieval_request_count": int(getattr(self.retriever, "last_request_count", 0)),
+            "retrieval_source_success_count": int(
+                getattr(self.retriever, "last_source_success_count", 0)
+            ),
+            "retrieval_source_failure_count": int(
+                getattr(self.retriever, "last_source_failure_count", 0)
+            ),
+        }
+        for field_name, value in values.items():
+            if accumulate:
+                setattr(trace, field_name, int(getattr(trace, field_name)) + value)
+            else:
+                setattr(trace, field_name, value)
+
 
 def create_default_pipeline(
     model: Any,
@@ -237,6 +263,16 @@ def create_default_pipeline(
 ) -> DomainOnboardingPipeline:
     settings = config or DomainOnboardingConfig()
     generator = StructuredOnboardingGenerator(model, settings)
+    retry_policy = RetrievalRetryPolicy(
+        max_attempts=settings.retrieval_max_attempts,
+        base_backoff_seconds=settings.retrieval_backoff_seconds,
+        max_backoff_seconds=settings.retrieval_max_backoff_seconds,
+    )
+    common_retrieval_options = {
+        "retry_policy": retry_policy,
+        "cache_ttl_seconds": settings.retrieval_cache_ttl_seconds,
+        "cache_max_entries": settings.retrieval_cache_max_entries,
+    }
     return DomainOnboardingPipeline(
         profile_builder=RuleBasedProfileBuilder(),
         planner=StormLitePlanner(model, settings),
@@ -245,10 +281,20 @@ def create_default_pipeline(
                 SemanticScholarRetriever(
                     timeout=settings.retrieval_timeout_seconds,
                     api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY") or None,
+                    **common_retrieval_options,
                 ),
-                ArxivRetriever(timeout=settings.retrieval_timeout_seconds),
-                CrossrefRetriever(timeout=settings.retrieval_timeout_seconds),
-            ]
+                ArxivRetriever(
+                    timeout=settings.retrieval_timeout_seconds,
+                    min_interval_seconds=settings.arxiv_min_interval_seconds,
+                    **common_retrieval_options,
+                ),
+                CrossrefRetriever(
+                    timeout=settings.retrieval_timeout_seconds,
+                    mailto=os.getenv("CROSSREF_MAILTO") or None,
+                    **common_retrieval_options,
+                ),
+            ],
+            max_workers=settings.retrieval_source_workers,
         ),
         ranker=WeightedPaperRanker(settings),
         generator=generator,

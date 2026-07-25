@@ -46,6 +46,11 @@ class DomainOnboardingRequestTrace:
     quality_delta: float = 0.0
     repair_reason: str = "not_needed"
     retrieval_error_count: int = 0
+    retrieval_retry_count: int = 0
+    retrieval_cache_hit_count: int = 0
+    retrieval_request_count: int = 0
+    retrieval_source_success_count: int = 0
+    retrieval_source_failure_count: int = 0
 
     @property
     def retry_attempted(self) -> bool:
@@ -124,7 +129,9 @@ class DomainOnboardingMetrics:
             for field_name in (
                 "search_query_count", "retrieved_paper_count", "deduplicated_paper_count",
                 "verified_paper_count", "selected_paper_count", "invalid_paper_count",
-                "retrieval_error_count",
+                "retrieval_error_count", "retrieval_retry_count", "retrieval_cache_hit_count",
+                "retrieval_request_count", "retrieval_source_success_count",
+                "retrieval_source_failure_count",
             ):
                 self._paper_totals[field_name] += int(getattr(trace, field_name))
             for name, value in trace.first_dimensions.items():

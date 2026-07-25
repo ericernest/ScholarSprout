@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Protocol
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from time import monotonic, sleep
+from typing import Any, Callable, Protocol
 
 import httpx
 from pydantic import ValidationError
 
+from .retrieval_resilience import ResilientHTTPClient, RetrievalRetryPolicy, TTLQueryCache
 from .schemas import PaperCandidate
 
 
@@ -18,11 +22,71 @@ class PaperRetrievalError(RuntimeError):
 
 class PaperRetriever(Protocol):
     last_errors: list[str]
+    last_retry_count: int
+    last_cache_hits: int
 
     def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]: ...
 
 
-class SemanticScholarRetriever:
+class _ResilientRetriever:
+    def _configure_resilience(
+        self,
+        *,
+        client: httpx.Client,
+        retry_policy: RetrievalRetryPolicy | None,
+        cache_ttl_seconds: float,
+        cache_max_entries: int,
+        min_interval_seconds: float,
+        sleep_func: Callable[[float], None],
+        clock: Callable[[], float],
+    ) -> None:
+        self._search_lock = Lock()
+        self._http = ResilientHTTPClient(
+            client,
+            retry_policy=retry_policy or RetrievalRetryPolicy(),
+            min_interval_seconds=min_interval_seconds,
+            sleep_func=sleep_func,
+            clock=clock,
+        )
+        self._cache: TTLQueryCache[list[PaperCandidate]] = TTLQueryCache(
+            ttl_seconds=cache_ttl_seconds,
+            max_entries=cache_max_entries,
+            clock=clock,
+        )
+        self.last_errors: list[str] = []
+        self.last_retry_count = 0
+        self.last_cache_hits = 0
+        self.last_request_count = 0
+
+    def _begin_search(self) -> None:
+        self.last_errors = []
+        self.last_retry_count = 0
+        self.last_cache_hits = 0
+        self.last_request_count = 0
+        self._http.reset_stats()
+
+    @staticmethod
+    def _cache_key(query: str, limit_per_query: int) -> str:
+        return f"{limit_per_query}\0{query.strip()}"
+
+    def _cached(self, query: str, limit_per_query: int) -> list[PaperCandidate] | None:
+        cached = self._cache.get(self._cache_key(query, limit_per_query))
+        if cached is not None:
+            self.last_cache_hits += 1
+        return cached
+
+    def _store(self, query: str, limit_per_query: int, papers: list[PaperCandidate]) -> None:
+        self._cache.set(self._cache_key(query, limit_per_query), papers)
+
+    def _finish_search(self) -> None:
+        self.last_retry_count = self._http.retry_count
+        self.last_request_count = self._http.request_count
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+
+
+class SemanticScholarRetriever(_ResilientRetriever):
     endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
 
     def __init__(
@@ -31,39 +95,59 @@ class SemanticScholarRetriever:
         timeout: float = 12.0,
         api_key: str | None = None,
         client: httpx.Client | None = None,
+        retry_policy: RetrievalRetryPolicy | None = None,
+        cache_ttl_seconds: float = 3600.0,
+        cache_max_entries: int = 256,
+        sleep_func: Callable[[float], None] = sleep,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         headers = {"User-Agent": "NoviceSynapse/0.1 domain-onboarding"}
         if api_key:
             headers["x-api-key"] = api_key
         self._owns_client = client is None
         self.client = client or httpx.Client(timeout=timeout, headers=headers, trust_env=False)
-        self.last_errors: list[str] = []
+        self._configure_resilience(
+            client=self.client,
+            retry_policy=retry_policy,
+            cache_ttl_seconds=cache_ttl_seconds,
+            cache_max_entries=cache_max_entries,
+            min_interval_seconds=0.0,
+            sleep_func=sleep_func,
+            clock=clock,
+        )
 
     def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-        self.last_errors = []
-        results: list[PaperCandidate] = []
-        for query in queries:
-            try:
-                response = self.client.get(
-                    self.endpoint,
-                    params={
-                        "query": query,
-                        "limit": limit_per_query,
-                        "fields": "paperId,title,abstract,year,url,citationCount,authors,externalIds",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json().get("data", [])
-                for item in data:
-                    paper = self._parse_paper(item, query)
-                    if paper is not None:
-                        results.append(paper)
-            except (httpx.HTTPError, ValueError, TypeError) as error:
-                self.last_errors.append(f"{query}: {error}")
-                continue
-        if not results and self.last_errors:
-            raise PaperRetrievalError("all paper queries failed")
-        return results
+        with self._search_lock:
+            self._begin_search()
+            results: list[PaperCandidate] = []
+            for query in queries:
+                cached = self._cached(query, limit_per_query)
+                if cached is not None:
+                    results.extend(cached)
+                    continue
+                query_results: list[PaperCandidate] = []
+                try:
+                    response = self._http.get(
+                        self.endpoint,
+                        params={
+                            "query": query,
+                            "limit": limit_per_query,
+                            "fields": "paperId,title,abstract,year,url,citationCount,authors,externalIds",
+                        },
+                    )
+                    data = response.json().get("data", [])
+                    for item in data:
+                        paper = self._parse_paper(item, query)
+                        if paper is not None:
+                            query_results.append(paper)
+                    self._store(query, limit_per_query, query_results)
+                    results.extend(query_results)
+                except (httpx.HTTPError, ValueError, TypeError) as error:
+                    self.last_errors.append(f"{query}: {error}")
+            self._finish_search()
+            if not results and self.last_errors:
+                raise PaperRetrievalError("all paper queries failed")
+            return results
 
     def _parse_paper(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
         external = item.get("externalIds") or {}
@@ -94,7 +178,7 @@ class SemanticScholarRetriever:
             self.client.close()
 
 
-class ArxivRetriever:
+class ArxivRetriever(_ResilientRetriever):
     endpoint = "https://export.arxiv.org/api/query"
     atom_namespace = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -103,6 +187,12 @@ class ArxivRetriever:
         *,
         timeout: float = 12.0,
         client: httpx.Client | None = None,
+        retry_policy: RetrievalRetryPolicy | None = None,
+        cache_ttl_seconds: float = 3600.0,
+        cache_max_entries: int = 256,
+        min_interval_seconds: float = 3.0,
+        sleep_func: Callable[[float], None] = sleep,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._owns_client = client is None
         self.client = client or httpx.Client(
@@ -111,30 +201,45 @@ class ArxivRetriever:
             follow_redirects=True,
             trust_env=False,
         )
-        self.last_errors: list[str] = []
+        self._configure_resilience(
+            client=self.client,
+            retry_policy=retry_policy,
+            cache_ttl_seconds=cache_ttl_seconds,
+            cache_max_entries=cache_max_entries,
+            min_interval_seconds=min_interval_seconds,
+            sleep_func=sleep_func,
+            clock=clock,
+        )
 
     def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-        self.last_errors = []
-        results: list[PaperCandidate] = []
-        for query in queries:
-            try:
-                response = self.client.get(
-                    self.endpoint,
-                    params={
-                        "search_query": f"all:{query}",
-                        "start": 0,
-                        "max_results": limit_per_query,
-                        "sortBy": "relevance",
-                        "sortOrder": "descending",
-                    },
-                )
-                response.raise_for_status()
-                results.extend(self._parse_feed(response.text, query))
-            except (httpx.HTTPError, ET.ParseError, ValueError, TypeError) as error:
-                self.last_errors.append(f"{query}: {error}")
-        if not results and self.last_errors:
-            raise PaperRetrievalError("all arXiv queries failed")
-        return results
+        with self._search_lock:
+            self._begin_search()
+            results: list[PaperCandidate] = []
+            for query in queries:
+                cached = self._cached(query, limit_per_query)
+                if cached is not None:
+                    results.extend(cached)
+                    continue
+                try:
+                    response = self._http.get(
+                        self.endpoint,
+                        params={
+                            "search_query": f"all:{query}",
+                            "start": 0,
+                            "max_results": limit_per_query,
+                            "sortBy": "relevance",
+                            "sortOrder": "descending",
+                        },
+                    )
+                    query_results = self._parse_feed(response.text, query)
+                    self._store(query, limit_per_query, query_results)
+                    results.extend(query_results)
+                except (httpx.HTTPError, ET.ParseError, ValueError, TypeError) as error:
+                    self.last_errors.append(f"{query}: {error}")
+            self._finish_search()
+            if not results and self.last_errors:
+                raise PaperRetrievalError("all arXiv queries failed")
+            return results
 
     def _parse_feed(self, xml_text: str, query: str) -> list[PaperCandidate]:
         root = ET.fromstring(xml_text)
@@ -185,7 +290,7 @@ class ArxivRetriever:
             self.client.close()
 
 
-class CrossrefRetriever:
+class CrossrefRetriever(_ResilientRetriever):
     endpoint = "https://api.crossref.org/works"
 
     def __init__(
@@ -193,6 +298,12 @@ class CrossrefRetriever:
         *,
         timeout: float = 12.0,
         client: httpx.Client | None = None,
+        retry_policy: RetrievalRetryPolicy | None = None,
+        cache_ttl_seconds: float = 3600.0,
+        cache_max_entries: int = 256,
+        mailto: str | None = None,
+        sleep_func: Callable[[float], None] = sleep,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._owns_client = client is None
         self.client = client or httpx.Client(
@@ -201,31 +312,48 @@ class CrossrefRetriever:
             follow_redirects=True,
             trust_env=False,
         )
-        self.last_errors: list[str] = []
+        self.mailto = mailto.strip() if mailto else None
+        self._configure_resilience(
+            client=self.client,
+            retry_policy=retry_policy,
+            cache_ttl_seconds=cache_ttl_seconds,
+            cache_max_entries=cache_max_entries,
+            min_interval_seconds=0.0,
+            sleep_func=sleep_func,
+            clock=clock,
+        )
 
     def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-        self.last_errors = []
-        results: list[PaperCandidate] = []
-        for query in queries:
-            try:
-                response = self.client.get(
-                    self.endpoint,
-                    params={
-                        "query.bibliographic": query,
-                        "rows": limit_per_query,
-                        "select": "DOI,title,author,published-print,published-online,URL,is-referenced-by-count,abstract,type",
-                    },
-                )
-                response.raise_for_status()
-                for item in (response.json().get("message") or {}).get("items", []):
-                    paper = self._parse_work(item, query)
-                    if paper is not None:
-                        results.append(paper)
-            except (httpx.HTTPError, ValueError, TypeError) as error:
-                self.last_errors.append(f"{query}: {error}")
-        if not results and self.last_errors:
-            raise PaperRetrievalError("all Crossref queries failed")
-        return results
+        with self._search_lock:
+            self._begin_search()
+            results: list[PaperCandidate] = []
+            for query in queries:
+                cached = self._cached(query, limit_per_query)
+                if cached is not None:
+                    results.extend(cached)
+                    continue
+                params: dict[str, Any] = {
+                    "query.bibliographic": query,
+                    "rows": limit_per_query,
+                    "select": "DOI,title,author,published-print,published-online,URL,is-referenced-by-count,abstract,type",
+                }
+                if self.mailto:
+                    params["mailto"] = self.mailto
+                try:
+                    response = self._http.get(self.endpoint, params=params)
+                    query_results: list[PaperCandidate] = []
+                    for item in (response.json().get("message") or {}).get("items", []):
+                        paper = self._parse_work(item, query)
+                        if paper is not None:
+                            query_results.append(paper)
+                    self._store(query, limit_per_query, query_results)
+                    results.extend(query_results)
+                except (httpx.HTTPError, ValueError, TypeError) as error:
+                    self.last_errors.append(f"{query}: {error}")
+            self._finish_search()
+            if not results and self.last_errors:
+                raise PaperRetrievalError("all Crossref queries failed")
+            return results
 
     def _parse_work(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
         doi = str(item.get("DOI") or "").strip()
@@ -265,26 +393,53 @@ class CrossrefRetriever:
 
 
 class CompositePaperRetriever:
-    """并行扩展点的同步 V1 实现：来源失败隔离，结果交给 Ranker 去重。"""
+    """并发调用独立来源，隔离失败，并保持来源声明顺序合并结果。"""
 
-    def __init__(self, retrievers: list[PaperRetriever]):
+    def __init__(self, retrievers: list[PaperRetriever], *, max_workers: int | None = None):
         if not retrievers:
             raise ValueError("at least one paper retriever is required")
         self.retrievers = retrievers
+        self.max_workers = max_workers or len(retrievers)
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be positive")
         self.last_errors: list[str] = []
+        self.last_retry_count = 0
+        self.last_cache_hits = 0
+        self.last_request_count = 0
+        self.last_source_success_count = 0
+        self.last_source_failure_count = 0
 
     def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
         self.last_errors = []
+        self.last_retry_count = 0
+        self.last_cache_hits = 0
+        self.last_request_count = 0
+        self.last_source_success_count = 0
+        self.last_source_failure_count = 0
         results: list[PaperCandidate] = []
-        for retriever in self.retrievers:
-            try:
-                results.extend(retriever.search(queries, limit_per_query=limit_per_query))
-            except PaperRetrievalError as error:
-                self.last_errors.append(f"{type(retriever).__name__}: {error}")
-            self.last_errors.extend(
-                f"{type(retriever).__name__}: {message}"
-                for message in getattr(retriever, "last_errors", [])
-            )
+        workers = min(self.max_workers, len(self.retrievers))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="paper-retrieval") as executor:
+            futures = [
+                executor.submit(retriever.search, queries, limit_per_query=limit_per_query)
+                for retriever in self.retrievers
+            ]
+            for retriever, future in zip(self.retrievers, futures, strict=True):
+                source_name = type(retriever).__name__
+                try:
+                    source_results = future.result()
+                except Exception as error:
+                    self.last_source_failure_count += 1
+                    self.last_errors.append(f"{source_name}: {error}")
+                else:
+                    self.last_source_success_count += 1
+                    results.extend(source_results)
+                self.last_errors.extend(
+                    f"{source_name}: {message}"
+                    for message in getattr(retriever, "last_errors", [])
+                )
+                self.last_retry_count += int(getattr(retriever, "last_retry_count", 0))
+                self.last_cache_hits += int(getattr(retriever, "last_cache_hits", 0))
+                self.last_request_count += int(getattr(retriever, "last_request_count", 0))
         if not results:
             raise PaperRetrievalError("all configured paper data sources failed")
         return results

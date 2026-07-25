@@ -60,11 +60,20 @@ Gateway 默认装配 V1。
 - 最小显著改善 0.05；
 - 最多一次内容修复。
 
-默认组合调用 Semantic Scholar、arXiv 与 Crossref；单个来源失败时继续其他来源。
+默认并发调用 Semantic Scholar、arXiv 与 Crossref，并按来源声明顺序合并结果；
+单个来源失败时继续其他来源。可恢复的网络错误以及 408、425、429、5xx 响应
+使用有上限的指数退避重试，`Retry-After` 会在最大退避范围内优先采用。相同查询
+使用进程内 TTL 缓存，arXiv 连续请求默认间隔 3 秒。
 Semantic Scholar 不要求 API Key，但公共配额可能限流。若需要更高配额，可设置：
 
 ```bash
 export SEMANTIC_SCHOLAR_API_KEY="..."
+```
+
+Crossref 推荐通过 `mailto` 加入 polite pool：
+
+```bash
+export CROSSREF_MAILTO="researcher@example.org"
 ```
 
 系统不会将该值写入请求指标或日志。

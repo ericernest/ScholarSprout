@@ -23,6 +23,13 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             DomainOnboardingConfig(candidate_paper_limit=5, selected_paper_limit=6)
 
+    def test_retrieval_max_backoff_cannot_be_smaller_than_base(self) -> None:
+        with self.assertRaises(ValidationError):
+            DomainOnboardingConfig(
+                retrieval_backoff_seconds=2,
+                retrieval_max_backoff_seconds=1,
+            )
+
     def test_request_rejects_empty_query(self) -> None:
         with self.assertRaises(ValidationError):
             DomainOnboardingRequest(query="  ")
