@@ -26,7 +26,8 @@
 - `profile.py`：metadata 优先的请求级画像；
 - `planner.py`：单次 LLM STORM-lite 规划及确定性降级；
 - `retrieval.py`：Semantic Scholar、arXiv、Crossref 和来源失败隔离；
-- `ranking.py`：去重、验证、角色分类和多信号排序；
+- `text_similarity.py`：可替换的本地 TF-IDF 文本向量与余弦相似度；
+- `ranking.py`：去重、验证、角色分类、多信号评分和 MMR 选取；
 - `generator.py`：候选论文约束生成和五阶段学习路径；
 - `quality.py`：硬门槛与六维软评分；
 - `repair.py`：代码修复和一次受约束局部修复；
@@ -56,6 +57,7 @@ Gateway 默认装配 V1。
 - 每个查询最多 10 篇论文；
 - 最多保留 40 篇候选、选择 12 篇；
 - 排序权重：相关性 0.55、引用 0.20、时效 0.15、多样性 0.10；
+- MMR 质量权重 0.70、未覆盖论文角色加分 0.05；
 - 质量阈值 0.75；
 - 最小显著改善 0.05；
 - 最多一次内容修复。
@@ -65,7 +67,9 @@ Gateway 默认装配 V1。
 使用有上限的指数退避重试，`Retry-After` 会在最大退避范围内优先采用。相同查询
 使用进程内 TTL 缓存，arXiv 连续请求默认间隔 3 秒。
 Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅凭返回数量占满候选池；
-进入候选池后仍由相关性、引用、时效和多样性分数决定最终推荐顺序。
+进入候选池后使用本地 TF-IDF 向量计算查询相关性和论文间相似度，再通过 MMR
+综合论文质量、相对已选集合的新颖度和角色覆盖选择最终论文。向量器通过接口注入，
+以后可以替换为 embedding 实现而不改动 Ranker 流程。
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。

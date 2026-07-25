@@ -31,6 +31,12 @@ class ConfigAndSchemaTests(unittest.TestCase):
                 retrieval_max_backoff_seconds=1,
             )
 
+    def test_mmr_settings_are_bounded(self) -> None:
+        with self.assertRaises(ValidationError):
+            DomainOnboardingConfig(mmr_lambda=1.1)
+        with self.assertRaises(ValidationError):
+            DomainOnboardingConfig(mmr_role_bonus=0.3)
+
     def test_request_rejects_empty_query(self) -> None:
         with self.assertRaises(ValidationError):
             DomainOnboardingRequest(query="  ")

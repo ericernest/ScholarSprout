@@ -22,6 +22,8 @@ class DomainOnboardingConfig(BaseModel):
     citation_weight: float = Field(default=0.20, ge=0.0, le=1.0)
     recency_weight: float = Field(default=0.15, ge=0.0, le=1.0)
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
+    mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
     retrieval_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     retrieval_max_attempts: int = Field(default=3, ge=1, le=5)
     retrieval_backoff_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
