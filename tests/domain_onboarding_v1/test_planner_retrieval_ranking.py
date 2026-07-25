@@ -225,6 +225,29 @@ class RankingTests(unittest.TestCase):
             self.assertLessEqual(paper.final_score, 1.0)
             self.assertIn(paper.paper_role, {"survey", "foundational", "method", "evaluation", "frontier", "other"})
 
+    def test_candidate_limit_is_shared_fairly_across_sources(self) -> None:
+        config = DomainOnboardingConfig(candidate_paper_limit=6, selected_paper_limit=6)
+        ranker = WeightedPaperRanker(config)
+        papers = [
+            PaperCandidate(
+                paper_id=f"{source}-{index}",
+                title=f"RAG method from {source} number {index}",
+                abstract="retrieval augmented generation method",
+                year=2024,
+                url=f"https://example.org/{source}/{index}",
+                source=source,
+            )
+            for source, count in (("semantic", 8), ("arxiv", 2), ("crossref", 2))
+            for index in range(count)
+        ]
+
+        ranker.rank(papers, make_plan(), limit=6)
+
+        self.assertEqual(
+            ranker.last_candidate_source_counts,
+            {"arxiv": 2, "crossref": 2, "semantic": 2},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
