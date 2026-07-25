@@ -168,6 +168,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot["requests_total"], 1)
         self.assertEqual(snapshot["papers"]["selected_paper_count"], len(response["papers"]))
+        self.assertIn("retrieval_retry_count", snapshot["papers"])
+        self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
+        self.assertIn("retrieval_source_failure_count", snapshot["papers"])
         self.assertIn("planning", snapshot["stage_latency"])
 
     def test_empty_input_is_recorded(self) -> None:
