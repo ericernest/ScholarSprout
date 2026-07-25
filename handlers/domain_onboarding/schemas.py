@@ -28,6 +28,12 @@ RetryStatus = Literal[
     "retrieval_failed",
 ]
 
+DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
+ARXIV_ID_PATTERN = re.compile(
+    r"^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z-]+)?/\d{7})$",
+    re.IGNORECASE,
+)
+
 
 def stable_id(prefix: str, value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:36]
@@ -95,6 +101,7 @@ class PaperCandidate(OnboardingModel):
     matched_queries: list[str] = Field(default_factory=list)
     doi: str | None = None
     arxiv_id: str | None = None
+    publication_types: list[str] = Field(default_factory=list)
 
     @field_validator("paper_id", "title", "url", "source")
     @classmethod
@@ -102,6 +109,44 @@ class PaperCandidate(OnboardingModel):
         if not value.strip():
             raise ValueError("paper identity fields must not be empty")
         return value
+
+    @field_validator("doi", mode="before")
+    @classmethod
+    def normalize_doi(cls, value: object) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = re.sub(
+            r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)",
+            "",
+            str(value).strip(),
+            flags=re.IGNORECASE,
+        ).lower()
+        if not DOI_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid DOI")
+        return normalized
+
+    @field_validator("arxiv_id", mode="before")
+    @classmethod
+    def normalize_arxiv_id(cls, value: object) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = re.sub(
+            r"^(?:https?://arxiv\.org/(?:abs|pdf)/|arxiv:\s*)",
+            "",
+            str(value).strip(),
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"\.pdf$", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"v\d+$", "", normalized, flags=re.IGNORECASE).lower()
+        if not ARXIV_ID_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid arXiv identifier")
+        return normalized
+
+    @field_validator("publication_types", mode="before")
+    @classmethod
+    def normalize_publication_types(cls, value: object) -> list[str]:
+        values = value if isinstance(value, list) else ([value] if value else [])
+        return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
 
 
 class RankedPaper(PaperCandidate):
@@ -122,6 +167,9 @@ class SelectedPaper(OnboardingModel):
     url: str
     citation_count: int | None = None
     source: str
+    doi: str | None = None
+    arxiv_id: str | None = None
+    publication_types: list[str] = Field(default_factory=list)
     paper_role: PaperRole = "other"
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
 

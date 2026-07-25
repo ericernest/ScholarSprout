@@ -9,6 +9,7 @@ from handlers.domain_onboarding.profile import RuleBasedProfileBuilder
 from handlers.domain_onboarding.schemas import (
     CurrentLandscape,
     DomainOnboardingRequest,
+    PaperCandidate,
     Prerequisite,
     stable_id,
 )
@@ -40,6 +41,30 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertEqual(first.prerequisite_id, second.prerequisite_id)
         landscape = CurrentLandscape(subdirections=["检索优化"])
         self.assertEqual(landscape.subdirection_ids["检索优化"], stable_id("sub", "检索优化"))
+
+    def test_paper_identifiers_are_normalized(self) -> None:
+        paper = PaperCandidate(
+            paper_id="paper-1",
+            title="Grounded Retrieval",
+            url="https://example.org/paper-1",
+            source="test",
+            doi="https://doi.org/10.1000/ABC",
+            arxiv_id="arXiv:2401.00001v2",
+            publication_types=["Journal Article", "Journal Article"],
+        )
+        self.assertEqual(paper.doi, "10.1000/abc")
+        self.assertEqual(paper.arxiv_id, "2401.00001")
+        self.assertEqual(paper.publication_types, ["Journal Article"])
+
+    def test_paper_rejects_malformed_identifiers(self) -> None:
+        with self.assertRaises(ValidationError):
+            PaperCandidate(
+                paper_id="paper-1",
+                title="Grounded Retrieval",
+                url="https://example.org/paper-1",
+                source="test",
+                doi="not-a-doi",
+            )
 
 
 class ProfileTests(unittest.TestCase):

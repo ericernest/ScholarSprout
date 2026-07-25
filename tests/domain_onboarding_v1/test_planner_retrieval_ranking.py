@@ -95,6 +95,7 @@ class RetrievalTests(unittest.TestCase):
                                     "published-online": {"date-parts": [[2025, 1, 2]]},
                                     "URL": "https://doi.org/10.1000/rag",
                                     "is-referenced-by-count": 7,
+                                    "type": "journal-article",
                                 }
                             ]
                         }
@@ -106,6 +107,37 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(papers[0].paper_id, "doi:10.1000/rag")
         self.assertEqual(papers[0].authors, ["Ada Lovelace"])
         self.assertEqual(papers[0].year, 2025)
+        self.assertEqual(papers[0].publication_types, ["journal-article"])
+
+    def test_crossref_filters_non_paper_work_types(self) -> None:
+        client = FakeHTTPClient(
+            [
+                FakeResponse(
+                    {
+                        "message": {
+                            "items": [
+                                {
+                                    "DOI": "10.1000/grant",
+                                    "title": ["Research Grant"],
+                                    "URL": "https://doi.org/10.1000/grant",
+                                    "type": "grant",
+                                },
+                                {
+                                    "DOI": "10.1000/paper",
+                                    "title": ["Research Paper"],
+                                    "URL": "https://doi.org/10.1000/paper",
+                                    "type": "proceedings-article",
+                                },
+                            ]
+                        }
+                    }
+                )
+            ]
+        )
+
+        papers = CrossrefRetriever(client=client).search(["RAG"], limit_per_query=2)
+
+        self.assertEqual([paper.paper_id for paper in papers], ["doi:10.1000/paper"])
 
     def test_arxiv_atom_feed_converts_to_candidate(self) -> None:
         feed = """<?xml version="1.0" encoding="UTF-8"?>
@@ -139,7 +171,8 @@ class RetrievalTests(unittest.TestCase):
                                 "url": "https://example.org/abc",
                                 "citationCount": 12,
                                 "authors": [{"name": "Ada"}],
-                                "externalIds": {"DOI": "10.1/abc", "ArXiv": "2401.1"},
+                                "externalIds": {"DOI": "10.1000/abc", "ArXiv": "2401.00001"},
+                                "publicationTypes": ["JournalArticle"],
                             }
                         ]
                     }
@@ -150,6 +183,7 @@ class RetrievalTests(unittest.TestCase):
         papers = retriever.search(["query"], limit_per_query=5)
         self.assertEqual(papers[0].paper_id, "abc")
         self.assertEqual(papers[0].matched_queries, ["query"])
+        self.assertEqual(papers[0].publication_types, ["JournalArticle"])
         self.assertEqual(client.calls[0]["params"]["limit"], 5)
 
     def test_single_query_failure_does_not_abort_other_queries(self) -> None:
@@ -237,7 +271,7 @@ class RankingTests(unittest.TestCase):
                 url=f"https://example.org/{source}/{index}",
                 source=source,
             )
-            for source, count in (("semantic", 8), ("arxiv", 2), ("crossref", 2))
+            for source, count in (("source_a", 8), ("source_b", 2), ("source_c", 2))
             for index in range(count)
         ]
 
@@ -245,8 +279,57 @@ class RankingTests(unittest.TestCase):
 
         self.assertEqual(
             ranker.last_candidate_source_counts,
-            {"arxiv": 2, "crossref": 2, "semantic": 2},
+            {"source_a": 2, "source_b": 2, "source_c": 2},
         )
+
+    def test_source_specific_identity_mismatch_is_filtered(self) -> None:
+        papers = [
+            PaperCandidate(
+                paper_id="wrong-crossref-id",
+                title="Crossref Paper",
+                url="https://doi.org/10.1000/paper",
+                source="crossref",
+                doi="10.1000/paper",
+            ),
+            PaperCandidate(
+                paper_id="wrong-arxiv-id",
+                title="arXiv Paper",
+                url="https://arxiv.org/abs/2401.00001",
+                source="arxiv",
+                arxiv_id="2401.00001",
+            ),
+            PaperCandidate(
+                paper_id="doi:10.1000/other",
+                title="Crossref URL mismatch",
+                url="https://doi.org/10.1000/different",
+                source="crossref",
+                doi="10.1000/other",
+            ),
+            PaperCandidate(
+                paper_id="valid",
+                title="Valid Semantic Scholar Paper",
+                url="https://example.org/valid",
+                source="semantic_scholar",
+                publication_types=["JournalArticle"],
+            ),
+        ]
+
+        ranked = self.ranker.rank(papers, make_plan(), limit=3)
+
+        self.assertEqual([paper.paper_id for paper in ranked], ["valid"])
+        self.assertEqual(self.ranker.last_invalid_count, 3)
+
+    def test_non_paper_semantic_scholar_type_is_filtered(self) -> None:
+        paper = PaperCandidate(
+            paper_id="dataset-1",
+            title="RAG Dataset",
+            url="https://example.org/dataset-1",
+            source="semantic_scholar",
+            publication_types=["Dataset"],
+        )
+
+        self.assertEqual(self.ranker.rank([paper], make_plan(), limit=1), [])
+        self.assertEqual(self.ranker.last_invalid_count, 1)
 
 
 if __name__ == "__main__":
