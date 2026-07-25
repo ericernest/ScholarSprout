@@ -118,6 +118,10 @@ export CROSSREF_MAILTO="researcher@example.org"
 总分至少提高 `min_improvement_delta`，且结构、论文和学习路线维度没有回退时
 才会替换第一次结果。
 
+Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈值时返回 `ok`；
+通过硬门槛但低于阈值时返回 `quality_warning`；未通过硬门槛时返回
+`quality_failed`。后两者仍携带结构化输出和质量问题，便于前端提示和定位修复点。
+
 ## 测试
 
 V1 测试位于 `tests/domain_onboarding_v1/`，全部使用假模型和假检索器，不需要

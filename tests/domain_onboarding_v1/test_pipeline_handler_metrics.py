@@ -47,8 +47,9 @@ def make_pipeline(
     *,
     fail_retrieval: bool = False,
     empty_retrieval: bool = False,
+    config: DomainOnboardingConfig | None = None,
 ) -> DomainOnboardingPipeline:
-    config = DomainOnboardingConfig()
+    config = config or DomainOnboardingConfig()
     generator = StructuredOnboardingGenerator(FakeJSONModel(responses), config)
     return DomainOnboardingPipeline(
         profile_builder=RuleBasedProfileBuilder(),
@@ -141,8 +142,54 @@ class PipelineTests(unittest.TestCase):
         pipeline = make_pipeline([low, low])
         trace = DomainOnboardingRequestTrace()
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+        self.assertEqual(result.status, "quality_failed")
         self.assertEqual(result.quality.retry_status, "not_improved")
         self.assertEqual(result.quality.selected_attempt, 1)
+
+    def test_soft_quality_shortfall_returns_warning_instead_of_ok(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        for stage in low["development_stages"]:
+            stage.update(
+                summary="",
+                motivation="",
+                core_concepts=[],
+                main_techniques=[],
+                open_problems=[],
+            )
+        for step in low["learning_path"]:
+            step.update(topics=[], activities=[], completion_criteria=[])
+        pipeline = make_pipeline(
+            [low, low],
+            config=DomainOnboardingConfig(quality_threshold=0.95),
+        )
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+        )
+
+        self.assertTrue(result.quality.passed_hard_gates)
+        self.assertLess(result.quality.score, result.quality.threshold)
+        self.assertEqual(result.status, "quality_warning")
+
+    def test_improved_result_must_meet_threshold_to_return_ok(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["prerequisites"] = low["prerequisites"][:1]
+        low["development_stages"] = low["development_stages"][:1]
+        low["current_landscape"] = {"problems": ["一个问题"], "subdirections": ["一个方向"]}
+        high = make_generation_payload(paper_ids)
+        pipeline = make_pipeline([low, high])
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertGreaterEqual(result.quality.score, result.quality.threshold)
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
@@ -172,6 +219,40 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
         self.assertIn("retrieval_source_failure_count", snapshot["papers"])
         self.assertIn("planning", snapshot["stage_latency"])
+
+    def test_handler_preserves_quality_warning_and_records_status(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        for stage in low["development_stages"]:
+            stage.update(
+                summary="",
+                motivation="",
+                core_concepts=[],
+                main_techniques=[],
+                open_problems=[],
+            )
+        metrics = DomainOnboardingMetrics()
+        app_state = SimpleNamespace(
+            domain_onboarding_pipeline=make_pipeline(
+                [low, low],
+                config=DomainOnboardingConfig(quality_threshold=0.95),
+            ),
+            domain_onboarding_metrics=metrics,
+        )
+        message = ChannelMessage(
+            session_id="session",
+            channel="test",
+            direction="inbound",
+            mode="domain_onboarding",
+            content="RAG",
+        )
+
+        response = handle_domain_onboarding_message(message, app_state)
+
+        self.assertEqual(response["status"], "quality_warning")
+        self.assertIn("quality", response)
+        self.assertTrue(response["papers"])
+        self.assertEqual(metrics.snapshot()["statuses"]["quality_warning"], 1)
 
     def test_empty_input_is_recorded(self) -> None:
         metrics = DomainOnboardingMetrics()

@@ -281,6 +281,8 @@ class ContentQuality(OnboardingModel):
 class PipelineResult(OnboardingModel):
     status: Literal[
         "ok",
+        "quality_warning",
+        "quality_failed",
         "invalid_input",
         "planning_failed",
         "retrieval_failed",
