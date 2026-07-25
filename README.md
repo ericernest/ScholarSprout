@@ -12,6 +12,7 @@ NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助�
 - 架构介绍：[docs/project-structure.md](docs/project-structure.md)
 - 功能开发说明：[docs/development-guide.md](docs/development-guide.md)
 - Git 分支开发流程：[docs/git-workflow.md](docs/git-workflow.md)
+- 领域入门 V1：[docs/domain-onboarding-v1.md](docs/domain-onboarding-v1.md)
 
 框架、gateway、channel、bus、基础 chat agent 和 Web UI 已经搭好。功能开发同学请优先阅读功能开发说明，并主要在 `handlers/` 中完成论文精读和领域入门逻辑。
 
