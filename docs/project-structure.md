@@ -215,6 +215,10 @@ bus 不负责：
 - `paper_reading_handler.py`：论文精读功能开发入口
 - `domain_onboarding_handler.py`：领域入门功能开发入口
 
+领域入门 V1 的业务实现已经收敛到 `handlers/domain_onboarding/`，Handler 只负责
+请求转换、调用 Pipeline、响应转换和指标记录。详细模块和约束见
+[domain-onboarding-v1.md](domain-onboarding-v1.md)。
+
 ## agents 层
 
 位置：`agents/`

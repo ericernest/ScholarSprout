@@ -15,6 +15,7 @@ from channels.base import ChannelMessage
 from channels.web import WebChannel
 from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
+from handlers.domain_onboarding import create_default_pipeline
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
@@ -95,6 +96,13 @@ def domain_onboarding_metrics(request: Request) -> dict:
     return metrics.snapshot()
 
 
+@app.on_event("shutdown")
+def close_domain_onboarding_resources() -> None:
+    pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
+    if pipeline is not None:
+        pipeline.close()
+
+
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
@@ -111,6 +119,7 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.model = model
     app.state.chat_agent = chat_agent
     app.state.domain_onboarding_agent = domain_onboarding_agent
+    app.state.domain_onboarding_pipeline = create_default_pipeline(model)
     app.state.domain_onboarding_metrics = DomainOnboardingMetrics(
         input_cost_per_million_tokens=config.client.input_cost_per_million_tokens,
         output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
