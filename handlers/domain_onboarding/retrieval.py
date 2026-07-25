@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from time import monotonic, sleep
@@ -416,7 +417,7 @@ class CompositePaperRetriever:
         self.last_request_count = 0
         self.last_source_success_count = 0
         self.last_source_failure_count = 0
-        results: list[PaperCandidate] = []
+        source_batches: list[list[PaperCandidate]] = []
         workers = min(self.max_workers, len(self.retrievers))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="paper-retrieval") as executor:
             futures = [
@@ -430,9 +431,10 @@ class CompositePaperRetriever:
                 except Exception as error:
                     self.last_source_failure_count += 1
                     self.last_errors.append(f"{source_name}: {error}")
+                    source_batches.append([])
                 else:
                     self.last_source_success_count += 1
-                    results.extend(source_results)
+                    source_batches.append(source_results)
                 self.last_errors.extend(
                     f"{source_name}: {message}"
                     for message in getattr(retriever, "last_errors", [])
@@ -440,9 +442,26 @@ class CompositePaperRetriever:
                 self.last_retry_count += int(getattr(retriever, "last_retry_count", 0))
                 self.last_cache_hits += int(getattr(retriever, "last_cache_hits", 0))
                 self.last_request_count += int(getattr(retriever, "last_request_count", 0))
+        results = self._interleave_sources(source_batches)
         if not results:
             raise PaperRetrievalError("all configured paper data sources failed")
         return results
+
+    @staticmethod
+    def _interleave_sources(
+        source_batches: list[list[PaperCandidate]],
+    ) -> list[PaperCandidate]:
+        """按来源轮询合并，避免声明顺序靠前的来源占满候选池。"""
+        queues = [deque(batch) for batch in source_batches if batch]
+        merged: list[PaperCandidate] = []
+        while queues:
+            active: list[deque[PaperCandidate]] = []
+            for queue in queues:
+                merged.append(queue.popleft())
+                if queue:
+                    active.append(queue)
+            queues = active
+        return merged
 
     def close(self) -> None:
         for retriever in self.retrievers:

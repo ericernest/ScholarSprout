@@ -32,13 +32,26 @@ class WeightedPaperRanker:
         self.config = config
         self.last_deduplicated_count = 0
         self.last_invalid_count = 0
+        self.last_candidate_source_counts: dict[str, int] = {}
 
     def rank(self, papers: list[PaperCandidate], plan: DomainResearchPlan, *, limit: int) -> list[RankedPaper]:
         unique = self._deduplicate(papers)
         self.last_deduplicated_count = len(unique)
         valid = [paper for paper in unique if self._is_valid(paper)]
         self.last_invalid_count = len(unique) - len(valid)
-        valid = valid[: self.config.candidate_paper_limit]
+        valid = self._limit_candidates_by_source(
+            valid,
+            self.config.candidate_paper_limit,
+        )
+        self.last_candidate_source_counts = dict(
+            sorted(
+                (
+                    (source, sum(1 for paper in valid if paper.source == source))
+                    for source in {paper.source for paper in valid}
+                ),
+                key=lambda item: item[0],
+            )
+        )
         if not valid:
             return []
 
@@ -82,6 +95,34 @@ class WeightedPaperRanker:
             seen_topics.update(text_tokens)
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
         return self._select_diverse(ranked, min(limit, self.config.selected_paper_limit))
+
+    @staticmethod
+    def _limit_candidates_by_source(
+        papers: list[PaperCandidate],
+        limit: int,
+    ) -> list[PaperCandidate]:
+        """在候选上限内轮询各来源，同时保留每个来源内部的原始顺序。"""
+        if limit <= 0:
+            return []
+        by_source: dict[str, list[PaperCandidate]] = {}
+        for paper in papers:
+            by_source.setdefault(paper.source, []).append(paper)
+        offsets = {source: 0 for source in by_source}
+        limited: list[PaperCandidate] = []
+        while len(limited) < limit:
+            added = False
+            for source, batch in by_source.items():
+                offset = offsets[source]
+                if offset >= len(batch):
+                    continue
+                limited.append(batch[offset])
+                offsets[source] = offset + 1
+                added = True
+                if len(limited) >= limit:
+                    break
+            if not added:
+                break
+        return limited
 
     def _deduplicate(self, papers: list[PaperCandidate]) -> list[PaperCandidate]:
         merged: dict[str, PaperCandidate] = {}

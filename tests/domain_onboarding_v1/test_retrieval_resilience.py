@@ -159,6 +159,34 @@ class CompositeConcurrencyTests(unittest.TestCase):
         self.assertEqual(retriever.last_source_failure_count, 0)
         self.assertEqual(retriever.last_request_count, 2)
 
+    def test_sources_are_interleaved_instead_of_concatenated(self) -> None:
+        class BatchRetriever:
+            def __init__(self, source: str, count: int) -> None:
+                self.source = source
+                self.count = count
+                self.last_errors: list[str] = []
+
+            def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
+                return [
+                    PaperCandidate(
+                        paper_id=f"{self.source}-{index}",
+                        title=f"{self.source} paper {index}",
+                        url=f"https://example.org/{self.source}/{index}",
+                        source=self.source,
+                    )
+                    for index in range(self.count)
+                ]
+
+        retriever = CompositePaperRetriever(
+            [BatchRetriever("semantic", 3), BatchRetriever("arxiv", 2)],
+        )
+        papers = retriever.search(["query"], limit_per_query=3)
+
+        self.assertEqual(
+            [paper.paper_id for paper in papers],
+            ["semantic-0", "arxiv-0", "semantic-1", "arxiv-1", "semantic-2"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
