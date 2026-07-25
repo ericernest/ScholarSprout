@@ -144,7 +144,7 @@ class DomainOnboardingPipeline:
             trace.final_dimensions = dict(selected_quality.dimensions)
             trace.quality_delta = round(selected_quality.score - float(trace.first_score or 0.0), 6)
             return PipelineResult(
-                status="ok",
+                status=self._quality_status(selected_quality),
                 query=request.query,
                 output=selected_output,
                 quality=selected_quality,
@@ -201,6 +201,14 @@ class DomainOnboardingPipeline:
         return quality.model_copy(
             update={"attempts": 2, "selected_attempt": selected, "retry_status": status}
         )
+
+    @staticmethod
+    def _quality_status(quality: ContentQuality) -> str:
+        if not quality.passed_hard_gates:
+            return "quality_failed"
+        if quality.score < quality.threshold:
+            return "quality_warning"
+        return "ok"
 
     @staticmethod
     def _usage_from_stats(stats: ModelCallStats) -> TokenUsage:
