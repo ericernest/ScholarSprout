@@ -154,6 +154,7 @@ class StructuredOnboardingGenerator:
         previous_output: DomainOnboardingOutput | None = None,
         issues: list[QualityIssue] | None = None,
     ) -> dict[str, Any]:
+        self.last_stats = ModelCallStats()
         system_prompt = (
             "You generate a beginner-friendly Chinese domain onboarding plan. Return one JSON object only. "
             "You MUST use only paper_id values from allowed_papers; never invent or modify paper metadata. "
@@ -182,6 +183,7 @@ class StructuredOnboardingGenerator:
             )
             return payload
         except StructuredLLMError as error:
+            self.last_stats = error.stats
             raise GenerationError(str(error)) from error
 
     def _normalize(

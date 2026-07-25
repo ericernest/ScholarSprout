@@ -122,6 +122,13 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 通过硬门槛但低于阈值时返回 `quality_warning`；未通过硬门槛时返回
 `quality_failed`。后两者仍携带结构化输出和质量问题，便于前端提示和定位修复点。
 
+## 模型调用指标
+
+Metrics 的 `model_usage` 分别聚合 `primary`、`retry` 和 `total` 调用。即使模型
+返回非法 JSON，响应中的 token 仍会计入；如果请求在获得 usage 前发生网络异常，
+仍记录模型调用次数和耗时，并增加 `unreported_usage_calls`。只有所有已发生调用都
+报告 usage 时，`usage_complete` 才为 `true`，避免把不完整 token 当作完整成本。
+
 ## 测试
 
 V1 测试位于 `tests/domain_onboarding_v1/`，全部使用假模型和假检索器，不需要

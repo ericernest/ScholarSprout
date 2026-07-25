@@ -12,7 +12,9 @@ from .schemas import ModelCallStats
 
 
 class StructuredLLMError(RuntimeError):
-    pass
+    def __init__(self, message: str, stats: ModelCallStats):
+        super().__init__(message)
+        self.stats = stats
 
 
 def parse_json_object(raw_text: str) -> dict[str, Any] | None:
@@ -52,7 +54,11 @@ def invoke_json(model: Any, *, system_prompt: str, user_prompt: str) -> tuple[di
             ]
         )
     except Exception as error:
-        raise StructuredLLMError(f"LLM call failed: {error}") from error
+        stats = ModelCallStats(
+            duration_ms=round((perf_counter() - started) * 1000, 3),
+            model_calls=1,
+        )
+        raise StructuredLLMError(f"LLM call failed: {error}", stats) from error
 
     usage = get_response_usage(response)
     stats = ModelCallStats(
@@ -66,5 +72,5 @@ def invoke_json(model: Any, *, system_prompt: str, user_prompt: str) -> tuple[di
     content = get_message_content(get_response_message(response))
     parsed = parse_json_object(content)
     if parsed is None:
-        raise StructuredLLMError("LLM did not return a JSON object")
+        raise StructuredLLMError("LLM did not return a JSON object", stats)
     return parsed, stats

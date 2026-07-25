@@ -20,6 +20,8 @@ class DomainOnboardingRequestTrace:
     retry_call_duration_ms: float = 0.0
     first_model_calls: int = 0
     retry_model_calls: int = 0
+    first_unreported_usage_calls: int = 0
+    retry_unreported_usage_calls: int = 0
     first_usage: TokenUsage = field(default_factory=TokenUsage)
     retry_usage: TokenUsage = field(default_factory=TokenUsage)
     first_score: int | float | None = None
@@ -96,6 +98,10 @@ class DomainOnboardingMetrics:
         self._repair_reasons: Counter[str] = Counter()
         self._extra_model_calls = 0
         self._extra_usage = TokenUsage()
+        self._primary_model_calls = 0
+        self._primary_unreported_usage_calls = 0
+        self._retry_unreported_usage_calls = 0
+        self._primary_usage = TokenUsage()
         self._request_durations: deque[float] = deque(maxlen=window_size)
         self._first_call_durations: deque[float] = deque(maxlen=window_size)
         self._retry_call_durations: deque[float] = deque(maxlen=window_size)
@@ -112,12 +118,16 @@ class DomainOnboardingMetrics:
             self._requests_total += 1
             self._statuses[trace.status] += 1
             self._request_durations.append(trace.total_duration_ms)
+            self._primary_model_calls += trace.first_model_calls
+            self._primary_unreported_usage_calls += trace.first_unreported_usage_calls
+            self._primary_usage.add(trace.first_usage)
             if trace.first_model_calls:
                 self._first_call_durations.append(trace.first_call_duration_ms)
             if trace.retry_attempted:
                 self._retry_requests += 1
                 self._retry_call_durations.append(trace.retry_call_duration_ms or trace.repair_duration_ms)
                 self._extra_model_calls += trace.retry_model_calls
+                self._retry_unreported_usage_calls += trace.retry_unreported_usage_calls
                 self._extra_usage.add(trace.retry_usage)
                 self._repair_reasons[trace.repair_reason] += 1
                 if trace.retry_status == "improved":
@@ -148,7 +158,10 @@ class DomainOnboardingMetrics:
             extra_completion_tokens = self._extra_usage.completion_tokens
             pricing_configured = self._input_cost is not None and self._output_cost is not None
             estimated_cost = None
-            if pricing_configured and self._extra_usage.reported:
+            retry_usage_complete = (
+                self._extra_model_calls > 0 and self._retry_unreported_usage_calls == 0
+            )
+            if pricing_configured and retry_usage_complete:
                 estimated_cost = round(
                     extra_prompt_tokens / 1_000_000 * self._input_cost
                     + extra_completion_tokens / 1_000_000 * self._output_cost,
@@ -188,10 +201,51 @@ class DomainOnboardingMetrics:
                     "completion_tokens": extra_completion_tokens,
                     "total_tokens": self._extra_usage.total_tokens,
                     "usage_reported": self._extra_usage.reported,
+                    "usage_complete": retry_usage_complete,
+                    "unreported_usage_calls": self._retry_unreported_usage_calls,
                     "pricing_configured": pricing_configured,
                     "estimated_cost": estimated_cost,
                 },
+                "model_usage": self._model_usage_snapshot(),
             }
+
+    def _model_usage_snapshot(self) -> dict[str, Any]:
+        total_usage = TokenUsage()
+        total_usage.add(self._primary_usage)
+        total_usage.add(self._extra_usage)
+        total_calls = self._primary_model_calls + self._extra_model_calls
+        total_unreported = (
+            self._primary_unreported_usage_calls + self._retry_unreported_usage_calls
+        )
+        return {
+            "primary": self._usage_snapshot(
+                self._primary_model_calls,
+                self._primary_usage,
+                self._primary_unreported_usage_calls,
+            ),
+            "retry": self._usage_snapshot(
+                self._extra_model_calls,
+                self._extra_usage,
+                self._retry_unreported_usage_calls,
+            ),
+            "total": self._usage_snapshot(total_calls, total_usage, total_unreported),
+        }
+
+    @staticmethod
+    def _usage_snapshot(
+        model_calls: int,
+        usage: TokenUsage,
+        unreported_usage_calls: int,
+    ) -> dict[str, int | bool]:
+        return {
+            "model_calls": model_calls,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+            "usage_reported": usage.reported,
+            "usage_complete": model_calls > 0 and unreported_usage_calls == 0,
+            "unreported_usage_calls": unreported_usage_calls,
+        }
 
     @staticmethod
     def _dimension_averages(values: dict[str, list[float]]) -> dict[str, float]:
