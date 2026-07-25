@@ -54,9 +54,18 @@ class DomainOnboardingPipeline:
         request: DomainOnboardingRequest,
         trace: DomainOnboardingRequestTrace,
     ) -> PipelineResult:
+        self._reset_model_stats()
         try:
             profile, trace.profile_duration_ms = self._timed(self.profile_builder.build, request)
-            plan, trace.planning_duration_ms = self._timed(self.planner.plan, request.query, profile)
+            planning_started = perf_counter()
+            try:
+                plan = self.planner.plan(request.query, profile)
+            except Exception as error:
+                trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
+                self._record_planning_model_stats(trace)
+                return PipelineResult(status="planning_failed", query=request.query, error=str(error))
+            trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
+            self._record_planning_model_stats(trace)
             trace.search_query_count = len(plan.search_queries)
 
             try:
@@ -88,18 +97,22 @@ class DomainOnboardingPipeline:
                     error="No verified papers were returned by the configured data source.",
                 )
 
+            generation_started = perf_counter()
             try:
-                output, trace.generation_duration_ms = self._timed(
-                    self.generator.generate, request, profile, plan, ranked
-                )
+                output = self.generator.generate(request, profile, plan, ranked)
             except GenerationError as error:
                 return PipelineResult(status="generation_failed", query=request.query, error=str(error))
+            finally:
+                trace.generation_duration_ms = round(
+                    (perf_counter() - generation_started) * 1000,
+                    3,
+                )
+                self._record_generation_model_stats(trace)
 
             first_quality, trace.evaluation_duration_ms = self._timed(
                 self.evaluator.evaluate, output, ranked
             )
             self._record_first(trace, first_quality)
-            self._record_primary_model_stats(trace)
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
                 trace.final_score = first_quality.score
                 trace.final_dimensions = dict(first_quality.dimensions)
@@ -120,10 +133,10 @@ class DomainOnboardingPipeline:
                 first_quality,
                 ranked,
             )
-            retry_quality, extra_eval_ms = self._timed(self.evaluator.evaluate, repaired, ranked)
-            trace.evaluation_duration_ms += extra_eval_ms
             trace.repair_reason = getattr(self.repairer, "last_action", "unknown")
             self._record_retry_model_stats(trace)
+            retry_quality, extra_eval_ms = self._timed(self.evaluator.evaluate, repaired, ranked)
+            trace.evaluation_duration_ms += extra_eval_ms
 
             use_retry = (
                 retry_quality.passed_hard_gates
@@ -219,21 +232,39 @@ class DomainOnboardingPipeline:
             reported=stats.usage_reported,
         )
 
-    def _record_primary_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
+    def _reset_model_stats(self) -> None:
+        for component in (self.planner, self.generator):
+            if hasattr(component, "last_stats"):
+                try:
+                    component.last_stats = ModelCallStats()
+                except (AttributeError, TypeError):
+                    continue
+
+    def _record_planning_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
         planning = getattr(self.planner, "last_stats", ModelCallStats())
-        generation = getattr(self.generator, "last_stats", ModelCallStats())
-        trace.first_model_calls = planning.model_calls + generation.model_calls
+        trace.first_model_calls += planning.model_calls
         trace.first_usage = self._usage_from_stats(planning)
+        trace.first_call_duration_ms += planning.duration_ms
+        if planning.model_calls and not planning.usage_reported:
+            trace.first_unreported_usage_calls += planning.model_calls
+
+    def _record_generation_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
+        generation = getattr(self.generator, "last_stats", ModelCallStats())
+        trace.first_model_calls += generation.model_calls
         trace.first_usage.add(self._usage_from_stats(generation))
-        trace.first_call_duration_ms = planning.duration_ms + generation.duration_ms
+        trace.first_call_duration_ms += generation.duration_ms
+        if generation.model_calls and not generation.usage_reported:
+            trace.first_unreported_usage_calls += generation.model_calls
 
     def _record_retry_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
-        if trace.repair_reason != "llm_targeted_repair":
+        if trace.repair_reason not in {"llm_targeted_repair", "llm_repair_failed"}:
             return
         stats = getattr(self.generator, "last_stats", ModelCallStats())
         trace.retry_model_calls = stats.model_calls
         trace.retry_usage = self._usage_from_stats(stats)
         trace.retry_call_duration_ms = stats.duration_ms
+        if stats.model_calls and not stats.usage_reported:
+            trace.retry_unreported_usage_calls += stats.model_calls
 
     @staticmethod
     def _record_first(trace: DomainOnboardingRequestTrace, quality: ContentQuality) -> None:

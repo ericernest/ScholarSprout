@@ -36,6 +36,7 @@ class StormLitePlanner:
         self.last_stats = ModelCallStats()
 
     def plan(self, query: str, profile: LearnerProfile) -> DomainResearchPlan:
+        self.last_stats = ModelCallStats()
         system_prompt = (
             "You are a STORM-lite research planner. Return one JSON object only. "
             "Decompose the domain from multiple research perspectives before retrieval. "
@@ -57,8 +58,10 @@ class StormLitePlanner:
                 raise ValueError("planner coverage is insufficient")
             plan.search_queries = plan.search_queries[: self.config.search_queries_limit]
             return plan
-        except (StructuredLLMError, ValidationError, ValueError):
-            self.last_stats = self.last_stats or ModelCallStats()
+        except StructuredLLMError as error:
+            self.last_stats = error.stats
+            return self._fallback_plan(query)
+        except (ValidationError, ValueError):
             return self._fallback_plan(query)
 
     def _fallback_plan(self, query: str) -> DomainResearchPlan:

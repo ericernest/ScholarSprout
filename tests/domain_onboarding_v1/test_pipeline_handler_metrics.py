@@ -112,10 +112,14 @@ class PipelineTests(unittest.TestCase):
 
     def test_invalid_generation_json_returns_generation_failed(self) -> None:
         pipeline = make_pipeline(["not json"])
+        trace = DomainOnboardingRequestTrace()
         result = pipeline.run(
-            DomainOnboardingRequest(query="RAG"), DomainOnboardingRequestTrace()
+            DomainOnboardingRequest(query="RAG"), trace
         )
         self.assertEqual(result.status, "generation_failed")
+        self.assertEqual(trace.first_model_calls, 1)
+        self.assertEqual(trace.first_usage.total_tokens, 50)
+        self.assertEqual(trace.first_unreported_usage_calls, 0)
 
     def test_repair_is_selected_only_after_significant_improvement(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
@@ -190,6 +194,22 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual(result.status, "ok")
         self.assertGreaterEqual(result.quality.score, result.quality.threshold)
+
+    def test_failed_llm_repair_records_retry_usage(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["development_stages"] = low["development_stages"][:1]
+        pipeline = make_pipeline([low, "not json"])
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertEqual(result.status, "quality_failed")
+        self.assertEqual(trace.repair_reason, "llm_repair_failed")
+        self.assertEqual(trace.retry_model_calls, 1)
+        self.assertEqual(trace.retry_usage.total_tokens, 50)
+        self.assertEqual(trace.retry_unreported_usage_calls, 0)
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
@@ -270,6 +290,50 @@ class HandlerAndMetricsTests(unittest.TestCase):
         response = handle_domain_onboarding_message(message, app_state)
         self.assertEqual(response["status"], "invalid_input")
         self.assertEqual(metrics.snapshot()["statuses"]["invalid_input"], 1)
+
+    def test_failed_generation_usage_is_aggregated(self) -> None:
+        metrics = DomainOnboardingMetrics()
+        app_state = SimpleNamespace(
+            domain_onboarding_pipeline=make_pipeline(["not json"]),
+            domain_onboarding_metrics=metrics,
+        )
+        message = ChannelMessage(
+            session_id="session",
+            channel="test",
+            direction="inbound",
+            mode="domain_onboarding",
+            content="RAG",
+        )
+
+        response = handle_domain_onboarding_message(message, app_state)
+        usage = metrics.snapshot()["model_usage"]
+
+        self.assertEqual(response["status"], "generation_failed")
+        self.assertEqual(usage["primary"]["model_calls"], 1)
+        self.assertEqual(usage["primary"]["total_tokens"], 50)
+        self.assertTrue(usage["primary"]["usage_complete"])
+
+    def test_unreported_failed_call_is_visible_in_metrics(self) -> None:
+        metrics = DomainOnboardingMetrics()
+        app_state = SimpleNamespace(
+            domain_onboarding_pipeline=make_pipeline([RuntimeError("offline")]),
+            domain_onboarding_metrics=metrics,
+        )
+        message = ChannelMessage(
+            session_id="session",
+            channel="test",
+            direction="inbound",
+            mode="domain_onboarding",
+            content="RAG",
+        )
+
+        response = handle_domain_onboarding_message(message, app_state)
+        primary = metrics.snapshot()["model_usage"]["primary"]
+
+        self.assertEqual(response["status"], "generation_failed")
+        self.assertEqual(primary["model_calls"], 1)
+        self.assertEqual(primary["unreported_usage_calls"], 1)
+        self.assertFalse(primary["usage_complete"])
 
 
 if __name__ == "__main__":

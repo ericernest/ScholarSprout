@@ -49,6 +49,8 @@ class PlannerTests(unittest.TestCase):
         plan = planner.plan("图神经网络", make_profile())
         self.assertGreaterEqual(len(plan.perspectives), 3)
         self.assertTrue(any("graph neural networks" in query for query in plan.search_queries))
+        self.assertEqual(planner.last_stats.model_calls, 1)
+        self.assertEqual(planner.last_stats.total_tokens, 50)
 
 
 class FakeResponse:
