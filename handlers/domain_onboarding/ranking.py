@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import math
 import re
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Protocol
 from urllib.parse import unquote, urlparse
 
 from .config import DomainOnboardingConfig
 from .schemas import DomainResearchPlan, PaperCandidate, PaperRole, RankedPaper
+from .text_similarity import TextVectorizer, TfidfTextVectorizer, cosine_similarity
 
 
 class PaperRanker(Protocol):
@@ -24,18 +24,21 @@ def _normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
 
 
-def _tokens(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{2,}", text.lower()))
-
-
 class WeightedPaperRanker:
-    def __init__(self, config: DomainOnboardingConfig):
+    def __init__(
+        self,
+        config: DomainOnboardingConfig,
+        vectorizer: TextVectorizer | None = None,
+    ):
         self.config = config
+        self.vectorizer = vectorizer or TfidfTextVectorizer()
         self.last_deduplicated_count = 0
         self.last_invalid_count = 0
         self.last_candidate_source_counts: dict[str, int] = {}
+        self.last_mmr_scores: dict[str, float] = {}
 
     def rank(self, papers: list[PaperCandidate], plan: DomainResearchPlan, *, limit: int) -> list[RankedPaper]:
+        self.last_mmr_scores = {}
         unique = self._deduplicate(papers)
         self.last_deduplicated_count = len(unique)
         valid = [paper for paper in unique if self._is_valid(paper)]
@@ -57,24 +60,39 @@ class WeightedPaperRanker:
             return []
 
         max_citations = max((paper.citation_count or 0) for paper in valid)
-        query_tokens = _tokens(
-            " ".join(
-                [plan.normalized_domain, *plan.search_queries, *plan.expected_subdirections]
-            )
+        query_text = " ".join(
+            [
+                plan.normalized_domain,
+                *plan.search_queries,
+                *plan.expected_subdirections,
+                *(question for perspective in plan.perspectives for question in perspective.questions),
+            ]
         )
+        document_texts = [f"{paper.title} {paper.title} {paper.abstract or ''}" for paper in valid]
+        vectors = self.vectorizer.vectorize([query_text, *document_texts])
+        if len(vectors) != len(valid) + 1:
+            raise ValueError("text vectorizer returned an unexpected number of vectors")
+        query_vector, document_vectors = vectors[0], vectors[1:]
         ranked: list[RankedPaper] = []
-        seen_topics: set[str] = set()
-        for paper in valid:
-            text_tokens = _tokens(f"{paper.title} {paper.abstract or ''}")
-            overlap = len(query_tokens & text_tokens)
-            relevance = min(1.0, overlap / max(4, min(12, len(query_tokens))))
+        vector_by_id = {
+            paper.paper_id: vector for paper, vector in zip(valid, document_vectors, strict=True)
+        }
+        for paper, paper_vector in zip(valid, document_vectors, strict=True):
+            relevance = cosine_similarity(query_vector, paper_vector)
             citations = (
                 math.log1p(paper.citation_count or 0) / math.log1p(max_citations)
                 if max_citations > 0 else 0.0
             )
             recency = self._recency_score(paper.year)
-            novel = text_tokens - seen_topics
-            diversity = min(1.0, len(novel) / max(5, len(text_tokens))) if text_tokens else 0.0
+            nearest_neighbor = max(
+                (
+                    cosine_similarity(paper_vector, other_vector)
+                    for other_id, other_vector in vector_by_id.items()
+                    if other_id != paper.paper_id
+                ),
+                default=0.0,
+            )
+            diversity = 1.0 - nearest_neighbor
             role = self._classify_role(paper)
             final = (
                 self.config.relevance_weight * relevance
@@ -93,9 +111,12 @@ class WeightedPaperRanker:
                     paper_role=role,
                 )
             )
-            seen_topics.update(text_tokens)
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
-        return self._select_diverse(ranked, min(limit, self.config.selected_paper_limit))
+        return self._select_mmr(
+            ranked,
+            vector_by_id,
+            min(limit, self.config.selected_paper_limit),
+        )
 
     @staticmethod
     def _limit_candidates_by_source(
@@ -215,24 +236,43 @@ class WeightedPaperRanker:
             return "method"
         return "other"
 
-    def _select_diverse(self, ranked: list[RankedPaper], limit: int) -> list[RankedPaper]:
+    def _select_mmr(
+        self,
+        ranked: list[RankedPaper],
+        vectors: dict[str, dict[str, float]],
+        limit: int,
+    ) -> list[RankedPaper]:
         if limit <= 0:
             return []
-        by_role: dict[PaperRole, list[RankedPaper]] = defaultdict(list)
-        for paper in ranked:
-            by_role[paper.paper_role].append(paper)
+        self.last_mmr_scores = {}
         selected: list[RankedPaper] = []
-        selected_ids: set[str] = set()
-        for role in ("survey", "foundational", "evaluation", "frontier", "method"):
-            if by_role[role] and len(selected) < limit:
-                paper = by_role[role][0]
-                selected.append(paper)
-                selected_ids.add(paper.paper_id)
-        for paper in ranked:
-            if len(selected) >= limit:
-                break
-            if paper.paper_id not in selected_ids:
-                selected.append(paper)
-                selected_ids.add(paper.paper_id)
-        selected.sort(key=lambda item: item.final_score, reverse=True)
+        remaining = list(ranked)
+        covered_roles: set[PaperRole] = set()
+        while remaining and len(selected) < limit:
+            scored: list[tuple[float, float, int, RankedPaper]] = []
+            for index, paper in enumerate(remaining):
+                redundancy = max(
+                    (
+                        cosine_similarity(vectors[paper.paper_id], vectors[item.paper_id])
+                        for item in selected
+                    ),
+                    default=0.0,
+                )
+                novelty = 1.0 - redundancy
+                role_bonus = (
+                    self.config.mmr_role_bonus
+                    if paper.paper_role != "other" and paper.paper_role not in covered_roles
+                    else 0.0
+                )
+                mmr_score = (
+                    self.config.mmr_lambda * paper.final_score
+                    + (1.0 - self.config.mmr_lambda) * novelty
+                    + role_bonus
+                )
+                scored.append((mmr_score, paper.final_score, -index, paper))
+            mmr_score, _, _, chosen = max(scored, key=lambda item: item[:3])
+            selected.append(chosen)
+            covered_roles.add(chosen.paper_role)
+            self.last_mmr_scores[chosen.paper_id] = round(mmr_score, 6)
+            remaining.remove(chosen)
         return selected
