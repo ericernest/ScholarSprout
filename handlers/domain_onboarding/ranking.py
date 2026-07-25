@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Protocol
+from urllib.parse import unquote, urlparse
 
 from .config import DomainOnboardingConfig
 from .schemas import DomainResearchPlan, PaperCandidate, PaperRole, RankedPaper
@@ -151,7 +152,46 @@ class WeightedPaperRanker:
         return list(merged.values())
 
     def _is_valid(self, paper: PaperCandidate) -> bool:
-        return bool(paper.paper_id.strip() and paper.title.strip() and paper.url.startswith(("http://", "https://")))
+        if not (
+            paper.paper_id.strip()
+            and paper.title.strip()
+            and paper.url.startswith(("http://", "https://"))
+        ):
+            return False
+        if paper.source == "crossref":
+            return bool(
+                paper.doi
+                and paper.paper_id.lower() == f"doi:{paper.doi}"
+                and self._url_matches_doi(paper.url, paper.doi)
+            )
+        if paper.source == "arxiv":
+            return bool(
+                paper.arxiv_id
+                and paper.paper_id.lower() == f"arxiv:{paper.arxiv_id}"
+                and self._url_matches_arxiv(paper.url, paper.arxiv_id)
+            )
+        excluded_types = {"dataset", "editorial", "lettersandcomments", "news"}
+        normalized_types = {
+            re.sub(r"[^a-z]", "", item.lower()) for item in paper.publication_types
+        }
+        return not bool(normalized_types & excluded_types)
+
+    @staticmethod
+    def _url_matches_doi(url: str, doi: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.hostname not in {"doi.org", "dx.doi.org"}:
+            return False
+        return unquote(parsed.path).lstrip("/").lower() == doi.lower()
+
+    @staticmethod
+    def _url_matches_arxiv(url: str, arxiv_id: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.hostname not in {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}:
+            return False
+        path_id = parsed.path.rstrip("/").split("/")[-1]
+        path_id = re.sub(r"\.pdf$", "", path_id, flags=re.IGNORECASE)
+        path_id = re.sub(r"v\d+$", "", path_id, flags=re.IGNORECASE)
+        return path_id.lower() == arxiv_id.lower()
 
     def _recency_score(self, year: int | None) -> float:
         if year is None:

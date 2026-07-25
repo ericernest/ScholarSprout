@@ -66,6 +66,9 @@ Gateway 默认装配 V1。
 使用进程内 TTL 缓存，arXiv 连续请求默认间隔 3 秒。
 Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅凭返回数量占满候选池；
 进入候选池后仍由相关性、引用、时效和多样性分数决定最终推荐顺序。
+DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
+记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
+type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
 Semantic Scholar 不要求 API Key，但公共配额可能限流。若需要更高配额，可设置：
 
 ```bash

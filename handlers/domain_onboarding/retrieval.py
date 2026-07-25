@@ -133,7 +133,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
                         params={
                             "query": query,
                             "limit": limit_per_query,
-                            "fields": "paperId,title,abstract,year,url,citationCount,authors,externalIds",
+                            "fields": "paperId,title,abstract,year,url,citationCount,authors,externalIds,publicationTypes",
                         },
                     )
                     data = response.json().get("data", [])
@@ -170,6 +170,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
                 matched_queries=[query],
                 doi=external.get("DOI"),
                 arxiv_id=external.get("ArXiv"),
+                publication_types=item.get("publicationTypes") or [],
             )
         except ValidationError:
             return None
@@ -277,6 +278,7 @@ class ArxivRetriever(_ResilientRetriever):
                         matched_queries=[query],
                         doi=doi,
                         arxiv_id=arxiv_id,
+                        publication_types=["Preprint"],
                     )
                 )
             except ValidationError:
@@ -357,6 +359,19 @@ class CrossrefRetriever(_ResilientRetriever):
             return results
 
     def _parse_work(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
+        work_type = str(item.get("type") or "").strip().lower()
+        if work_type and work_type not in {
+            "journal-article",
+            "proceedings-article",
+            "posted-content",
+            "book-chapter",
+            "book-section",
+            "dissertation",
+            "report",
+            "report-component",
+            "monograph",
+        }:
+            return None
         doi = str(item.get("DOI") or "").strip()
         titles = item.get("title") or []
         title = str(titles[0] if titles else "").strip()
@@ -384,6 +399,7 @@ class CrossrefRetriever(_ResilientRetriever):
                 source="crossref",
                 matched_queries=[query],
                 doi=doi,
+                publication_types=[work_type] if work_type else [],
             )
         except ValidationError:
             return None
