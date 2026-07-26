@@ -11,6 +11,7 @@ from .evidence import ClaimEvidenceValidator
 from .schemas import (
     ContentQuality,
     DomainOnboardingOutput,
+    QualityGateResult,
     QualityIssue,
     RankedPaper,
 )
@@ -65,10 +66,9 @@ class CompositeQualityEvaluator:
             "learning_path": self.evaluate_learning_path_quality(output, issues),
             "goal_alignment": self.evaluate_goal_alignment(output, issues),
         }
-        hard_issue_types = {"structure_error", "invalid_paper", "format_error"}
-        passed_hard_gates = not evidence.hard_failure and not any(
-            issue.severity in {"error", "critical"} and issue.issue_type in hard_issue_types
-            for issue in issues
+        hard_gates = self._hard_gate_results(issues)
+        passed_hard_gates = not evidence.hard_failure and all(
+            gate.status == "passed" for gate in hard_gates
         )
         score = sum(dimensions[name] * weight for name, weight in self.dimension_weights.items())
         return ContentQuality(
@@ -77,7 +77,31 @@ class CompositeQualityEvaluator:
             passed_hard_gates=passed_hard_gates,
             dimensions={key: round(value, 6) for key, value in dimensions.items()},
             issues=issues,
+            hard_gates=hard_gates,
         )
+
+    @staticmethod
+    def _hard_gate_results(issues: list[QualityIssue]) -> list[QualityGateResult]:
+        groups = {
+            "required_structure": {"structure"},
+            "paper_identity": {"paper_validity"},
+            "evidence_support": {"evidence_grounding"},
+        }
+        results = []
+        for gate, dimensions in groups.items():
+            issue_ids = [
+                str(issue.issue_id)
+                for issue in issues
+                if issue.hard_gate and issue.dimension in dimensions
+            ]
+            results.append(
+                QualityGateResult(
+                    gate=gate,
+                    status="failed" if issue_ids else "passed",
+                    issue_ids=issue_ids,
+                )
+            )
+        return results
 
     def evaluate_structure_quality(
         self,

@@ -223,6 +223,8 @@ class PipelineTests(unittest.TestCase):
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
         self.assertEqual(result.status, "ok")
         self.assertIsNotNone(result.output)
+        self.assertEqual(len(result.quality_attempts), 1)
+        self.assertEqual(result.quality_attempts[0].source, "initial")
         self.assertGreater(trace.retrieved_paper_count, 0)
         self.assertGreater(trace.selected_paper_count, 0)
         self.assertGreater(trace.supplemental_query_count, 0)
@@ -278,6 +280,15 @@ class PipelineTests(unittest.TestCase):
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
         self.assertEqual(result.quality.retry_status, "improved")
         self.assertEqual(result.quality.selected_attempt, 2)
+        self.assertEqual(len(result.quality_attempts), 2)
+        self.assertEqual(
+            [attempt.source for attempt in result.quality_attempts],
+            ["initial", "llm_repair"],
+        )
+        self.assertLess(
+            result.quality_attempts[0].quality.score,
+            result.quality_attempts[1].quality.score,
+        )
         self.assertGreater(trace.quality_delta, 0.05)
         self.assertEqual(trace.repair_reason, "llm_targeted_repair")
         self.assertEqual(pipeline.retriever.calls, 2)
@@ -293,6 +304,36 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "quality_failed")
         self.assertEqual(result.quality.retry_status, "not_improved")
         self.assertEqual(result.quality.selected_attempt, 1)
+        self.assertEqual(len(result.quality_attempts), 2)
+        self.assertEqual(result.quality_attempts[0].quality.score, result.quality.score)
+
+    def test_cancelled_repair_preserves_completed_quality_history(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["development_stages"] = low["development_stages"][:1]
+        pipeline = make_pipeline([low, low])
+        context = PipelineExecutionContext(timeout_seconds=30)
+        original_repairer = pipeline.repairer
+
+        class CancellingRepairer:
+            def repair(self, *args, **kwargs):
+                result = original_repairer.repair(*args, **kwargs)
+                context.cancel()
+                return result
+
+        pipeline.repairer = CancellingRepairer()
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+            context,
+        )
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(len(result.quality_attempts), 1)
+        self.assertEqual(result.quality_attempts[0].source, "initial")
+        self.assertIsNotNone(result.quality)
 
     def test_soft_quality_shortfall_returns_warning_instead_of_ok(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
@@ -418,6 +459,8 @@ class HandlerAndMetricsTests(unittest.TestCase):
         response = handle_domain_onboarding_message(message, app_state)
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["learner_profile"]["preference"], "experiment_first")
+        self.assertEqual(len(response["quality_attempts"]), 1)
+        self.assertEqual(response["quality_attempts"][0]["source"], "initial")
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot["requests_total"], 1)
         self.assertEqual(snapshot["papers"]["selected_paper_count"], len(response["papers"]))
