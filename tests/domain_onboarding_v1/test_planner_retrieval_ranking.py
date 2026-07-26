@@ -13,7 +13,7 @@ from handlers.domain_onboarding.retrieval import (
     PaperRetrievalError,
     SemanticScholarRetriever,
 )
-from handlers.domain_onboarding.schemas import PaperCandidate
+from handlers.domain_onboarding.schemas import PaperCandidate, RetrievalResult, RetrievalStats
 
 from .fakes import FakeJSONModel, make_candidates, make_plan, make_profile
 
@@ -39,18 +39,20 @@ class PlannerTests(unittest.TestCase):
             ]
         )
         planner = StormLitePlanner(model, DomainOnboardingConfig())
-        plan = planner.plan("RAG", make_profile())
+        result = planner.plan("RAG", make_profile())
+        plan = result.plan
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(len(plan.perspectives), 3)
         self.assertIn("survey", plan.search_queries[0])
 
     def test_invalid_model_output_falls_back_without_fabricating_papers(self) -> None:
         planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
-        plan = planner.plan("图神经网络", make_profile())
+        result = planner.plan("图神经网络", make_profile())
+        plan = result.plan
         self.assertGreaterEqual(len(plan.perspectives), 3)
         self.assertTrue(any("graph neural networks" in query for query in plan.search_queries))
-        self.assertEqual(planner.last_stats.model_calls, 1)
-        self.assertEqual(planner.last_stats.total_tokens, 50)
+        self.assertEqual(result.stats.model_calls, 1)
+        self.assertEqual(result.stats.total_tokens, 50)
 
 
 class FakeResponse:
@@ -105,7 +107,7 @@ class RetrievalTests(unittest.TestCase):
                 )
             ]
         )
-        papers = CrossrefRetriever(client=client).search(["RAG"], limit_per_query=2)
+        papers = CrossrefRetriever(client=client).search(["RAG"], limit_per_query=2).papers
         self.assertEqual(papers[0].paper_id, "doi:10.1000/rag")
         self.assertEqual(papers[0].authors, ["Ada Lovelace"])
         self.assertEqual(papers[0].year, 2025)
@@ -137,7 +139,7 @@ class RetrievalTests(unittest.TestCase):
             ]
         )
 
-        papers = CrossrefRetriever(client=client).search(["RAG"], limit_per_query=2)
+        papers = CrossrefRetriever(client=client).search(["RAG"], limit_per_query=2).papers
 
         self.assertEqual([paper.paper_id for paper in papers], ["doi:10.1000/paper"])
 
@@ -154,7 +156,7 @@ class RetrievalTests(unittest.TestCase):
           </entry>
         </feed>"""
         retriever = ArxivRetriever(client=FakeHTTPClient([FakeResponse({}, text=feed)]))
-        papers = retriever.search(["RAG"], limit_per_query=2)
+        papers = retriever.search(["RAG"], limit_per_query=2).papers
         self.assertEqual(papers[0].paper_id, "arxiv:2401.00001")
         self.assertEqual(papers[0].year, 2024)
         self.assertEqual(papers[0].authors, ["Ada Lovelace"])
@@ -182,7 +184,7 @@ class RetrievalTests(unittest.TestCase):
             ]
         )
         retriever = SemanticScholarRetriever(client=client)
-        papers = retriever.search(["query"], limit_per_query=5)
+        papers = retriever.search(["query"], limit_per_query=5).papers
         self.assertEqual(papers[0].paper_id, "abc")
         self.assertEqual(papers[0].matched_queries, ["query"])
         self.assertEqual(papers[0].publication_types, ["JournalArticle"])
@@ -198,9 +200,9 @@ class RetrievalTests(unittest.TestCase):
             ]
         )
         retriever = SemanticScholarRetriever(client=client)
-        papers = retriever.search(["bad", "good"], limit_per_query=2)
-        self.assertEqual([paper.paper_id for paper in papers], ["ok"])
-        self.assertEqual(len(retriever.last_errors), 1)
+        result = retriever.search(["bad", "good"], limit_per_query=2)
+        self.assertEqual([paper.paper_id for paper in result.papers], ["ok"])
+        self.assertEqual(len(result.stats.errors), 1)
 
     def test_all_query_failures_raise_clear_error(self) -> None:
         import httpx
@@ -213,21 +215,20 @@ class RetrievalTests(unittest.TestCase):
 
     def test_composite_keeps_results_when_one_source_fails(self) -> None:
         class Failing:
-            last_errors = ["rate limited"]
-
-            def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-                raise PaperRetrievalError("failed")
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                raise PaperRetrievalError(
+                    "failed",
+                    stats=RetrievalStats(errors=["rate limited"]),
+                )
 
         class Working:
-            last_errors: list[str] = []
-
-            def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-                return make_candidates(1)
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                return RetrievalResult(papers=make_candidates(1))
 
         retriever = CompositePaperRetriever([Failing(), Working()])
-        papers = retriever.search(["RAG"], limit_per_query=2)
-        self.assertEqual(len(papers), 1)
-        self.assertTrue(retriever.last_errors)
+        result = retriever.search(["RAG"], limit_per_query=2)
+        self.assertEqual(len(result.papers), 1)
+        self.assertTrue(result.stats.errors)
 
 
 class RankingTests(unittest.TestCase):
@@ -237,10 +238,10 @@ class RankingTests(unittest.TestCase):
     def test_deduplicates_by_id_and_title(self) -> None:
         papers = make_candidates(3)
         duplicate = papers[0].model_copy(update={"paper_id": "different-id", "matched_queries": ["second"]})
-        ranked = self.ranker.rank([*papers, duplicate], make_plan(), limit=10)
-        titles = [paper.title for paper in ranked]
+        result = self.ranker.rank([*papers, duplicate], make_plan(), limit=10)
+        titles = [paper.title for paper in result.papers]
         self.assertEqual(titles.count(papers[0].title), 1)
-        self.assertEqual(self.ranker.last_deduplicated_count, 3)
+        self.assertEqual(result.stats.deduplicated_count, 3)
 
     def test_invalid_url_is_filtered(self) -> None:
         invalid = PaperCandidate(
@@ -249,12 +250,12 @@ class RankingTests(unittest.TestCase):
             url="not-a-url",
             source="fake",
         )
-        ranked = self.ranker.rank([invalid, *make_candidates(2)], make_plan(), limit=10)
-        self.assertNotIn("bad", [paper.paper_id for paper in ranked])
-        self.assertEqual(self.ranker.last_invalid_count, 1)
+        result = self.ranker.rank([invalid, *make_candidates(2)], make_plan(), limit=10)
+        self.assertNotIn("bad", [paper.paper_id for paper in result.papers])
+        self.assertEqual(result.stats.invalid_count, 1)
 
     def test_scores_are_bounded_and_explainable(self) -> None:
-        ranked = self.ranker.rank(make_candidates(), make_plan(), limit=6)
+        ranked = self.ranker.rank(make_candidates(), make_plan(), limit=6).papers
         self.assertTrue(ranked)
         for paper in ranked:
             self.assertGreaterEqual(paper.final_score, 0.0)
@@ -277,10 +278,10 @@ class RankingTests(unittest.TestCase):
             for index in range(count)
         ]
 
-        ranker.rank(papers, make_plan(), limit=6)
+        result = ranker.rank(papers, make_plan(), limit=6)
 
         self.assertEqual(
-            ranker.last_candidate_source_counts,
+            result.stats.candidate_source_counts,
             {"source_a": 2, "source_b": 2, "source_c": 2},
         )
 
@@ -316,10 +317,10 @@ class RankingTests(unittest.TestCase):
             ),
         ]
 
-        ranked = self.ranker.rank(papers, make_plan(), limit=3)
+        result = self.ranker.rank(papers, make_plan(), limit=3)
 
-        self.assertEqual([paper.paper_id for paper in ranked], ["valid"])
-        self.assertEqual(self.ranker.last_invalid_count, 3)
+        self.assertEqual([paper.paper_id for paper in result.papers], ["valid"])
+        self.assertEqual(result.stats.invalid_count, 3)
 
     def test_non_paper_semantic_scholar_type_is_filtered(self) -> None:
         paper = PaperCandidate(
@@ -330,8 +331,9 @@ class RankingTests(unittest.TestCase):
             publication_types=["Dataset"],
         )
 
-        self.assertEqual(self.ranker.rank([paper], make_plan(), limit=1), [])
-        self.assertEqual(self.ranker.last_invalid_count, 1)
+        result = self.ranker.rank([paper], make_plan(), limit=1)
+        self.assertEqual(result.papers, [])
+        self.assertEqual(result.stats.invalid_count, 1)
 
 
 if __name__ == "__main__":

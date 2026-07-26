@@ -12,7 +12,7 @@ from handlers.domain_onboarding.retrieval import (
     SemanticScholarRetriever,
 )
 from handlers.domain_onboarding.retrieval_resilience import RetrievalRetryPolicy
-from handlers.domain_onboarding.schemas import PaperCandidate
+from handlers.domain_onboarding.schemas import PaperCandidate, RetrievalResult, RetrievalStats
 
 
 def semantic_scholar_payload(paper_id: str = "paper-1") -> dict:
@@ -51,11 +51,11 @@ class RetrievalRetryTests(unittest.TestCase):
                 cache_ttl_seconds=0,
                 sleep_func=sleeps.append,
             )
-            papers = retriever.search(["RAG"], limit_per_query=2)
+            result = retriever.search(["RAG"], limit_per_query=2)
 
-        self.assertEqual(len(papers), 1)
+        self.assertEqual(len(result.papers), 1)
         self.assertEqual(calls, 2)
-        self.assertEqual(retriever.last_retry_count, 1)
+        self.assertEqual(result.stats.retry_count, 1)
         self.assertEqual(sleeps, [0.25])
 
     def test_does_not_retry_non_retriable_client_error(self) -> None:
@@ -72,11 +72,11 @@ class RetrievalRetryTests(unittest.TestCase):
                 retry_policy=RetrievalRetryPolicy(max_attempts=3, base_backoff_seconds=0),
                 cache_ttl_seconds=0,
             )
-            with self.assertRaises(PaperRetrievalError):
+            with self.assertRaises(PaperRetrievalError) as raised:
                 retriever.search(["bad"], limit_per_query=2)
 
         self.assertEqual(calls, 1)
-        self.assertEqual(retriever.last_retry_count, 0)
+        self.assertEqual(raised.exception.stats.retry_count, 0)
 
     def test_query_cache_avoids_duplicate_external_request(self) -> None:
         calls = 0
@@ -89,12 +89,12 @@ class RetrievalRetryTests(unittest.TestCase):
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             retriever = SemanticScholarRetriever(client=client, cache_ttl_seconds=60)
             first = retriever.search(["RAG"], limit_per_query=2)
-            first[0].title = "caller mutation"
+            first.papers[0].title = "caller mutation"
             second = retriever.search(["RAG"], limit_per_query=2)
 
         self.assertEqual(calls, 1)
-        self.assertEqual(retriever.last_cache_hits, 1)
-        self.assertEqual(second[0].title, "Reliable Retrieval")
+        self.assertEqual(second.stats.cache_hit_count, 1)
+        self.assertEqual(second.papers[0].title, "Reliable Retrieval")
 
     def test_arxiv_enforces_minimum_interval_between_queries(self) -> None:
         now = [0.0]
@@ -119,9 +119,10 @@ class RetrievalRetryTests(unittest.TestCase):
                 sleep_func=fake_sleep,
                 clock=clock,
             )
-            self.assertEqual(retriever.search(["one", "two"], limit_per_query=1), [])
+            result = retriever.search(["one", "two"], limit_per_query=1)
 
-        self.assertEqual(retriever.last_request_count, 2)
+        self.assertEqual(result.papers, [])
+        self.assertEqual(result.stats.request_count, 2)
         self.assertEqual(sleeps, [3.0])
 
 
@@ -132,42 +133,37 @@ class CompositeConcurrencyTests(unittest.TestCase):
         class BarrierRetriever:
             def __init__(self, paper_id: str) -> None:
                 self.paper_id = paper_id
-                self.last_errors: list[str] = []
-                self.last_retry_count = 0
-                self.last_cache_hits = 0
-                self.last_request_count = 1
 
-            def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
                 barrier.wait(timeout=2)
-                return [
-                    PaperCandidate(
+                return RetrievalResult(
+                    papers=[PaperCandidate(
                         paper_id=self.paper_id,
                         title=f"Paper {self.paper_id}",
                         url=f"https://example.org/{self.paper_id}",
                         source=self.paper_id,
-                    )
-                ]
+                    )],
+                    stats=RetrievalStats(request_count=1),
+                )
 
         retriever = CompositePaperRetriever(
             [BarrierRetriever("first"), BarrierRetriever("second")],
             max_workers=2,
         )
-        papers = retriever.search(["query"], limit_per_query=1)
+        result = retriever.search(["query"], limit_per_query=1)
 
-        self.assertEqual([paper.paper_id for paper in papers], ["first", "second"])
-        self.assertEqual(retriever.last_source_success_count, 2)
-        self.assertEqual(retriever.last_source_failure_count, 0)
-        self.assertEqual(retriever.last_request_count, 2)
+        self.assertEqual([paper.paper_id for paper in result.papers], ["first", "second"])
+        self.assertEqual(result.stats.source_success_count, 2)
+        self.assertEqual(result.stats.source_failure_count, 0)
+        self.assertEqual(result.stats.request_count, 2)
 
     def test_sources_are_interleaved_instead_of_concatenated(self) -> None:
         class BatchRetriever:
             def __init__(self, source: str, count: int) -> None:
                 self.source = source
                 self.count = count
-                self.last_errors: list[str] = []
-
-            def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-                return [
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                return RetrievalResult(papers=[
                     PaperCandidate(
                         paper_id=f"{self.source}-{index}",
                         title=f"{self.source} paper {index}",
@@ -175,12 +171,12 @@ class CompositeConcurrencyTests(unittest.TestCase):
                         source=self.source,
                     )
                     for index in range(self.count)
-                ]
+                ])
 
         retriever = CompositePaperRetriever(
             [BatchRetriever("semantic", 3), BatchRetriever("arxiv", 2)],
         )
-        papers = retriever.search(["query"], limit_per_query=3)
+        papers = retriever.search(["query"], limit_per_query=3).papers
 
         self.assertEqual(
             [paper.paper_id for paper in papers],

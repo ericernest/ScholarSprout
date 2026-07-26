@@ -14,13 +14,12 @@ from .schemas import (
     LearnerProfile,
     PaperReference,
     RankedPaper,
+    RepairResult,
     SelectedPaper,
 )
 
 
 class OnboardingRepairer(Protocol):
-    last_action: str
-
     def repair(
         self,
         request: DomainOnboardingRequest,
@@ -29,14 +28,13 @@ class OnboardingRepairer(Protocol):
         previous_output: DomainOnboardingOutput,
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
-    ) -> DomainOnboardingOutput: ...
+    ) -> RepairResult: ...
 
 
 class TargetedRepairer:
     def __init__(self, generator: StructuredOnboardingGenerator, config: DomainOnboardingConfig):
         self.generator = generator
         self.config = config
-        self.last_action = "not_needed"
 
     def repair(
         self,
@@ -46,7 +44,7 @@ class TargetedRepairer:
         previous_output: DomainOnboardingOutput,
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
-    ) -> DomainOnboardingOutput:
+    ) -> RepairResult:
         normalized = self._code_repair(previous_output, allowed_papers)
         llm_issue_types = {
             "missing_coverage",
@@ -56,10 +54,9 @@ class TargetedRepairer:
         }
         selected_issues = [issue for issue in quality.issues if issue.issue_type in llm_issue_types]
         if not selected_issues or self.config.max_content_repairs == 0:
-            self.last_action = "code_repair"
-            return normalized
+            return RepairResult(output=normalized, action="code_repair")
         try:
-            repaired = self.generator.repair(
+            generation = self.generator.repair(
                 request,
                 profile,
                 plan,
@@ -67,11 +64,17 @@ class TargetedRepairer:
                 normalized,
                 selected_issues,
             )
-            self.last_action = "llm_targeted_repair"
-            return repaired
-        except GenerationError:
-            self.last_action = "llm_repair_failed"
-            return normalized
+            return RepairResult(
+                output=generation.output,
+                action="llm_targeted_repair",
+                stats=generation.stats,
+            )
+        except GenerationError as error:
+            return RepairResult(
+                output=normalized,
+                action="llm_repair_failed",
+                stats=error.stats,
+            )
 
     def _code_repair(
         self,
@@ -119,3 +122,4 @@ class TargetedRepairer:
             year=paper.year,
             url=paper.url,
         )
+    RepairResult,

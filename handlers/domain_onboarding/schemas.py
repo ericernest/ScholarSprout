@@ -315,3 +315,57 @@ class ModelCallStats(OnboardingModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     usage_reported: bool = False
+
+
+class PlanningResult(OnboardingModel):
+    plan: DomainResearchPlan
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)
+
+
+class RetrievalStats(OnboardingModel):
+    errors: list[str] = Field(default_factory=list)
+    retry_count: int = 0
+    cache_hit_count: int = 0
+    request_count: int = 0
+    source_success_count: int = 0
+    source_failure_count: int = 0
+
+    def add(self, other: "RetrievalStats") -> None:
+        self.errors.extend(other.errors)
+        self.retry_count += other.retry_count
+        self.cache_hit_count += other.cache_hit_count
+        self.request_count += other.request_count
+        self.source_success_count += other.source_success_count
+        self.source_failure_count += other.source_failure_count
+
+
+class RetrievalResult(OnboardingModel):
+    papers: list[PaperCandidate] = Field(default_factory=list)
+    stats: RetrievalStats = Field(default_factory=RetrievalStats)
+
+
+class RankingStats(OnboardingModel):
+    deduplicated_count: int = 0
+    invalid_count: int = 0
+    candidate_source_counts: dict[str, int] = Field(default_factory=dict)
+    mmr_scores: dict[str, float] = Field(default_factory=dict)
+
+
+class RankingResult(OnboardingModel):
+    papers: list[RankedPaper] = Field(default_factory=list)
+    stats: RankingStats = Field(default_factory=RankingStats)
+
+
+class GenerationResult(OnboardingModel):
+    output: DomainOnboardingOutput
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)
+
+
+class RepairResult(OnboardingModel):
+    output: DomainOnboardingOutput
+    action: Literal[
+        "code_repair",
+        "llm_targeted_repair",
+        "llm_repair_failed",
+    ]
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)

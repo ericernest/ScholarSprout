@@ -64,10 +64,13 @@ class MMRRankingTests(unittest.TestCase):
             )
         ]
 
-        ranked = ranker.rank(papers, make_plan(), limit=2)
+        result = ranker.rank(papers, make_plan(), limit=2)
 
-        self.assertEqual([paper.paper_id for paper in ranked], ["primary", "evaluation"])
-        self.assertEqual(set(ranker.last_mmr_scores), {"primary", "evaluation"})
+        self.assertEqual(
+            [paper.paper_id for paper in result.papers],
+            ["primary", "evaluation"],
+        )
+        self.assertEqual(set(result.stats.mmr_scores), {"primary", "evaluation"})
 
     def test_diversity_scores_do_not_depend_on_input_order(self) -> None:
         papers = [
@@ -88,10 +91,13 @@ class MMRRankingTests(unittest.TestCase):
         ]
         ranker = WeightedPaperRanker(DomainOnboardingConfig(selected_paper_limit=3))
 
-        forward = {paper.paper_id: paper.diversity_score for paper in ranker.rank(papers, make_plan(), limit=3)}
+        forward = {
+            paper.paper_id: paper.diversity_score
+            for paper in ranker.rank(papers, make_plan(), limit=3).papers
+        }
         reverse = {
             paper.paper_id: paper.diversity_score
-            for paper in ranker.rank(list(reversed(papers)), make_plan(), limit=3)
+            for paper in ranker.rank(list(reversed(papers)), make_plan(), limit=3).papers
         }
 
         self.assertEqual(forward, reverse)

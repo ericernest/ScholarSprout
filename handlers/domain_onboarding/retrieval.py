@@ -14,19 +14,17 @@ import httpx
 from pydantic import ValidationError
 
 from .retrieval_resilience import ResilientHTTPClient, RetrievalRetryPolicy, TTLQueryCache
-from .schemas import PaperCandidate
+from .schemas import PaperCandidate, RetrievalResult, RetrievalStats
 
 
 class PaperRetrievalError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, stats: RetrievalStats | None = None):
+        super().__init__(message)
+        self.stats = stats or RetrievalStats(errors=[message])
 
 
 class PaperRetriever(Protocol):
-    last_errors: list[str]
-    last_retry_count: int
-    last_cache_hits: int
-
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]: ...
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult: ...
 
 
 class _ResilientRetriever:
@@ -54,16 +52,8 @@ class _ResilientRetriever:
             max_entries=cache_max_entries,
             clock=clock,
         )
-        self.last_errors: list[str] = []
-        self.last_retry_count = 0
-        self.last_cache_hits = 0
-        self.last_request_count = 0
 
     def _begin_search(self) -> None:
-        self.last_errors = []
-        self.last_retry_count = 0
-        self.last_cache_hits = 0
-        self.last_request_count = 0
         self._http.reset_stats()
 
     @staticmethod
@@ -71,17 +61,18 @@ class _ResilientRetriever:
         return f"{limit_per_query}\0{query.strip()}"
 
     def _cached(self, query: str, limit_per_query: int) -> list[PaperCandidate] | None:
-        cached = self._cache.get(self._cache_key(query, limit_per_query))
-        if cached is not None:
-            self.last_cache_hits += 1
-        return cached
+        return self._cache.get(self._cache_key(query, limit_per_query))
 
     def _store(self, query: str, limit_per_query: int, papers: list[PaperCandidate]) -> None:
         self._cache.set(self._cache_key(query, limit_per_query), papers)
 
-    def _finish_search(self) -> None:
-        self.last_retry_count = self._http.retry_count
-        self.last_request_count = self._http.request_count
+    def _finish_search(self, *, errors: list[str], cache_hits: int) -> RetrievalStats:
+        return RetrievalStats(
+            errors=errors,
+            retry_count=self._http.retry_count,
+            cache_hit_count=cache_hits,
+            request_count=self._http.request_count,
+        )
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -117,13 +108,16 @@ class SemanticScholarRetriever(_ResilientRetriever):
             clock=clock,
         )
 
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         with self._search_lock:
             self._begin_search()
             results: list[PaperCandidate] = []
+            errors: list[str] = []
+            cache_hits = 0
             for query in queries:
                 cached = self._cached(query, limit_per_query)
                 if cached is not None:
+                    cache_hits += 1
                     results.extend(cached)
                     continue
                 query_results: list[PaperCandidate] = []
@@ -144,11 +138,11 @@ class SemanticScholarRetriever(_ResilientRetriever):
                     self._store(query, limit_per_query, query_results)
                     results.extend(query_results)
                 except (httpx.HTTPError, ValueError, TypeError) as error:
-                    self.last_errors.append(f"{query}: {error}")
-            self._finish_search()
-            if not results and self.last_errors:
-                raise PaperRetrievalError("all paper queries failed")
-            return results
+                    errors.append(f"{query}: {error}")
+            stats = self._finish_search(errors=errors, cache_hits=cache_hits)
+            if not results and errors:
+                raise PaperRetrievalError("all paper queries failed", stats=stats)
+            return RetrievalResult(papers=results, stats=stats)
 
     def _parse_paper(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
         external = item.get("externalIds") or {}
@@ -213,13 +207,16 @@ class ArxivRetriever(_ResilientRetriever):
             clock=clock,
         )
 
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         with self._search_lock:
             self._begin_search()
             results: list[PaperCandidate] = []
+            errors: list[str] = []
+            cache_hits = 0
             for query in queries:
                 cached = self._cached(query, limit_per_query)
                 if cached is not None:
+                    cache_hits += 1
                     results.extend(cached)
                     continue
                 try:
@@ -237,11 +234,11 @@ class ArxivRetriever(_ResilientRetriever):
                     self._store(query, limit_per_query, query_results)
                     results.extend(query_results)
                 except (httpx.HTTPError, ET.ParseError, ValueError, TypeError) as error:
-                    self.last_errors.append(f"{query}: {error}")
-            self._finish_search()
-            if not results and self.last_errors:
-                raise PaperRetrievalError("all arXiv queries failed")
-            return results
+                    errors.append(f"{query}: {error}")
+            stats = self._finish_search(errors=errors, cache_hits=cache_hits)
+            if not results and errors:
+                raise PaperRetrievalError("all arXiv queries failed", stats=stats)
+            return RetrievalResult(papers=results, stats=stats)
 
     def _parse_feed(self, xml_text: str, query: str) -> list[PaperCandidate]:
         root = ET.fromstring(xml_text)
@@ -326,13 +323,16 @@ class CrossrefRetriever(_ResilientRetriever):
             clock=clock,
         )
 
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         with self._search_lock:
             self._begin_search()
             results: list[PaperCandidate] = []
+            errors: list[str] = []
+            cache_hits = 0
             for query in queries:
                 cached = self._cached(query, limit_per_query)
                 if cached is not None:
+                    cache_hits += 1
                     results.extend(cached)
                     continue
                 params: dict[str, Any] = {
@@ -352,11 +352,11 @@ class CrossrefRetriever(_ResilientRetriever):
                     self._store(query, limit_per_query, query_results)
                     results.extend(query_results)
                 except (httpx.HTTPError, ValueError, TypeError) as error:
-                    self.last_errors.append(f"{query}: {error}")
-            self._finish_search()
-            if not results and self.last_errors:
-                raise PaperRetrievalError("all Crossref queries failed")
-            return results
+                    errors.append(f"{query}: {error}")
+            stats = self._finish_search(errors=errors, cache_hits=cache_hits)
+            if not results and errors:
+                raise PaperRetrievalError("all Crossref queries failed", stats=stats)
+            return RetrievalResult(papers=results, stats=stats)
 
     def _parse_work(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
         work_type = str(item.get("type") or "").strip().lower()
@@ -419,21 +419,9 @@ class CompositePaperRetriever:
         self.max_workers = max_workers or len(retrievers)
         if self.max_workers < 1:
             raise ValueError("max_workers must be positive")
-        self.last_errors: list[str] = []
-        self.last_retry_count = 0
-        self.last_cache_hits = 0
-        self.last_request_count = 0
-        self.last_source_success_count = 0
-        self.last_source_failure_count = 0
-
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[PaperCandidate]:
-        self.last_errors = []
-        self.last_retry_count = 0
-        self.last_cache_hits = 0
-        self.last_request_count = 0
-        self.last_source_success_count = 0
-        self.last_source_failure_count = 0
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         source_batches: list[list[PaperCandidate]] = []
+        combined_stats = RetrievalStats()
         workers = min(self.max_workers, len(self.retrievers))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="paper-retrieval") as executor:
             futures = [
@@ -443,25 +431,32 @@ class CompositePaperRetriever:
             for retriever, future in zip(self.retrievers, futures, strict=True):
                 source_name = type(retriever).__name__
                 try:
-                    source_results = future.result()
+                    source_result = future.result()
                 except Exception as error:
-                    self.last_source_failure_count += 1
-                    self.last_errors.append(f"{source_name}: {error}")
+                    combined_stats.source_failure_count += 1
+                    combined_stats.errors.append(f"{source_name}: {error}")
+                    if isinstance(error, PaperRetrievalError):
+                        provider_stats = error.stats.model_copy(deep=True)
+                        provider_stats.errors = [
+                            f"{source_name}: {message}" for message in provider_stats.errors
+                        ]
+                        combined_stats.add(provider_stats)
                     source_batches.append([])
                 else:
-                    self.last_source_success_count += 1
-                    source_batches.append(source_results)
-                self.last_errors.extend(
-                    f"{source_name}: {message}"
-                    for message in getattr(retriever, "last_errors", [])
-                )
-                self.last_retry_count += int(getattr(retriever, "last_retry_count", 0))
-                self.last_cache_hits += int(getattr(retriever, "last_cache_hits", 0))
-                self.last_request_count += int(getattr(retriever, "last_request_count", 0))
+                    combined_stats.source_success_count += 1
+                    source_batches.append(source_result.papers)
+                    provider_stats = source_result.stats.model_copy(deep=True)
+                    provider_stats.errors = [
+                        f"{source_name}: {message}" for message in provider_stats.errors
+                    ]
+                    combined_stats.add(provider_stats)
         results = self._interleave_sources(source_batches)
         if not results:
-            raise PaperRetrievalError("all configured paper data sources failed")
-        return results
+            raise PaperRetrievalError(
+                "all configured paper data sources failed",
+                stats=combined_stats,
+            )
+        return RetrievalResult(papers=results, stats=combined_stats)
 
     @staticmethod
     def _interleave_sources(

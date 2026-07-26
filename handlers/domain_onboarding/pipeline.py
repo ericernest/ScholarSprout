@@ -24,7 +24,13 @@ from .retrieval import (
     SemanticScholarRetriever,
 )
 from .retrieval_resilience import RetrievalRetryPolicy
-from .schemas import ContentQuality, DomainOnboardingRequest, ModelCallStats, PipelineResult
+from .schemas import (
+    ContentQuality,
+    DomainOnboardingRequest,
+    ModelCallStats,
+    PipelineResult,
+    RetrievalStats,
+)
 
 
 class DomainOnboardingPipeline:
@@ -54,40 +60,41 @@ class DomainOnboardingPipeline:
         request: DomainOnboardingRequest,
         trace: DomainOnboardingRequestTrace,
     ) -> PipelineResult:
-        self._reset_model_stats()
         try:
             profile, trace.profile_duration_ms = self._timed(self.profile_builder.build, request)
             planning_started = perf_counter()
             try:
-                plan = self.planner.plan(request.query, profile)
+                planning_result = self.planner.plan(request.query, profile)
             except Exception as error:
                 trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
-                self._record_planning_model_stats(trace)
                 return PipelineResult(status="planning_failed", query=request.query, error=str(error))
             trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
-            self._record_planning_model_stats(trace)
+            plan = planning_result.plan
+            self._record_planning_model_stats(trace, planning_result.stats)
             trace.search_query_count = len(plan.search_queries)
 
             try:
-                candidates, trace.retrieval_duration_ms = self._timed(
+                retrieval_result, trace.retrieval_duration_ms = self._timed(
                     self.retriever.search,
                     plan.search_queries,
                     limit_per_query=self.config.papers_per_query,
                 )
             except PaperRetrievalError as error:
-                self._record_retrieval_stats(trace)
+                self._record_retrieval_stats(trace, error.stats)
                 return PipelineResult(status="retrieval_failed", query=request.query, error=str(error))
 
+            candidates = retrieval_result.papers
             trace.retrieved_paper_count = len(candidates)
-            self._record_retrieval_stats(trace)
-            ranked, trace.ranking_duration_ms = self._timed(
+            self._record_retrieval_stats(trace, retrieval_result.stats)
+            ranking_result, trace.ranking_duration_ms = self._timed(
                 self.ranker.rank,
                 candidates,
                 plan,
                 limit=self.config.selected_paper_limit,
             )
-            trace.deduplicated_paper_count = getattr(self.ranker, "last_deduplicated_count", len(candidates))
-            trace.invalid_paper_count = getattr(self.ranker, "last_invalid_count", 0)
+            ranked = ranking_result.papers
+            trace.deduplicated_paper_count = ranking_result.stats.deduplicated_count
+            trace.invalid_paper_count = ranking_result.stats.invalid_count
             trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
             trace.selected_paper_count = len(ranked)
             if not ranked:
@@ -99,15 +106,17 @@ class DomainOnboardingPipeline:
 
             generation_started = perf_counter()
             try:
-                output = self.generator.generate(request, profile, plan, ranked)
+                generation_result = self.generator.generate(request, profile, plan, ranked)
+                output = generation_result.output
             except GenerationError as error:
+                self._record_generation_model_stats(trace, error.stats)
                 return PipelineResult(status="generation_failed", query=request.query, error=str(error))
             finally:
                 trace.generation_duration_ms = round(
                     (perf_counter() - generation_started) * 1000,
                     3,
                 )
-                self._record_generation_model_stats(trace)
+            self._record_generation_model_stats(trace, generation_result.stats)
 
             first_quality, trace.evaluation_duration_ms = self._timed(
                 self.evaluator.evaluate, output, ranked
@@ -124,7 +133,7 @@ class DomainOnboardingPipeline:
             ):
                 ranked = self._supplement_papers(plan, candidates, ranked, trace)
 
-            repaired, trace.repair_duration_ms = self._timed(
+            repair_result, trace.repair_duration_ms = self._timed(
                 self.repairer.repair,
                 request,
                 profile,
@@ -133,8 +142,9 @@ class DomainOnboardingPipeline:
                 first_quality,
                 ranked,
             )
-            trace.repair_reason = getattr(self.repairer, "last_action", "unknown")
-            self._record_retry_model_stats(trace)
+            repaired = repair_result.output
+            trace.repair_reason = repair_result.action
+            self._record_retry_model_stats(trace, repair_result.stats)
             retry_quality, extra_eval_ms = self._timed(self.evaluator.evaluate, repaired, ranked)
             trace.evaluation_duration_ms += extra_eval_ms
 
@@ -178,27 +188,29 @@ class DomainOnboardingPipeline:
         if not queries:
             return ranked
         try:
-            extra, duration = self._timed(
+            retrieval_result, duration = self._timed(
                 self.retriever.search,
                 queries,
                 limit_per_query=self.config.papers_per_query,
             )
-        except PaperRetrievalError:
-            self._record_retrieval_stats(trace, accumulate=True)
+        except PaperRetrievalError as error:
+            self._record_retrieval_stats(trace, error.stats, accumulate=True)
             return ranked
+        extra = retrieval_result.papers
         trace.retrieval_duration_ms += duration
-        self._record_retrieval_stats(trace, accumulate=True)
+        self._record_retrieval_stats(trace, retrieval_result.stats, accumulate=True)
         trace.search_query_count += len(queries)
         trace.retrieved_paper_count += len(extra)
-        reranked, duration = self._timed(
+        ranking_result, duration = self._timed(
             self.ranker.rank,
             [*candidates, *extra],
             plan,
             limit=self.config.selected_paper_limit,
         )
         trace.ranking_duration_ms += duration
-        trace.deduplicated_paper_count = getattr(self.ranker, "last_deduplicated_count", len(candidates) + len(extra))
-        trace.invalid_paper_count = getattr(self.ranker, "last_invalid_count", 0)
+        reranked = ranking_result.papers
+        trace.deduplicated_paper_count = ranking_result.stats.deduplicated_count
+        trace.invalid_paper_count = ranking_result.stats.invalid_count
         trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
         trace.selected_paper_count = len(reranked)
         return reranked or ranked
@@ -232,34 +244,35 @@ class DomainOnboardingPipeline:
             reported=stats.usage_reported,
         )
 
-    def _reset_model_stats(self) -> None:
-        for component in (self.planner, self.generator):
-            if hasattr(component, "last_stats"):
-                try:
-                    component.last_stats = ModelCallStats()
-                except (AttributeError, TypeError):
-                    continue
-
-    def _record_planning_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
-        planning = getattr(self.planner, "last_stats", ModelCallStats())
+    def _record_planning_model_stats(
+        self,
+        trace: DomainOnboardingRequestTrace,
+        planning: ModelCallStats,
+    ) -> None:
         trace.first_model_calls += planning.model_calls
         trace.first_usage = self._usage_from_stats(planning)
         trace.first_call_duration_ms += planning.duration_ms
         if planning.model_calls and not planning.usage_reported:
             trace.first_unreported_usage_calls += planning.model_calls
 
-    def _record_generation_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
-        generation = getattr(self.generator, "last_stats", ModelCallStats())
+    def _record_generation_model_stats(
+        self,
+        trace: DomainOnboardingRequestTrace,
+        generation: ModelCallStats,
+    ) -> None:
         trace.first_model_calls += generation.model_calls
         trace.first_usage.add(self._usage_from_stats(generation))
         trace.first_call_duration_ms += generation.duration_ms
         if generation.model_calls and not generation.usage_reported:
             trace.first_unreported_usage_calls += generation.model_calls
 
-    def _record_retry_model_stats(self, trace: DomainOnboardingRequestTrace) -> None:
+    def _record_retry_model_stats(
+        self,
+        trace: DomainOnboardingRequestTrace,
+        stats: ModelCallStats,
+    ) -> None:
         if trace.repair_reason not in {"llm_targeted_repair", "llm_repair_failed"}:
             return
-        stats = getattr(self.generator, "last_stats", ModelCallStats())
         trace.retry_model_calls = stats.model_calls
         trace.retry_usage = self._usage_from_stats(stats)
         trace.retry_call_duration_ms = stats.duration_ms
@@ -274,20 +287,17 @@ class DomainOnboardingPipeline:
     def _record_retrieval_stats(
         self,
         trace: DomainOnboardingRequestTrace,
+        stats: RetrievalStats,
         *,
         accumulate: bool = False,
     ) -> None:
         values = {
-            "retrieval_error_count": len(getattr(self.retriever, "last_errors", [])),
-            "retrieval_retry_count": int(getattr(self.retriever, "last_retry_count", 0)),
-            "retrieval_cache_hit_count": int(getattr(self.retriever, "last_cache_hits", 0)),
-            "retrieval_request_count": int(getattr(self.retriever, "last_request_count", 0)),
-            "retrieval_source_success_count": int(
-                getattr(self.retriever, "last_source_success_count", 0)
-            ),
-            "retrieval_source_failure_count": int(
-                getattr(self.retriever, "last_source_failure_count", 0)
-            ),
+            "retrieval_error_count": len(stats.errors),
+            "retrieval_retry_count": stats.retry_count,
+            "retrieval_cache_hit_count": stats.cache_hit_count,
+            "retrieval_request_count": stats.request_count,
+            "retrieval_source_success_count": stats.source_success_count,
+            "retrieval_source_failure_count": stats.source_failure_count,
         }
         for field_name, value in values.items():
             if accumulate:
