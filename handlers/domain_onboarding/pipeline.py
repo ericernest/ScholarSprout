@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from time import perf_counter
 from typing import Any
 
 from runtime.agent_runner import TokenUsage
 
 from .config import DomainOnboardingConfig
+from .execution import PipelineExecutionContext, PipelineExecutionHalted
 from .generator import GenerationError, StructuredOnboardingGenerator
 from .metrics import DomainOnboardingRequestTrace
 from .planner import StormLitePlanner
@@ -59,34 +59,56 @@ class DomainOnboardingPipeline:
         self,
         request: DomainOnboardingRequest,
         trace: DomainOnboardingRequestTrace,
+        execution_context: PipelineExecutionContext | None = None,
     ) -> PipelineResult:
+        context = execution_context or PipelineExecutionContext(
+            timeout_seconds=self.config.request_timeout_seconds
+        )
+        partial_output = None
+        partial_quality = None
         try:
-            profile, trace.profile_duration_ms = self._timed(self.profile_builder.build, request)
-            planning_started = perf_counter()
+            profile, trace.profile_duration_ms = context.call(
+                "profile",
+                self.config.profile_timeout_seconds,
+                self.profile_builder.build,
+                request,
+            )
             try:
-                planning_result = self.planner.plan(request.query, profile)
+                planning_result, trace.planning_duration_ms = context.call(
+                    "planning",
+                    self.config.planning_timeout_seconds,
+                    self.planner.plan,
+                    request.query,
+                    profile,
+                )
             except Exception as error:
-                trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
+                if isinstance(error, PipelineExecutionHalted):
+                    raise
+                trace.planning_duration_ms = context.stage_durations_ms.get("planning", 0.0)
                 return PipelineResult(status="planning_failed", query=request.query, error=str(error))
-            trace.planning_duration_ms = round((perf_counter() - planning_started) * 1000, 3)
             plan = planning_result.plan
             self._record_planning_model_stats(trace, planning_result.stats)
             trace.search_query_count = len(plan.search_queries)
 
             try:
-                retrieval_result, trace.retrieval_duration_ms = self._timed(
+                retrieval_result, trace.retrieval_duration_ms = context.call(
+                    "retrieval",
+                    self.config.retrieval_stage_timeout_seconds,
                     self.retriever.search,
                     plan.search_queries,
                     limit_per_query=self.config.papers_per_query,
                 )
             except PaperRetrievalError as error:
+                trace.retrieval_duration_ms = context.stage_durations_ms.get("retrieval", 0.0)
                 self._record_retrieval_stats(trace, error.stats)
                 return PipelineResult(status="retrieval_failed", query=request.query, error=str(error))
 
             candidates = retrieval_result.papers
             trace.retrieved_paper_count = len(candidates)
             self._record_retrieval_stats(trace, retrieval_result.stats)
-            ranking_result, trace.ranking_duration_ms = self._timed(
+            ranking_result, trace.ranking_duration_ms = context.call(
+                "ranking",
+                self.config.ranking_timeout_seconds,
                 self.ranker.rank,
                 candidates,
                 plan,
@@ -104,23 +126,32 @@ class DomainOnboardingPipeline:
                     error="No verified papers were returned by the configured data source.",
                 )
 
-            generation_started = perf_counter()
             try:
-                generation_result = self.generator.generate(request, profile, plan, ranked)
+                generation_result, trace.generation_duration_ms = context.call(
+                    "generation",
+                    self.config.generation_timeout_seconds,
+                    self.generator.generate,
+                    request,
+                    profile,
+                    plan,
+                    ranked,
+                )
                 output = generation_result.output
             except GenerationError as error:
+                trace.generation_duration_ms = context.stage_durations_ms.get("generation", 0.0)
                 self._record_generation_model_stats(trace, error.stats)
                 return PipelineResult(status="generation_failed", query=request.query, error=str(error))
-            finally:
-                trace.generation_duration_ms = round(
-                    (perf_counter() - generation_started) * 1000,
-                    3,
-                )
             self._record_generation_model_stats(trace, generation_result.stats)
+            partial_output = output
 
-            first_quality, trace.evaluation_duration_ms = self._timed(
-                self.evaluator.evaluate, output, ranked
+            first_quality, trace.evaluation_duration_ms = context.call(
+                "evaluation",
+                self.config.evaluation_timeout_seconds,
+                self.evaluator.evaluate,
+                output,
+                ranked,
             )
+            partial_quality = first_quality
             self._record_first(trace, first_quality)
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
                 trace.final_score = first_quality.score
@@ -131,9 +162,13 @@ class DomainOnboardingPipeline:
                 any(issue.issue_type == "missing_coverage" for issue in first_quality.issues)
                 and len(ranked) < self.config.selected_paper_limit
             ):
-                ranked = self._supplement_papers(plan, candidates, ranked, trace)
+                ranked = self._supplement_papers(
+                    plan, candidates, ranked, trace, context
+                )
 
-            repair_result, trace.repair_duration_ms = self._timed(
+            repair_result, trace.repair_duration_ms = context.call(
+                "repair",
+                self.config.repair_timeout_seconds,
                 self.repairer.repair,
                 request,
                 profile,
@@ -145,7 +180,13 @@ class DomainOnboardingPipeline:
             repaired = repair_result.output
             trace.repair_reason = repair_result.action
             self._record_retry_model_stats(trace, repair_result.stats)
-            retry_quality, extra_eval_ms = self._timed(self.evaluator.evaluate, repaired, ranked)
+            retry_quality, extra_eval_ms = context.call(
+                "evaluation",
+                self.config.evaluation_timeout_seconds,
+                self.evaluator.evaluate,
+                repaired,
+                ranked,
+            )
             trace.evaluation_duration_ms += extra_eval_ms
 
             use_retry = (
@@ -172,6 +213,24 @@ class DomainOnboardingPipeline:
                 output=selected_output,
                 quality=selected_quality,
             )
+        except PipelineExecutionHalted as error:
+            trace.interrupted_stage = error.stage
+            trace.deadline_exceeded = error.status == "timeout"
+            trace.cancelled = error.status == "cancelled"
+            duration_field = f"{error.stage}_duration_ms"
+            if hasattr(trace, duration_field) and error.duration_ms > 0:
+                setattr(
+                    trace,
+                    duration_field,
+                    float(getattr(trace, duration_field)) + error.duration_ms,
+                )
+            return PipelineResult(
+                status=error.status,
+                query=request.query,
+                output=partial_output,
+                quality=partial_quality,
+                error=str(error),
+            )
         except Exception as error:
             return PipelineResult(status="internal_error", query=request.query, error=str(error))
 
@@ -180,7 +239,14 @@ class DomainOnboardingPipeline:
         if callable(close):
             close()
 
-    def _supplement_papers(self, plan: Any, candidates: list[Any], ranked: list[Any], trace: DomainOnboardingRequestTrace) -> list[Any]:
+    def _supplement_papers(
+        self,
+        plan: Any,
+        candidates: list[Any],
+        ranked: list[Any],
+        trace: DomainOnboardingRequestTrace,
+        context: PipelineExecutionContext,
+    ) -> list[Any]:
         queries = [
             f'"{plan.normalized_domain}" "{subdirection}" survey method evaluation'
             for subdirection in plan.expected_subdirections
@@ -188,12 +254,15 @@ class DomainOnboardingPipeline:
         if not queries:
             return ranked
         try:
-            retrieval_result, duration = self._timed(
+            retrieval_result, duration = context.call(
+                "retrieval",
+                self.config.retrieval_stage_timeout_seconds,
                 self.retriever.search,
                 queries,
                 limit_per_query=self.config.papers_per_query,
             )
         except PaperRetrievalError as error:
+            trace.retrieval_duration_ms = context.stage_durations_ms.get("retrieval", 0.0)
             self._record_retrieval_stats(trace, error.stats, accumulate=True)
             return ranked
         extra = retrieval_result.papers
@@ -201,7 +270,9 @@ class DomainOnboardingPipeline:
         self._record_retrieval_stats(trace, retrieval_result.stats, accumulate=True)
         trace.search_query_count += len(queries)
         trace.retrieved_paper_count += len(extra)
-        ranking_result, duration = self._timed(
+        ranking_result, duration = context.call(
+            "ranking",
+            self.config.ranking_timeout_seconds,
             self.ranker.rank,
             [*candidates, *extra],
             plan,
@@ -214,12 +285,6 @@ class DomainOnboardingPipeline:
         trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
         trace.selected_paper_count = len(reranked)
         return reranked or ranked
-
-    @staticmethod
-    def _timed(function: Any, *args: Any, **kwargs: Any) -> tuple[Any, float]:
-        started = perf_counter()
-        result = function(*args, **kwargs)
-        return result, round((perf_counter() - started) * 1000, 3)
 
     @staticmethod
     def _with_retry(quality: ContentQuality, *, selected: int, status: str) -> ContentQuality:

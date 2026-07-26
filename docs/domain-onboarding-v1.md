@@ -122,6 +122,14 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 通过硬门槛但低于阈值时返回 `quality_warning`；未通过硬门槛时返回
 `quality_failed`。后两者仍携带结构化输出和质量问题，便于前端提示和定位修复点。
 
+## Deadline 与取消
+
+Pipeline 默认共享一个请求级 90 秒 deadline，并为画像、规划、检索、排序、生成、
+评估和修复设置独立阶段预算。调用方可以传入 `PipelineExecutionContext`，并通过其
+`cancel()` 方法发出协作式取消信号。超时返回 `timeout`，取消返回 `cancelled`；
+Metrics 会记录中断阶段。第三方阻塞调用仍由各自的原生网络 timeout 负责终止，
+请求级控制保证中断后不会继续进入后续检索、生成或修复阶段。
+
 ## 模型调用指标
 
 Metrics 的 `model_usage` 分别聚合 `primary`、`retry` 和 `total` 调用。即使模型

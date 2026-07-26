@@ -287,6 +287,8 @@ class PipelineResult(OnboardingModel):
         "planning_failed",
         "retrieval_failed",
         "generation_failed",
+        "timeout",
+        "cancelled",
         "internal_error",
     ]
     mode: Literal["domain_onboarding"] = "domain_onboarding"
@@ -305,6 +307,8 @@ class PipelineResult(OnboardingModel):
             query=self.query,
             quality=self.quality.model_dump(mode="json") if self.quality else None,
         )
+        if self.error:
+            payload["error"] = self.error
         return payload
 
 
