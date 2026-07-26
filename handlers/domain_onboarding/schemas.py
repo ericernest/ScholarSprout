@@ -10,6 +10,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Preference = Literal["theory_first", "experiment_first", "balanced"]
 PaperRole = Literal["survey", "foundational", "method", "evaluation", "frontier", "other"]
+QualityDimension = Literal[
+    "structure",
+    "paper_validity",
+    "evidence_grounding",
+    "topic_coverage",
+    "development_coherence",
+    "learning_path",
+    "goal_alignment",
+]
+QualityState = Literal["passed", "warning", "failed"]
+QualityGateStatus = Literal["passed", "failed", "not_evaluated"]
+Repairability = Literal["code", "llm", "retrieval", "manual", "none"]
+QualityAttemptSource = Literal["initial", "code_repair", "llm_repair"]
+RepairActionType = Literal["code", "llm", "retrieval"]
+RepairActionStatus = Literal["planned", "applied", "skipped", "failed"]
+RepairSelection = Literal["initial_selected", "repaired_selected", "initial_retained"]
 QualityIssueType = Literal[
     "structure_error",
     "invalid_paper",
@@ -29,6 +45,36 @@ RetryStatus = Literal[
     "llm_failed",
     "retrieval_failed",
 ]
+
+_ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
+    "structure_error": "structure",
+    "invalid_paper": "paper_validity",
+    "missing_coverage": "topic_coverage",
+    "weak_development_stage": "development_coherence",
+    "route_conflict": "learning_path",
+    "beginner_mismatch": "goal_alignment",
+    "format_error": "structure",
+    "missing_evidence": "evidence_grounding",
+    "unsupported_claim": "evidence_grounding",
+}
+_HARD_GATE_ISSUES = {
+    "structure_error",
+    "invalid_paper",
+    "format_error",
+    "missing_evidence",
+    "unsupported_claim",
+}
+_ISSUE_REPAIRABILITY: dict[str, Repairability] = {
+    "structure_error": "llm",
+    "invalid_paper": "code",
+    "missing_coverage": "retrieval",
+    "weak_development_stage": "llm",
+    "route_conflict": "code",
+    "beginner_mismatch": "llm",
+    "format_error": "code",
+    "missing_evidence": "llm",
+    "unsupported_claim": "llm",
+}
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
 ARXIV_ID_PATTERN = re.compile(
@@ -294,11 +340,39 @@ class DomainOnboardingOutput(OnboardingModel):
 
 
 class QualityIssue(OnboardingModel):
+    issue_id: str | None = None
     issue_type: QualityIssueType
     severity: Literal["warning", "error", "critical"]
+    dimension: QualityDimension | None = None
+    hard_gate: bool | None = None
+    repairability: Repairability | None = None
     target_path: str
     message: str
     recommended_action: str
+
+    @model_validator(mode="after")
+    def enrich_issue(self) -> "QualityIssue":
+        identity = f"{self.issue_type}:{self.target_path}:{self.message}"
+        self.issue_id = self.issue_id or stable_id("issue", identity)
+        self.dimension = self.dimension or _ISSUE_DIMENSIONS[self.issue_type]
+        if self.hard_gate is None:
+            self.hard_gate = (
+                self.issue_type in _HARD_GATE_ISSUES
+                and self.severity in {"error", "critical"}
+            )
+        self.repairability = self.repairability or _ISSUE_REPAIRABILITY[self.issue_type]
+        return self
+
+
+class QualityGateResult(OnboardingModel):
+    gate: str = Field(min_length=1)
+    status: QualityGateStatus
+    issue_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("issue_ids")
+    @classmethod
+    def deduplicate_issue_ids(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value for value in values if value))
 
 
 class ContentQuality(OnboardingModel):
@@ -310,6 +384,51 @@ class ContentQuality(OnboardingModel):
     attempts: int = Field(default=1, ge=1, le=2)
     selected_attempt: int = Field(default=1, ge=1, le=2)
     retry_status: RetryStatus = "not_needed"
+    state: QualityState = "warning"
+    hard_gates: list[QualityGateResult] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def derive_state(self) -> "ContentQuality":
+        if not self.passed_hard_gates:
+            self.state = "failed"
+        elif self.score >= self.threshold:
+            self.state = "passed"
+        else:
+            self.state = "warning"
+        return self
+
+
+class QualityAttempt(OnboardingModel):
+    attempt_number: int = Field(ge=1, le=2)
+    source: QualityAttemptSource
+    quality: ContentQuality
+    duration_ms: float = Field(default=0.0, ge=0.0)
+
+
+class RepairActionRecord(OnboardingModel):
+    action_id: str
+    action_type: RepairActionType
+    status: RepairActionStatus
+    issue_ids: list[str] = Field(default_factory=list)
+    target_paths: list[str] = Field(default_factory=list)
+    changed_paths: list[str] = Field(default_factory=list)
+    before_fingerprint: str | None = None
+    after_fingerprint: str | None = None
+    error: str | None = None
+
+
+class RepairDecision(OnboardingModel):
+    selected_attempt: int = Field(ge=1, le=2)
+    decision: RepairSelection
+    reasons: list[str] = Field(default_factory=list)
+    score_delta: float = 0.0
+    dimension_deltas: dict[str, float] = Field(default_factory=dict)
+
+
+class RepairRecord(OnboardingModel):
+    triggered: bool = False
+    actions: list[RepairActionRecord] = Field(default_factory=list)
+    decision: RepairDecision | None = None
 
 
 class PipelineResult(OnboardingModel):

@@ -7,10 +7,16 @@ from pydantic import ValidationError
 from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.profile import RuleBasedProfileBuilder
 from handlers.domain_onboarding.schemas import (
+    ContentQuality,
     CurrentLandscape,
     DomainOnboardingRequest,
     PaperCandidate,
     Prerequisite,
+    QualityAttempt,
+    QualityIssue,
+    RepairActionRecord,
+    RepairDecision,
+    RepairRecord,
     stable_id,
 )
 
@@ -71,6 +77,100 @@ class ConfigAndSchemaTests(unittest.TestCase):
                 source="test",
                 doi="not-a-doi",
             )
+
+    def test_quality_issue_gets_stable_audit_metadata(self) -> None:
+        values = {
+            "issue_type": "invalid_paper",
+            "severity": "critical",
+            "target_path": "papers[0]",
+            "message": "paper metadata changed",
+            "recommended_action": "restore canonical metadata",
+        }
+        first = QualityIssue(**values)
+        second = QualityIssue(**values)
+
+        self.assertEqual(first.issue_id, second.issue_id)
+        self.assertEqual(first.dimension, "paper_validity")
+        self.assertTrue(first.hard_gate)
+        self.assertEqual(first.repairability, "code")
+
+        evidence_warning = QualityIssue(
+            issue_type="unsupported_claim",
+            severity="warning",
+            target_path="evidence_claims[0]",
+            message="cross-language support is uncertain",
+            recommended_action="review the claim",
+        )
+        evidence_error = QualityIssue(
+            issue_type="unsupported_claim",
+            severity="error",
+            target_path="evidence_claims[0]",
+            message="claim is unsupported",
+            recommended_action="replace the evidence",
+        )
+        self.assertFalse(evidence_warning.hard_gate)
+        self.assertTrue(evidence_error.hard_gate)
+
+    def test_quality_state_is_derived_from_gate_and_threshold(self) -> None:
+        passed = ContentQuality(
+            score=0.8,
+            threshold=0.75,
+            passed_hard_gates=True,
+            dimensions={},
+        )
+        warning = passed.model_copy(update={"score": 0.7})
+        warning = ContentQuality.model_validate(warning.model_dump())
+        failed = ContentQuality(
+            score=0.9,
+            threshold=0.75,
+            passed_hard_gates=False,
+            dimensions={},
+        )
+
+        self.assertEqual(passed.state, "passed")
+        self.assertEqual(warning.state, "warning")
+        self.assertEqual(failed.state, "failed")
+
+    def test_quality_and_repair_audit_contract_round_trip(self) -> None:
+        quality = ContentQuality(
+            score=0.7,
+            threshold=0.75,
+            passed_hard_gates=True,
+            dimensions={"structure": 1.0},
+        )
+        attempt = QualityAttempt(
+            attempt_number=1,
+            source="initial",
+            quality=quality,
+            duration_ms=12.5,
+        )
+        action = RepairActionRecord(
+            action_id="repair-1",
+            action_type="code",
+            status="applied",
+            issue_ids=["issue-1"],
+            target_paths=["learning_path"],
+            changed_paths=["learning_path[0].step"],
+        )
+        record = RepairRecord(
+            triggered=True,
+            actions=[action],
+            decision=RepairDecision(
+                selected_attempt=1,
+                decision="initial_retained",
+                reasons=["improvement_too_small"],
+                score_delta=0.01,
+            ),
+        )
+
+        self.assertEqual(
+            QualityAttempt.model_validate_json(attempt.model_dump_json()),
+            attempt,
+        )
+        self.assertEqual(
+            RepairRecord.model_validate_json(record.model_dump_json()),
+            record,
+        )
 
 
 class ProfileTests(unittest.TestCase):
