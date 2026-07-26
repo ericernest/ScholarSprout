@@ -190,18 +190,18 @@ class DomainOnboardingPipeline:
             )
             self._record_first(trace, first_quality)
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
-                trace.final_score = first_quality.score
-                trace.final_dimensions = dict(first_quality.dimensions)
+                initial_record = RepairRecord(
+                    triggered=False,
+                    decision=self.selection_policy.initial(first_quality),
+                )
+                self._record_final(trace, first_quality, initial_record)
                 return PipelineResult(
                     status="ok",
                     query=request.query,
                     output=output,
                     quality=first_quality,
                     quality_attempts=quality_attempts,
-                    repair_record=RepairRecord(
-                        triggered=False,
-                        decision=self.selection_policy.initial(first_quality),
-                    ),
+                    repair_record=initial_record,
                 )
 
             partial_repair_record = RepairRecord(triggered=True)
@@ -258,8 +258,7 @@ class DomainOnboardingPipeline:
                 trace.retry_status = "not_improved"
                 selected_output = output
                 selected_quality = first_quality
-            trace.final_score = selected_quality.score
-            trace.final_dimensions = dict(selected_quality.dimensions)
+            self._record_final(trace, selected_quality, repair_result.record)
             trace.quality_delta = round(selected_quality.score - float(trace.first_score or 0.0), 6)
             return PipelineResult(
                 status=self._quality_status(selected_quality),
@@ -413,11 +412,48 @@ class DomainOnboardingPipeline:
     def _record_first(trace: DomainOnboardingRequestTrace, quality: ContentQuality) -> None:
         trace.first_score = quality.score
         trace.first_dimensions = dict(quality.dimensions)
+        trace.first_quality_state = quality.state
+        for issue in quality.issues:
+            trace.first_issue_type_counts[issue.issue_type] = (
+                trace.first_issue_type_counts.get(issue.issue_type, 0) + 1
+            )
+        for gate in quality.hard_gates:
+            if gate.status == "failed":
+                trace.hard_gate_failure_counts[gate.gate] = (
+                    trace.hard_gate_failure_counts.get(gate.gate, 0) + 1
+                )
         trace.unsupported_claim_count = sum(
             issue.issue_type == "unsupported_claim" for issue in quality.issues
         )
         trace.missing_evidence_count = sum(
             issue.issue_type == "missing_evidence" for issue in quality.issues
+        )
+
+    @staticmethod
+    def _record_final(
+        trace: DomainOnboardingRequestTrace,
+        quality: ContentQuality,
+        repair_record: RepairRecord,
+    ) -> None:
+        trace.final_score = quality.score
+        trace.final_dimensions = dict(quality.dimensions)
+        trace.final_quality_state = quality.state
+        for action in repair_record.actions:
+            key = f"{action.action_type}:{action.status}"
+            trace.repair_action_status_counts[key] = (
+                trace.repair_action_status_counts.get(key, 0) + 1
+            )
+        if repair_record.decision:
+            trace.repair_selection_reasons = list(repair_record.decision.reasons)
+            trace.repair_dimension_deltas = dict(
+                repair_record.decision.dimension_deltas
+            )
+        trace.repair_changed_path_count = len(
+            {
+                path
+                for action in repair_record.actions
+                for path in action.changed_paths
+            }
         )
 
     @staticmethod
