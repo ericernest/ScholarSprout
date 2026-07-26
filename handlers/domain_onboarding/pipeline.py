@@ -8,6 +8,7 @@ from typing import Any
 from runtime.agent_runner import TokenUsage
 
 from .config import DomainOnboardingConfig
+from .coverage import PaperCoverageAnalyzer
 from .execution import PipelineExecutionContext, PipelineExecutionHalted
 from .generator import GenerationError, StructuredOnboardingGenerator
 from .metrics import DomainOnboardingRequestTrace
@@ -45,6 +46,7 @@ class DomainOnboardingPipeline:
         evaluator: Any,
         repairer: Any,
         config: DomainOnboardingConfig,
+        coverage_analyzer: Any | None = None,
     ) -> None:
         self.profile_builder = profile_builder
         self.planner = planner
@@ -54,6 +56,7 @@ class DomainOnboardingPipeline:
         self.evaluator = evaluator
         self.repairer = repairer
         self.config = config
+        self.coverage_analyzer = coverage_analyzer or PaperCoverageAnalyzer(config)
 
     def run(
         self,
@@ -119,6 +122,19 @@ class DomainOnboardingPipeline:
             trace.invalid_paper_count = ranking_result.stats.invalid_count
             trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
             trace.selected_paper_count = len(ranked)
+            coverage = self.coverage_analyzer.analyze(plan, ranked)
+            trace.initial_coverage_gap_count = len(coverage.gaps)
+            if coverage.gaps:
+                ranked = self._supplement_papers(
+                    plan,
+                    candidates,
+                    ranked,
+                    coverage.gaps,
+                    trace,
+                    context,
+                )
+            final_coverage = self.coverage_analyzer.analyze(plan, ranked)
+            trace.final_coverage_gap_count = len(final_coverage.gaps)
             if not ranked:
                 return PipelineResult(
                     status="retrieval_failed",
@@ -157,14 +173,6 @@ class DomainOnboardingPipeline:
                 trace.final_score = first_quality.score
                 trace.final_dimensions = dict(first_quality.dimensions)
                 return PipelineResult(status="ok", query=request.query, output=output, quality=first_quality)
-
-            if (
-                any(issue.issue_type == "missing_coverage" for issue in first_quality.issues)
-                and len(ranked) < self.config.selected_paper_limit
-            ):
-                ranked = self._supplement_papers(
-                    plan, candidates, ranked, trace, context
-                )
 
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
@@ -244,15 +252,21 @@ class DomainOnboardingPipeline:
         plan: Any,
         candidates: list[Any],
         ranked: list[Any],
+        gaps: list[Any],
         trace: DomainOnboardingRequestTrace,
         context: PipelineExecutionContext,
     ) -> list[Any]:
-        queries = [
-            f'"{plan.normalized_domain}" "{subdirection}" survey method evaluation'
-            for subdirection in plan.expected_subdirections
-        ][: self.config.search_queries_limit]
+        queries = list(
+            dict.fromkeys(
+                query
+                for gap in gaps
+                for query in gap.supplemental_queries
+                if query.strip()
+            )
+        )[: self.config.search_queries_limit]
         if not queries:
             return ranked
+        trace.supplemental_query_count += len(queries)
         try:
             retrieval_result, duration = context.call(
                 "retrieval",

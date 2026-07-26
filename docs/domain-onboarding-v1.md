@@ -77,6 +77,12 @@ Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅�
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
+
+首次排序后，`PaperCoverageAnalyzer` 会检查每个预期子方向是否有足够相关的论文，
+并检查综述、奠基工作、评测和前沿论文角色是否齐全。缺口被表示为带稳定
+`subdirection_id`、缺失角色、原因和补充查询的 `CoverageGap`。Pipeline 最多执行
+一轮补充检索，而且只发送这些缺口对应的查询；补充结果仍需经过同一套验证、去重、
+排序和 MMR 选择，不会直接进入生成器。
 Semantic Scholar 不要求 API Key，但公共配额可能限流。若需要更高配额，可设置：
 
 ```bash

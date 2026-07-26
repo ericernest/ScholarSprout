@@ -39,9 +39,11 @@ class FakeRetriever:
         self.fail = fail
         self.empty = empty
         self.calls = 0
+        self.query_batches: list[list[str]] = []
 
     def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         self.calls += 1
+        self.query_batches.append(list(queries))
         if self.fail:
             raise PaperRetrievalError(
                 "all paper queries failed",
@@ -191,8 +193,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result_b.status, "ok")
         self.assertEqual(trace_a.first_usage.total_tokens, 112)
         self.assertEqual(trace_b.first_usage.total_tokens, 224)
-        self.assertEqual(trace_a.retrieval_cache_hit_count, 1)
-        self.assertEqual(trace_b.retrieval_cache_hit_count, 2)
+        self.assertEqual(trace_a.retrieval_cache_hit_count, 3)
+        self.assertEqual(trace_b.retrieval_cache_hit_count, 4)
 
     def test_six_fixed_domains_run_end_to_end_with_fakes(self) -> None:
         domains = [
@@ -223,7 +225,19 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNotNone(result.output)
         self.assertGreater(trace.retrieved_paper_count, 0)
         self.assertGreater(trace.selected_paper_count, 0)
-        self.assertEqual(trace.search_query_count, 2)
+        self.assertGreater(trace.supplemental_query_count, 0)
+        self.assertEqual(
+            trace.search_query_count,
+            2 + trace.supplemental_query_count,
+        )
+        self.assertEqual(pipeline.retriever.calls, 2)
+        self.assertEqual(
+            len(pipeline.retriever.query_batches[1]),
+            trace.supplemental_query_count,
+        )
+        self.assertTrue(
+            any('"检索"' in query for query in pipeline.retriever.query_batches[1])
+        )
 
     def test_all_retrieval_failures_return_explicit_error_without_generation(self) -> None:
         pipeline = make_pipeline([make_generation_payload(["paper-0"])], fail_retrieval=True)
