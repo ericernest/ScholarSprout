@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from .base import BaseTool
 from .builtin.time_tool import CurrentTimeTool
+from .builtin.paper_search_tool import PaperSearchTool
+from .builtin.pdf_parse_tool import PDFParseTool
+from .builtin.kg_query_tool import KGQueryTool
+from .builtin.kg_build_tool import KGBuildTool
 
 
 # 管理当前可用工具实例。
@@ -47,4 +51,8 @@ class ToolRegistry:
 def create_builtin_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(CurrentTimeTool())
+    registry.register(PaperSearchTool())
+    registry.register(PDFParseTool())
+    registry.register(KGQueryTool())
+    registry.register(KGBuildTool())
     return registry
