@@ -39,9 +39,15 @@ class WeightedPaperRanker:
         self,
         config: DomainOnboardingConfig,
         vectorizer: TextVectorizer | None = None,
+        fallback_vectorizer: TextVectorizer | None = None,
     ):
         self.config = config
         self.vectorizer = vectorizer or TfidfTextVectorizer()
+        self.fallback_vectorizer = (
+            fallback_vectorizer
+            if fallback_vectorizer is not None
+            else (TfidfTextVectorizer() if vectorizer is not None else None)
+        )
 
     def rank(
         self,
@@ -66,12 +72,14 @@ class WeightedPaperRanker:
                 key=lambda item: item[0],
             )
         )
+        vectorizer_backend = self._vectorizer_name(self.vectorizer)
         if not valid:
             return RankingResult(
                 stats=RankingStats(
                     deduplicated_count=len(unique),
                     invalid_count=invalid_count,
                     candidate_source_counts=source_counts,
+                    vectorizer_backend=vectorizer_backend,
                 )
             )
 
@@ -85,7 +93,9 @@ class WeightedPaperRanker:
             ]
         )
         document_texts = [f"{paper.title} {paper.title} {paper.abstract or ''}" for paper in valid]
-        vectors = self.vectorizer.vectorize([query_text, *document_texts])
+        vectors, vectorizer_backend, fallback_used = self._vectorize(
+            [query_text, *document_texts]
+        )
         if len(vectors) != len(valid) + 1:
             raise ValueError("text vectorizer returned an unexpected number of vectors")
         query_vector, document_vectors = vectors[0], vectors[1:]
@@ -128,6 +138,15 @@ class WeightedPaperRanker:
                 )
             )
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
+        relevance_filtered = [
+            paper
+            for paper in ranked
+            if paper.relevance_score >= self.config.ranking_min_relevance_score
+        ]
+        low_relevance_filtered_count = 0
+        if relevance_filtered:
+            low_relevance_filtered_count = len(ranked) - len(relevance_filtered)
+            ranked = relevance_filtered
         selected, mmr_scores = self._select_mmr(
             ranked,
             vector_by_id,
@@ -140,8 +159,30 @@ class WeightedPaperRanker:
                 invalid_count=invalid_count,
                 candidate_source_counts=source_counts,
                 mmr_scores=mmr_scores,
+                vectorizer_backend=vectorizer_backend,
+                vectorizer_fallback_used=fallback_used,
+                low_relevance_filtered_count=low_relevance_filtered_count,
             ),
         )
+
+    def _vectorize(
+        self,
+        texts: list[str],
+    ) -> tuple[list[dict[str, float]], str, bool]:
+        try:
+            return self.vectorizer.vectorize(texts), self._vectorizer_name(self.vectorizer), False
+        except Exception:
+            if self.fallback_vectorizer is None:
+                raise
+            return (
+                self.fallback_vectorizer.vectorize(texts),
+                self._vectorizer_name(self.fallback_vectorizer),
+                True,
+            )
+
+    @staticmethod
+    def _vectorizer_name(vectorizer: TextVectorizer) -> str:
+        return str(getattr(vectorizer, "name", type(vectorizer).__name__)).strip().lower()
 
     @staticmethod
     def _limit_candidates_by_source(

@@ -73,7 +73,10 @@ provider 连续失败 3 次后默认熔断 30 秒，冷却后只允许一个探�
 Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅凭返回数量占满候选池；
 进入候选池后使用本地 TF-IDF 向量计算查询相关性和论文间相似度，再通过 MMR
 综合论文质量、相对已选集合的新颖度和角色覆盖选择最终论文。向量器通过接口注入，
-以后可以替换为 embedding 实现而不改动 Ranker 流程。
+以后可以替换为 embedding 实现而不改动 Ranker 流程。当前提供批处理和有界缓存的
+`CachedEmbeddingTextVectorizer`；embedding 服务异常时 Ranker 自动降级到 TF-IDF，
+并记录实际 backend 和 fallback 指标。至少存在一篇达到相关性下限的论文时，明显
+低于下限的候选会在 MMR 前过滤，避免高引用但无关的论文仅凭多样性进入结果。
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
@@ -83,6 +86,10 @@ type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会�
 `subdirection_id`、缺失角色、原因和补充查询的 `CoverageGap`。Pipeline 最多执行
 一轮补充检索，而且只发送这些缺口对应的查询；补充结果仍需经过同一套验证、去重、
 排序和 MMR 选择，不会直接进入生成器。
+
+固定排序基准保存在 `tests/domain_onboarding_v1/fixtures/ranking_benchmark.json`，使用
+人工相关性等级持续检查 Precision@K、Recall@K、NDCG@K 和论文角色覆盖率。修改
+权重、向量器或 MMR 策略时必须同时通过该基准，避免只凭单次示例主观调参。
 Semantic Scholar 不要求 API Key，但公共配额可能限流。若需要更高配额，可设置：
 
 ```bash

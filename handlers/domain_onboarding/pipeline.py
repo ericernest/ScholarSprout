@@ -30,6 +30,7 @@ from .schemas import (
     DomainOnboardingRequest,
     ModelCallStats,
     PipelineResult,
+    RankingStats,
     RetrievalStats,
 )
 
@@ -120,6 +121,7 @@ class DomainOnboardingPipeline:
             ranked = ranking_result.papers
             trace.deduplicated_paper_count = ranking_result.stats.deduplicated_count
             trace.invalid_paper_count = ranking_result.stats.invalid_count
+            self._record_ranking_stats(trace, ranking_result.stats)
             trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
             trace.selected_paper_count = len(ranked)
             coverage = self.coverage_analyzer.analyze(plan, ranked)
@@ -296,6 +298,7 @@ class DomainOnboardingPipeline:
         reranked = ranking_result.papers
         trace.deduplicated_paper_count = ranking_result.stats.deduplicated_count
         trace.invalid_paper_count = ranking_result.stats.invalid_count
+        self._record_ranking_stats(trace, ranking_result.stats)
         trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
         trace.selected_paper_count = len(reranked)
         return reranked or ranked
@@ -362,6 +365,17 @@ class DomainOnboardingPipeline:
     def _record_first(trace: DomainOnboardingRequestTrace, quality: ContentQuality) -> None:
         trace.first_score = quality.score
         trace.first_dimensions = dict(quality.dimensions)
+
+    @staticmethod
+    def _record_ranking_stats(
+        trace: DomainOnboardingRequestTrace,
+        stats: RankingStats,
+    ) -> None:
+        trace.ranking_vectorizer_backend = stats.vectorizer_backend
+        trace.ranking_vectorizer_fallback_used = (
+            trace.ranking_vectorizer_fallback_used or stats.vectorizer_fallback_used
+        )
+        trace.low_relevance_filtered_count = stats.low_relevance_filtered_count
 
     def _record_retrieval_stats(
         self,

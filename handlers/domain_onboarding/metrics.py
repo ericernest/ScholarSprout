@@ -45,6 +45,9 @@ class DomainOnboardingRequestTrace:
     initial_coverage_gap_count: int = 0
     final_coverage_gap_count: int = 0
     supplemental_query_count: int = 0
+    ranking_vectorizer_backend: str = "unknown"
+    ranking_vectorizer_fallback_used: bool = False
+    low_relevance_filtered_count: int = 0
 
     first_dimensions: dict[str, float] = field(default_factory=dict)
     final_dimensions: dict[str, float] = field(default_factory=dict)
@@ -122,6 +125,8 @@ class DomainOnboardingMetrics:
         self._paper_totals: Counter[str] = Counter()
         self._provider_totals: dict[str, Counter[str]] = defaultdict(Counter)
         self._provider_latencies: dict[str, list[float]] = defaultdict(list)
+        self._ranking_backends: Counter[str] = Counter()
+        self._ranking_fallbacks = 0
         self._first_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._final_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._quality_deltas: deque[float] = deque(maxlen=window_size)
@@ -168,6 +173,12 @@ class DomainOnboardingMetrics:
                         self._provider_latencies[provider].append(float(value))
                     elif isinstance(value, (bool, int)):
                         self._provider_totals[provider][field_name] += int(value)
+            if trace.ranking_vectorizer_backend != "unknown":
+                self._ranking_backends[trace.ranking_vectorizer_backend] += 1
+            self._ranking_fallbacks += int(trace.ranking_vectorizer_fallback_used)
+            self._paper_totals["low_relevance_filtered_count"] += int(
+                trace.low_relevance_filtered_count
+            )
             for name, value in trace.first_dimensions.items():
                 self._first_dimension_values[name].append(value)
             for name, value in trace.final_dimensions.items():
@@ -225,6 +236,10 @@ class DomainOnboardingMetrics:
                         "latency": _duration_summary(self._provider_latencies[provider]),
                     }
                     for provider, values in self._provider_totals.items()
+                },
+                "ranking": {
+                    "vectorizer_backends": dict(self._ranking_backends),
+                    "fallback_count": self._ranking_fallbacks,
                 },
                 "quality": {
                     "first_dimensions": self._dimension_averages(self._first_dimension_values),

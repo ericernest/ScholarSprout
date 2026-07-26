@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
+from threading import Lock
 from typing import Protocol
 
 SparseVector = dict[str, float]
@@ -12,6 +13,10 @@ SparseVector = dict[str, float]
 
 class TextVectorizer(Protocol):
     def vectorize(self, texts: list[str]) -> list[SparseVector]: ...
+
+
+class EmbeddingProvider(Protocol):
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 def tokenize(text: str) -> list[str]:
@@ -26,6 +31,8 @@ def tokenize(text: str) -> list[str]:
 
 class TfidfTextVectorizer:
     """无外部模型依赖的确定性 TF-IDF 向量器。"""
+
+    name = "tfidf"
 
     def vectorize(self, texts: list[str]) -> list[SparseVector]:
         tokenized = [tokenize(text) for text in texts]
@@ -44,6 +51,82 @@ class TfidfTextVectorizer:
                 {token: value / norm for token, value in vector.items()} if norm else {}
             )
         return vectors
+
+
+class CachedEmbeddingTextVectorizer:
+    """对任意 embedding provider 提供批处理和有界进程内缓存。"""
+
+    name = "embedding"
+
+    def __init__(
+        self,
+        provider: EmbeddingProvider,
+        *,
+        batch_size: int = 32,
+        cache_max_entries: int = 2048,
+    ) -> None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if cache_max_entries < 0:
+            raise ValueError("cache_max_entries must not be negative")
+        self.provider = provider
+        self.batch_size = batch_size
+        self.cache_max_entries = cache_max_entries
+        self._cache: OrderedDict[str, SparseVector] = OrderedDict()
+        self._lock = Lock()
+
+    def vectorize(self, texts: list[str]) -> list[SparseVector]:
+        vectors: list[SparseVector | None] = [None] * len(texts)
+        missing: dict[str, list[int]] = {}
+        with self._lock:
+            for index, text in enumerate(texts):
+                cached = self._cache.get(text)
+                if cached is None:
+                    missing.setdefault(text, []).append(index)
+                    continue
+                self._cache.move_to_end(text)
+                vectors[index] = dict(cached)
+
+        unique_texts = list(missing)
+        for offset in range(0, len(unique_texts), self.batch_size):
+            batch = unique_texts[offset : offset + self.batch_size]
+            dense_vectors = self.provider.embed(batch)
+            if len(dense_vectors) != len(batch):
+                raise ValueError("embedding provider returned an unexpected vector count")
+            for text, dense in zip(batch, dense_vectors, strict=True):
+                sparse = self._to_sparse(dense)
+                for index in missing[text]:
+                    vectors[index] = dict(sparse)
+                self._store(text, sparse)
+
+        if any(vector is None for vector in vectors):
+            raise ValueError("embedding vectorization produced an incomplete result")
+        return [vector for vector in vectors if vector is not None]
+
+    @staticmethod
+    def _to_sparse(vector: list[float]) -> SparseVector:
+        if not vector:
+            raise ValueError("embedding provider returned an empty vector")
+        values = [float(value) for value in vector]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("embedding provider returned a non-finite value")
+        norm = math.sqrt(sum(value * value for value in values))
+        if norm == 0:
+            raise ValueError("embedding provider returned a zero vector")
+        return {
+            str(index): value / norm
+            for index, value in enumerate(values)
+            if value != 0.0
+        }
+
+    def _store(self, text: str, vector: SparseVector) -> None:
+        if self.cache_max_entries <= 0:
+            return
+        with self._lock:
+            self._cache[text] = dict(vector)
+            self._cache.move_to_end(text)
+            while len(self._cache) > self.cache_max_entries:
+                self._cache.popitem(last=False)
 
 
 def cosine_similarity(left: SparseVector, right: SparseVector) -> float:
