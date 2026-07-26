@@ -326,6 +326,21 @@ class PlanningResult(OnboardingModel):
     stats: ModelCallStats = Field(default_factory=ModelCallStats)
 
 
+class ProviderRetrievalStats(OnboardingModel):
+    provider: str
+    success: bool = False
+    latency_ms: float = 0.0
+    result_count: int = 0
+    error_count: int = 0
+    retry_count: int = 0
+    cache_hit_count: int = 0
+    request_count: int = 0
+    rate_limit_count: int = 0
+    circuit_open: bool = False
+    circuit_skipped: bool = False
+    stale_cache_used: bool = False
+
+
 class RetrievalStats(OnboardingModel):
     errors: list[str] = Field(default_factory=list)
     retry_count: int = 0
@@ -333,6 +348,10 @@ class RetrievalStats(OnboardingModel):
     request_count: int = 0
     source_success_count: int = 0
     source_failure_count: int = 0
+    rate_limit_count: int = 0
+    stale_cache_hit_count: int = 0
+    circuit_open_count: int = 0
+    providers: dict[str, ProviderRetrievalStats] = Field(default_factory=dict)
 
     def add(self, other: "RetrievalStats") -> None:
         self.errors.extend(other.errors)
@@ -341,6 +360,10 @@ class RetrievalStats(OnboardingModel):
         self.request_count += other.request_count
         self.source_success_count += other.source_success_count
         self.source_failure_count += other.source_failure_count
+        self.rate_limit_count += other.rate_limit_count
+        self.stale_cache_hit_count += other.stale_cache_hit_count
+        self.circuit_open_count += other.circuit_open_count
+        self.providers.update(other.providers)
 
 
 class RetrievalResult(OnboardingModel):

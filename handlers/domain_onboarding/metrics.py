@@ -53,6 +53,10 @@ class DomainOnboardingRequestTrace:
     retrieval_request_count: int = 0
     retrieval_source_success_count: int = 0
     retrieval_source_failure_count: int = 0
+    retrieval_rate_limit_count: int = 0
+    retrieval_stale_cache_hit_count: int = 0
+    retrieval_circuit_open_count: int = 0
+    retrieval_provider_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     interrupted_stage: str | None = None
     deadline_exceeded: bool = False
     cancelled: bool = False
@@ -113,6 +117,8 @@ class DomainOnboardingMetrics:
             stage: deque(maxlen=window_size) for stage in self.stage_names
         }
         self._paper_totals: Counter[str] = Counter()
+        self._provider_totals: dict[str, Counter[str]] = defaultdict(Counter)
+        self._provider_latencies: dict[str, list[float]] = defaultdict(list)
         self._first_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._final_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._quality_deltas: deque[float] = deque(maxlen=window_size)
@@ -147,9 +153,16 @@ class DomainOnboardingMetrics:
                 "verified_paper_count", "selected_paper_count", "invalid_paper_count",
                 "retrieval_error_count", "retrieval_retry_count", "retrieval_cache_hit_count",
                 "retrieval_request_count", "retrieval_source_success_count",
-                "retrieval_source_failure_count",
+                "retrieval_source_failure_count", "retrieval_rate_limit_count",
+                "retrieval_stale_cache_hit_count", "retrieval_circuit_open_count",
             ):
                 self._paper_totals[field_name] += int(getattr(trace, field_name))
+            for provider, values in trace.retrieval_provider_stats.items():
+                for field_name, value in values.items():
+                    if field_name == "latency_ms":
+                        self._provider_latencies[provider].append(float(value))
+                    elif isinstance(value, (bool, int)):
+                        self._provider_totals[provider][field_name] += int(value)
             for name, value in trace.first_dimensions.items():
                 self._first_dimension_values[name].append(value)
             for name, value in trace.final_dimensions.items():
@@ -201,6 +214,13 @@ class DomainOnboardingMetrics:
                     for stage, values in self._stage_durations.items()
                 },
                 "papers": dict(self._paper_totals),
+                "retrieval_providers": {
+                    provider: {
+                        **dict(values),
+                        "latency": _duration_summary(self._provider_latencies[provider]),
+                    }
+                    for provider, values in self._provider_totals.items()
+                },
                 "quality": {
                     "first_dimensions": self._dimension_averages(self._first_dimension_values),
                     "final_dimensions": self._dimension_averages(self._final_dimension_values),

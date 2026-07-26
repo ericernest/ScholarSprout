@@ -56,6 +56,7 @@ class RetrievalRetryTests(unittest.TestCase):
         self.assertEqual(len(result.papers), 1)
         self.assertEqual(calls, 2)
         self.assertEqual(result.stats.retry_count, 1)
+        self.assertEqual(result.stats.rate_limit_count, 1)
         self.assertEqual(sleeps, [0.25])
 
     def test_does_not_retry_non_retriable_client_error(self) -> None:
@@ -124,6 +125,98 @@ class RetrievalRetryTests(unittest.TestCase):
         self.assertEqual(result.papers, [])
         self.assertEqual(result.stats.request_count, 2)
         self.assertEqual(sleeps, [3.0])
+
+    def test_stale_cache_is_used_when_live_provider_fails(self) -> None:
+        now = [0.0]
+        should_fail = [False]
+
+        def clock() -> float:
+            return now[0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if should_fail[0]:
+                return httpx.Response(503, json={"error": "offline"})
+            return httpx.Response(200, json=semantic_scholar_payload("cached-paper"))
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            provider = SemanticScholarRetriever(
+                client=client,
+                retry_policy=RetrievalRetryPolicy(max_attempts=1),
+                cache_ttl_seconds=1,
+                clock=clock,
+            )
+            retriever = CompositePaperRetriever(
+                [provider],
+                stale_cache_seconds=60,
+                clock=clock,
+            )
+            fresh = retriever.search(["RAG"], limit_per_query=1)
+            now[0] = 2.0
+            should_fail[0] = True
+            stale = retriever.search(["RAG"], limit_per_query=1)
+
+        self.assertEqual(fresh.papers[0].paper_id, "cached-paper")
+        self.assertEqual(stale.papers[0].paper_id, "cached-paper")
+        self.assertEqual(stale.stats.stale_cache_hit_count, 1)
+        self.assertTrue(stale.stats.providers["semantic_scholar"].stale_cache_used)
+        self.assertFalse(stale.stats.providers["semantic_scholar"].success)
+
+    def test_circuit_opens_and_allows_probe_after_cooldown(self) -> None:
+        now = [0.0]
+
+        class FlakyRetriever:
+            source_name = "flaky"
+
+            def __init__(self) -> None:
+                self.calls = 0
+                self.recovered = False
+
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                self.calls += 1
+                if not self.recovered:
+                    raise PaperRetrievalError(
+                        "offline",
+                        stats=RetrievalStats(errors=["offline"], request_count=1),
+                    )
+                return RetrievalResult(
+                    papers=[
+                        PaperCandidate(
+                            paper_id="recovered",
+                            title="Recovered provider",
+                            url="https://example.org/recovered",
+                            source="flaky",
+                        )
+                    ],
+                    stats=RetrievalStats(request_count=1),
+                )
+
+        provider = FlakyRetriever()
+        retriever = CompositePaperRetriever(
+            [provider],
+            circuit_failure_threshold=2,
+            circuit_cooldown_seconds=10,
+            stale_cache_seconds=0,
+            clock=lambda: now[0],
+        )
+
+        with self.assertRaises(PaperRetrievalError):
+            retriever.search(["query"], limit_per_query=1)
+        with self.assertRaises(PaperRetrievalError) as opened:
+            retriever.search(["query"], limit_per_query=1)
+        with self.assertRaises(PaperRetrievalError) as skipped:
+            retriever.search(["query"], limit_per_query=1)
+
+        self.assertTrue(opened.exception.stats.providers["flaky"].circuit_open)
+        self.assertTrue(skipped.exception.stats.providers["flaky"].circuit_skipped)
+        self.assertEqual(provider.calls, 2)
+
+        now[0] = 10.0
+        provider.recovered = True
+        recovered = retriever.search(["query"], limit_per_query=1)
+
+        self.assertEqual(provider.calls, 3)
+        self.assertTrue(recovered.stats.providers["flaky"].success)
+        self.assertFalse(recovered.stats.providers["flaky"].circuit_open)
 
 
 class CompositeConcurrencyTests(unittest.TestCase):

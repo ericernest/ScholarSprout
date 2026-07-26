@@ -359,6 +359,32 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertEqual(snapshot["interruptions"]["cancelled"], 0)
         self.assertEqual(snapshot["interruptions"]["stages"], {"retrieval": 1})
 
+    def test_metrics_aggregate_provider_health(self) -> None:
+        metrics = DomainOnboardingMetrics()
+        metrics.record(
+            DomainOnboardingRequestTrace(
+                status="ok",
+                retrieval_provider_stats={
+                    "arxiv": {
+                        "success": True,
+                        "latency_ms": 12.5,
+                        "result_count": 4,
+                        "error_count": 0,
+                        "rate_limit_count": 1,
+                        "circuit_open": False,
+                        "stale_cache_used": False,
+                    }
+                },
+            )
+        )
+
+        provider = metrics.snapshot()["retrieval_providers"]["arxiv"]
+
+        self.assertEqual(provider["success"], 1)
+        self.assertEqual(provider["result_count"], 4)
+        self.assertEqual(provider["rate_limit_count"], 1)
+        self.assertEqual(provider["latency"]["average_ms"], 12.5)
+
     def test_handler_builds_request_from_channel_metadata_and_records_metrics(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
         metrics = DomainOnboardingMetrics()
