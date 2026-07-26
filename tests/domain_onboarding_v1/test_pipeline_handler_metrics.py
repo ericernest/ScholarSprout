@@ -225,6 +225,11 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNotNone(result.output)
         self.assertEqual(len(result.quality_attempts), 1)
         self.assertEqual(result.quality_attempts[0].source, "initial")
+        self.assertFalse(result.repair_record.triggered)
+        self.assertEqual(
+            result.repair_record.decision.decision,
+            "initial_selected",
+        )
         self.assertGreater(trace.retrieved_paper_count, 0)
         self.assertGreater(trace.selected_paper_count, 0)
         self.assertGreater(trace.supplemental_query_count, 0)
@@ -285,6 +290,11 @@ class PipelineTests(unittest.TestCase):
             [attempt.source for attempt in result.quality_attempts],
             ["initial", "llm_repair"],
         )
+        self.assertTrue(result.repair_record.triggered)
+        self.assertEqual(
+            result.repair_record.decision.decision,
+            "repaired_selected",
+        )
         self.assertLess(
             result.quality_attempts[0].quality.score,
             result.quality_attempts[1].quality.score,
@@ -306,6 +316,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.quality.selected_attempt, 1)
         self.assertEqual(len(result.quality_attempts), 2)
         self.assertEqual(result.quality_attempts[0].quality.score, result.quality.score)
+        self.assertEqual(
+            result.repair_record.decision.decision,
+            "initial_retained",
+        )
+        self.assertIn(
+            "improvement_too_small",
+            result.repair_record.decision.reasons,
+        )
 
     def test_cancelled_repair_preserves_completed_quality_history(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
@@ -395,6 +413,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(trace.retry_model_calls, 1)
         self.assertEqual(trace.retry_usage.total_tokens, 50)
         self.assertEqual(trace.retry_unreported_usage_calls, 0)
+        self.assertIn(
+            "repair_execution_failed",
+            result.repair_record.decision.reasons,
+        )
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
@@ -461,6 +483,11 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertEqual(response["learner_profile"]["preference"], "experiment_first")
         self.assertEqual(len(response["quality_attempts"]), 1)
         self.assertEqual(response["quality_attempts"][0]["source"], "initial")
+        self.assertFalse(response["repair_record"]["triggered"])
+        self.assertEqual(
+            response["repair_record"]["decision"]["decision"],
+            "initial_selected",
+        )
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot["requests_total"], 1)
         self.assertEqual(snapshot["papers"]["selected_paper_count"], len(response["papers"]))

@@ -26,6 +26,15 @@ QualityAttemptSource = Literal["initial", "code_repair", "llm_repair"]
 RepairActionType = Literal["code", "llm", "retrieval"]
 RepairActionStatus = Literal["planned", "applied", "skipped", "failed"]
 RepairSelection = Literal["initial_selected", "repaired_selected", "initial_retained"]
+RepairDecisionReason = Literal[
+    "quality_threshold_met",
+    "significant_improvement",
+    "hard_gate_failed",
+    "improvement_too_small",
+    "critical_dimension_regressed",
+    "repair_execution_failed",
+    "repair_output_invalid",
+]
 QualityIssueType = Literal[
     "structure_error",
     "invalid_paper",
@@ -420,7 +429,7 @@ class RepairActionRecord(OnboardingModel):
 class RepairDecision(OnboardingModel):
     selected_attempt: int = Field(ge=1, le=2)
     decision: RepairSelection
-    reasons: list[str] = Field(default_factory=list)
+    reasons: list[RepairDecisionReason] = Field(default_factory=list)
     score_delta: float = 0.0
     dimension_deltas: dict[str, float] = Field(default_factory=dict)
 
@@ -453,6 +462,7 @@ class PipelineResult(OnboardingModel):
     output: DomainOnboardingOutput | None = None
     quality: ContentQuality | None = None
     quality_attempts: list[QualityAttempt] = Field(default_factory=list)
+    repair_record: RepairRecord | None = None
     error: str | None = None
 
     def to_response(self) -> dict[str, Any]:
@@ -467,6 +477,11 @@ class PipelineResult(OnboardingModel):
             quality_attempts=[
                 attempt.model_dump(mode="json") for attempt in self.quality_attempts
             ],
+            repair_record=(
+                self.repair_record.model_dump(mode="json")
+                if self.repair_record
+                else None
+            ),
         )
         if self.error:
             payload["error"] = self.error
