@@ -6,6 +6,7 @@ from typing import Protocol
 
 from .config import DomainOnboardingConfig
 from .generator import GenerationError, StructuredOnboardingGenerator
+from .repair_planning import RepairPlanner
 from .schemas import (
     ContentQuality,
     DomainOnboardingOutput,
@@ -15,6 +16,7 @@ from .schemas import (
     PaperReference,
     RankedPaper,
     RepairResult,
+    RepairRecord,
     SelectedPaper,
 )
 
@@ -32,9 +34,15 @@ class OnboardingRepairer(Protocol):
 
 
 class TargetedRepairer:
-    def __init__(self, generator: StructuredOnboardingGenerator, config: DomainOnboardingConfig):
+    def __init__(
+        self,
+        generator: StructuredOnboardingGenerator,
+        config: DomainOnboardingConfig,
+        planner: RepairPlanner | None = None,
+    ):
         self.generator = generator
         self.config = config
+        self.planner = planner or RepairPlanner()
 
     def repair(
         self,
@@ -45,18 +53,33 @@ class TargetedRepairer:
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
     ) -> RepairResult:
+        plan = self.planner.plan(
+            quality,
+            max_content_repairs=self.config.max_content_repairs,
+        )
+        actions = [action.model_copy(deep=True) for action in plan.actions]
         normalized = self._code_repair(previous_output, allowed_papers)
-        llm_issue_types = {
-            "missing_coverage",
-            "weak_development_stage",
-            "beginner_mismatch",
-            "structure_error",
-            "missing_evidence",
-            "unsupported_claim",
-        }
-        selected_issues = [issue for issue in quality.issues if issue.issue_type in llm_issue_types]
+        code_action = next(
+            (action for action in actions if action.action_type == "code"),
+            None,
+        )
+        if code_action is not None:
+            code_action.status = "applied"
+        llm_action = next(
+            (action for action in actions if action.action_type == "llm"),
+            None,
+        )
+        selected_ids = set(llm_action.issue_ids if llm_action else [])
+        selected_issues = [
+            issue for issue in quality.issues if str(issue.issue_id) in selected_ids
+        ]
+        record = RepairRecord(triggered=True, actions=actions)
         if not selected_issues or self.config.max_content_repairs == 0:
-            return RepairResult(output=normalized, action="code_repair")
+            return RepairResult(
+                output=normalized,
+                action="code_repair",
+                record=record,
+            )
         try:
             generation = self.generator.repair(
                 request,
@@ -70,13 +93,36 @@ class TargetedRepairer:
                 output=generation.output,
                 action="llm_targeted_repair",
                 stats=generation.stats,
+                record=self._with_action_status(record, "llm", "applied"),
             )
         except GenerationError as error:
             return RepairResult(
                 output=normalized,
                 action="llm_repair_failed",
                 stats=error.stats,
+                record=self._with_action_status(
+                    record,
+                    "llm",
+                    "failed",
+                    error=str(error),
+                ),
             )
+
+    @staticmethod
+    def _with_action_status(
+        record: RepairRecord,
+        action_type: str,
+        status: str,
+        *,
+        error: str | None = None,
+    ) -> RepairRecord:
+        updated = record.model_copy(deep=True)
+        action = next(
+            item for item in updated.actions if item.action_type == action_type
+        )
+        action.status = status
+        action.error = error
+        return updated
 
     def _code_repair(
         self,
