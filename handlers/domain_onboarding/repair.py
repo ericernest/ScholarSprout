@@ -51,6 +51,8 @@ class TargetedRepairer:
             "weak_development_stage",
             "beginner_mismatch",
             "structure_error",
+            "missing_evidence",
+            "unsupported_claim",
         }
         selected_issues = [issue for issue in quality.issues if issue.issue_type in llm_issue_types]
         if not selected_issues or self.config.max_content_repairs == 0:
@@ -103,6 +105,18 @@ class TargetedRepairer:
             step.completion_criteria = self._nonempty_unique(step.completion_criteria)
         repaired.current_landscape.problems = self._nonempty_unique(repaired.current_landscape.problems)
         repaired.current_landscape.subdirections = self._nonempty_unique(repaired.current_landscape.subdirections)
+        seen_claims: set[str] = set()
+        normalized_claims = []
+        for claim in repaired.evidence_claims:
+            claim.supporting_paper_ids = self._valid_unique(
+                claim.supporting_paper_ids,
+                allowed,
+            )
+            if claim.claim_id in seen_claims:
+                continue
+            seen_claims.add(str(claim.claim_id))
+            normalized_claims.append(claim)
+        repaired.evidence_claims = normalized_claims
         return repaired
 
     @staticmethod

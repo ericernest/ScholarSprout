@@ -161,6 +161,7 @@ class DomainOnboardingPipeline:
                 return PipelineResult(status="generation_failed", query=request.query, error=str(error))
             self._record_generation_model_stats(trace, generation_result.stats)
             partial_output = output
+            trace.evidence_claim_count = len(output.evidence_claims)
 
             first_quality, trace.evaluation_duration_ms = context.call(
                 "evaluation",
@@ -365,6 +366,12 @@ class DomainOnboardingPipeline:
     def _record_first(trace: DomainOnboardingRequestTrace, quality: ContentQuality) -> None:
         trace.first_score = quality.score
         trace.first_dimensions = dict(quality.dimensions)
+        trace.unsupported_claim_count = sum(
+            issue.issue_type == "unsupported_claim" for issue in quality.issues
+        )
+        trace.missing_evidence_count = sum(
+            issue.issue_type == "missing_evidence" for issue in quality.issues
+        )
 
     @staticmethod
     def _record_ranking_stats(

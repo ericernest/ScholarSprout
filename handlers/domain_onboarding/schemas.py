@@ -18,6 +18,8 @@ QualityIssueType = Literal[
     "route_conflict",
     "beginner_mismatch",
     "format_error",
+    "missing_evidence",
+    "unsupported_claim",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -262,6 +264,23 @@ class LearningStep(OnboardingModel):
         return str(value).strip()
 
 
+class EvidenceClaim(OnboardingModel):
+    claim_id: str | None = None
+    claim: str = Field(min_length=1)
+    supporting_paper_ids: list[str] = Field(default_factory=list)
+    support_type: Literal[
+        "abstract_explicit",
+        "metadata_inference",
+        "background_synthesis",
+    ] = "background_synthesis"
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "EvidenceClaim":
+        self.claim_id = self.claim_id or stable_id("claim", self.claim)
+        self.supporting_paper_ids = list(dict.fromkeys(self.supporting_paper_ids))
+        return self
+
+
 class DomainOnboardingOutput(OnboardingModel):
     domain: str
     text: str
@@ -271,6 +290,7 @@ class DomainOnboardingOutput(OnboardingModel):
     current_landscape: CurrentLandscape
     learning_path: list[LearningStep]
     papers: list[SelectedPaper]
+    evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
 
 
 class QualityIssue(OnboardingModel):
