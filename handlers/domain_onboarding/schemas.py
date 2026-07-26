@@ -89,6 +89,20 @@ class DomainResearchPlan(OnboardingModel):
         return self
 
 
+class CoverageGap(OnboardingModel):
+    subdirection_id: str
+    subdirection: str
+    missing_roles: list[PaperRole] = Field(default_factory=list)
+    reason: str
+    supplemental_queries: list[str] = Field(default_factory=list)
+
+
+class CoverageAnalysis(OnboardingModel):
+    gaps: list[CoverageGap] = Field(default_factory=list)
+    covered_subdirections: dict[str, list[str]] = Field(default_factory=dict)
+    covered_roles: list[PaperRole] = Field(default_factory=list)
+
+
 class PaperCandidate(OnboardingModel):
     paper_id: str
     title: str

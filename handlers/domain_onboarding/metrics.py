@@ -42,6 +42,9 @@ class DomainOnboardingRequestTrace:
     verified_paper_count: int = 0
     selected_paper_count: int = 0
     invalid_paper_count: int = 0
+    initial_coverage_gap_count: int = 0
+    final_coverage_gap_count: int = 0
+    supplemental_query_count: int = 0
 
     first_dimensions: dict[str, float] = field(default_factory=dict)
     final_dimensions: dict[str, float] = field(default_factory=dict)
@@ -155,6 +158,8 @@ class DomainOnboardingMetrics:
                 "retrieval_request_count", "retrieval_source_success_count",
                 "retrieval_source_failure_count", "retrieval_rate_limit_count",
                 "retrieval_stale_cache_hit_count", "retrieval_circuit_open_count",
+                "initial_coverage_gap_count", "final_coverage_gap_count",
+                "supplemental_query_count",
             ):
                 self._paper_totals[field_name] += int(getattr(trace, field_name))
             for provider, values in trace.retrieval_provider_stats.items():
