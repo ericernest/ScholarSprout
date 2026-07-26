@@ -53,6 +53,9 @@ class DomainOnboardingRequestTrace:
     retrieval_request_count: int = 0
     retrieval_source_success_count: int = 0
     retrieval_source_failure_count: int = 0
+    interrupted_stage: str | None = None
+    deadline_exceeded: bool = False
+    cancelled: bool = False
 
     @property
     def retry_attempted(self) -> bool:
@@ -96,6 +99,7 @@ class DomainOnboardingMetrics:
         self._retry_requests = 0
         self._retry_improved = 0
         self._repair_reasons: Counter[str] = Counter()
+        self._interrupted_stages: Counter[str] = Counter()
         self._extra_model_calls = 0
         self._extra_usage = TokenUsage()
         self._primary_model_calls = 0
@@ -117,6 +121,8 @@ class DomainOnboardingMetrics:
         with self._lock:
             self._requests_total += 1
             self._statuses[trace.status] += 1
+            if trace.interrupted_stage:
+                self._interrupted_stages[trace.interrupted_stage] += 1
             self._request_durations.append(trace.total_duration_ms)
             self._primary_model_calls += trace.first_model_calls
             self._primary_unreported_usage_calls += trace.first_unreported_usage_calls
@@ -170,6 +176,11 @@ class DomainOnboardingMetrics:
             return {
                 "requests_total": requests_total,
                 "statuses": dict(self._statuses),
+                "interruptions": {
+                    "stages": dict(self._interrupted_stages),
+                    "timeouts": self._statuses["timeout"],
+                    "cancelled": self._statuses["cancelled"],
+                },
                 "retry": {
                     "requests": retry_requests,
                     "rate": round(retry_requests / requests_total if requests_total else 0.0, 4),

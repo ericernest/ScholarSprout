@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from channels.base import ChannelMessage
 from handlers.domain_onboarding.config import DomainOnboardingConfig
+from handlers.domain_onboarding.execution import PipelineExecutionContext
 from handlers.domain_onboarding.generator import StructuredOnboardingGenerator
 from handlers.domain_onboarding.metrics import DomainOnboardingMetrics, DomainOnboardingRequestTrace
 from handlers.domain_onboarding.pipeline import DomainOnboardingPipeline
@@ -71,6 +72,52 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_cancelled_request_stops_before_first_stage(self) -> None:
+        pipeline = make_pipeline([make_generation_payload(["unused-paper"])])
+        context = PipelineExecutionContext(timeout_seconds=30)
+        context.cancel()
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            trace,
+            context,
+        )
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(trace.interrupted_stage, "profile")
+        self.assertTrue(trace.cancelled)
+        self.assertEqual(pipeline.retriever.calls, 0)
+
+    def test_stage_timeout_stops_pipeline_and_records_stage(self) -> None:
+        now = [0.0]
+
+        class SlowProfileBuilder:
+            def build(self, request):
+                now[0] += 1.5
+                return RuleBasedProfileBuilder().build(request)
+
+        config = DomainOnboardingConfig(profile_timeout_seconds=1.0)
+        pipeline = make_pipeline([{}], config=config)
+        pipeline.profile_builder = SlowProfileBuilder()
+        context = PipelineExecutionContext(
+            timeout_seconds=config.request_timeout_seconds,
+            clock=lambda: now[0],
+        )
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            trace,
+            context,
+        )
+
+        self.assertEqual(result.status, "timeout")
+        self.assertEqual(trace.interrupted_stage, "profile")
+        self.assertTrue(trace.deadline_exceeded)
+        self.assertEqual(trace.profile_duration_ms, 1500.0)
+        self.assertEqual(pipeline.retriever.calls, 0)
+
     def test_concurrent_requests_keep_stage_stats_request_scoped(self) -> None:
         retrieval_barrier = Barrier(2)
         generation_barrier = Barrier(2)
@@ -296,6 +343,22 @@ class PipelineTests(unittest.TestCase):
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
+    def test_metrics_aggregate_timeout_and_interrupted_stage(self) -> None:
+        metrics = DomainOnboardingMetrics()
+        metrics.record(
+            DomainOnboardingRequestTrace(
+                status="timeout",
+                interrupted_stage="retrieval",
+                deadline_exceeded=True,
+            )
+        )
+
+        snapshot = metrics.snapshot()
+
+        self.assertEqual(snapshot["interruptions"]["timeouts"], 1)
+        self.assertEqual(snapshot["interruptions"]["cancelled"], 0)
+        self.assertEqual(snapshot["interruptions"]["stages"], {"retrieval": 1})
+
     def test_handler_builds_request_from_channel_metadata_and_records_metrics(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
         metrics = DomainOnboardingMetrics()
