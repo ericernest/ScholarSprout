@@ -390,6 +390,9 @@ class RankingStats(OnboardingModel):
     invalid_count: int = 0
     candidate_source_counts: dict[str, int] = Field(default_factory=dict)
     mmr_scores: dict[str, float] = Field(default_factory=dict)
+    vectorizer_backend: str = "unknown"
+    vectorizer_fallback_used: bool = False
+    low_relevance_filtered_count: int = 0
 
 
 class RankingResult(OnboardingModel):

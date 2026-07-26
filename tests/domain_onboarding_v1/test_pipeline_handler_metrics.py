@@ -425,6 +425,7 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
         self.assertIn("retrieval_source_failure_count", snapshot["papers"])
         self.assertIn("planning", snapshot["stage_latency"])
+        self.assertGreaterEqual(snapshot["ranking"]["vectorizer_backends"]["tfidf"], 1)
 
     def test_handler_preserves_quality_warning_and_records_status(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
