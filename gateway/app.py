@@ -15,15 +15,23 @@ from channels.base import ChannelMessage
 from channels.web import WebChannel
 from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
-from handlers.domain_onboarding import create_default_pipeline
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
 from gateway.message_flow import process_channel_input
 from models.client import OpenAIClient
+from paper_reading.harness.session import SessionManager
+from paper_reading.harness.storage import PaperReadingStorage
+from paper_reading.harness.fork_merge import ForkMergeManager
+from paper_reading.kg.engine import KnowledgeGraphEngine
+from paper_reading.kg.builder import ProgressiveKGBuilder
+from paper_reading.kg.query import KGQueryEngine
+from paper_reading.pipeline.sources import PaperPipeline
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
 from tools.registry import create_builtin_tool_registry
+from tools.builtin.kg_query_tool import set_kg_engine
+from tools.builtin.kg_build_tool import set_kg_builder
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -77,6 +85,23 @@ async def paper_reading(request: Request) -> ChannelMessage:
     )
 
 
+@app.get("/paper_reading/uploads/{paper_id}.pdf")
+def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
+    storage = getattr(request.app.state, "paper_storage", None)
+    if storage is None:
+        raise HTTPException(status_code=503, detail="Paper reading storage is not initialized.")
+
+    upload_path = storage.get_upload_path(paper_id)
+    if upload_path is None or not upload_path.exists():
+        raise HTTPException(status_code=404, detail="PDF upload not found.")
+
+    return FileResponse(
+        upload_path,
+        media_type="application/pdf",
+        filename=f"{paper_id}.pdf",
+    )
+
+
 # domain_onboarding 功能入口。
 @app.post("/domain_onboarding")
 async def domain_onboarding(request: Request) -> ChannelMessage:
@@ -96,19 +121,25 @@ def domain_onboarding_metrics(request: Request) -> dict:
     return metrics.snapshot()
 
 
-@app.on_event("shutdown")
-def close_domain_onboarding_resources() -> None:
-    pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
-    if pipeline is not None:
-        pipeline.close()
-
-
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
     model = OpenAIClient(config.client)
     chat_agent = create_agent(model, "chat")
     domain_onboarding_agent = create_agent(model, "domain_onboarding")
+    paper_reading_agent = create_agent(model, "paper_reading")
+
+    paper_storage = PaperReadingStorage()
+    kg_engine = KnowledgeGraphEngine()
+    kg_builder = ProgressiveKGBuilder(kg_engine)
+    kg_query_engine = KGQueryEngine(kg_engine, model)
+    session_manager = SessionManager(storage=paper_storage)
+    fork_manager = ForkMergeManager(session_manager, kg_engine)
+    paper_pipeline = PaperPipeline()
+
+    # 依赖注入：KG 工具需要访问 KG 引擎和构建器
+    set_kg_engine(kg_engine)
+    set_kg_builder(kg_builder)
     message_bus = MessageBus()
     input_channel = WebChannel(bus=message_bus)
     tool_registry = create_builtin_tool_registry()
@@ -119,7 +150,7 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.model = model
     app.state.chat_agent = chat_agent
     app.state.domain_onboarding_agent = domain_onboarding_agent
-    app.state.domain_onboarding_pipeline = create_default_pipeline(model)
+    app.state.paper_reading_agent = paper_reading_agent
     app.state.domain_onboarding_metrics = DomainOnboardingMetrics(
         input_cost_per_million_tokens=config.client.input_cost_per_million_tokens,
         output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
@@ -130,5 +161,13 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.message_bus = message_bus
     app.state.default_channel_name = input_channel.name
     app.state.channels = {input_channel.name: input_channel}
+    # 论文精读组件
+    app.state.paper_storage = paper_storage
+    app.state.kg_engine = kg_engine
+    app.state.kg_builder = kg_builder
+    app.state.kg_query_engine = kg_query_engine
+    app.state.session_manager = session_manager
+    app.state.fork_manager = fork_manager
+    app.state.paper_pipeline = paper_pipeline
 
     uvicorn.run(app, host=host, port=port)
