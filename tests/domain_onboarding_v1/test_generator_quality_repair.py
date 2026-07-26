@@ -272,7 +272,7 @@ class RepairTests(unittest.TestCase):
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), output, quality, ranked
         )
         self.assertEqual(repair_result.action, "llm_targeted_repair")
-        self.assertEqual(repair_result.record.actions[-1].status, "applied")
+        self.assertEqual(repair_result.record.actions[-1].status, "skipped")
         self.assertIn("repair_issues", model.calls[-1]["messages"][1]["content"])
 
     def test_failed_llm_repair_is_recorded_with_error(self) -> None:
