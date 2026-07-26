@@ -30,6 +30,7 @@ from .schemas import (
     DomainOnboardingRequest,
     ModelCallStats,
     PipelineResult,
+    QualityAttempt,
     RankingStats,
     RetrievalStats,
 )
@@ -70,6 +71,7 @@ class DomainOnboardingPipeline:
         )
         partial_output = None
         partial_quality = None
+        quality_attempts: list[QualityAttempt] = []
         try:
             profile, trace.profile_duration_ms = context.call(
                 "profile",
@@ -171,11 +173,25 @@ class DomainOnboardingPipeline:
                 ranked,
             )
             partial_quality = first_quality
+            quality_attempts.append(
+                QualityAttempt(
+                    attempt_number=1,
+                    source="initial",
+                    quality=first_quality,
+                    duration_ms=trace.evaluation_duration_ms,
+                )
+            )
             self._record_first(trace, first_quality)
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
                 trace.final_score = first_quality.score
                 trace.final_dimensions = dict(first_quality.dimensions)
-                return PipelineResult(status="ok", query=request.query, output=output, quality=first_quality)
+                return PipelineResult(
+                    status="ok",
+                    query=request.query,
+                    output=output,
+                    quality=first_quality,
+                    quality_attempts=quality_attempts,
+                )
 
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
@@ -199,6 +215,18 @@ class DomainOnboardingPipeline:
                 ranked,
             )
             trace.evaluation_duration_ms += extra_eval_ms
+            quality_attempts.append(
+                QualityAttempt(
+                    attempt_number=2,
+                    source=(
+                        "llm_repair"
+                        if repair_result.action == "llm_targeted_repair"
+                        else "code_repair"
+                    ),
+                    quality=retry_quality,
+                    duration_ms=extra_eval_ms,
+                )
+            )
 
             use_retry = (
                 retry_quality.passed_hard_gates
@@ -223,6 +251,7 @@ class DomainOnboardingPipeline:
                 query=request.query,
                 output=selected_output,
                 quality=selected_quality,
+                quality_attempts=quality_attempts,
             )
         except PipelineExecutionHalted as error:
             trace.interrupted_stage = error.stage
@@ -240,6 +269,7 @@ class DomainOnboardingPipeline:
                 query=request.query,
                 output=partial_output,
                 quality=partial_quality,
+                quality_attempts=quality_attempts,
                 error=str(error),
             )
         except Exception as error:

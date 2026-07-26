@@ -109,11 +109,25 @@ class QualityTests(unittest.TestCase):
                 "goal_alignment",
             },
         )
+        self.assertEqual(quality.state, "passed")
+        self.assertEqual(
+            {gate.gate: gate.status for gate in quality.hard_gates},
+            {
+                "required_structure": "passed",
+                "paper_identity": "passed",
+                "evidence_support": "passed",
+            },
+        )
 
     def test_modified_paper_metadata_fails_hard_gate(self) -> None:
         self.output.papers[0].title = "Model invented title"
         quality = self.evaluator.evaluate(self.output, self.ranked)
         self.assertFalse(quality.passed_hard_gates)
+        self.assertEqual(quality.state, "failed")
+        self.assertEqual(
+            next(gate for gate in quality.hard_gates if gate.gate == "paper_identity").status,
+            "failed",
+        )
         self.assertTrue(any(issue.issue_type == "invalid_paper" for issue in quality.issues))
 
     def test_content_completeness_cannot_offset_invalid_paper(self) -> None:

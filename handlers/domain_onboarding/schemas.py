@@ -448,6 +448,7 @@ class PipelineResult(OnboardingModel):
     query: str
     output: DomainOnboardingOutput | None = None
     quality: ContentQuality | None = None
+    quality_attempts: list[QualityAttempt] = Field(default_factory=list)
     error: str | None = None
 
     def to_response(self) -> dict[str, Any]:
@@ -459,6 +460,9 @@ class PipelineResult(OnboardingModel):
             mode=self.mode,
             query=self.query,
             quality=self.quality.model_dump(mode="json") if self.quality else None,
+            quality_attempts=[
+                attempt.model_dump(mode="json") for attempt in self.quality_attempts
+            ],
         )
         if self.error:
             payload["error"] = self.error
