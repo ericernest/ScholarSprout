@@ -363,12 +363,29 @@ class DomainOnboardingPipeline:
             "retrieval_request_count": stats.request_count,
             "retrieval_source_success_count": stats.source_success_count,
             "retrieval_source_failure_count": stats.source_failure_count,
+            "retrieval_rate_limit_count": stats.rate_limit_count,
+            "retrieval_stale_cache_hit_count": stats.stale_cache_hit_count,
+            "retrieval_circuit_open_count": stats.circuit_open_count,
         }
         for field_name, value in values.items():
             if accumulate:
                 setattr(trace, field_name, int(getattr(trace, field_name)) + value)
             else:
                 setattr(trace, field_name, value)
+        provider_values = {
+            name: provider.model_dump(mode="json", exclude={"provider"})
+            for name, provider in stats.providers.items()
+        }
+        if not accumulate:
+            trace.retrieval_provider_stats = provider_values
+            return
+        for name, provider in provider_values.items():
+            current = trace.retrieval_provider_stats.setdefault(name, {})
+            for field_name, value in provider.items():
+                if isinstance(value, bool):
+                    current[field_name] = bool(current.get(field_name, False) or value)
+                elif isinstance(value, (int, float)):
+                    current[field_name] = current.get(field_name, 0) + value
 
 
 def create_default_pipeline(
@@ -409,6 +426,9 @@ def create_default_pipeline(
                 ),
             ],
             max_workers=settings.retrieval_source_workers,
+            circuit_failure_threshold=settings.retrieval_circuit_failure_threshold,
+            circuit_cooldown_seconds=settings.retrieval_circuit_cooldown_seconds,
+            stale_cache_seconds=settings.retrieval_stale_cache_seconds,
         ),
         ranker=WeightedPaperRanker(settings),
         generator=generator,

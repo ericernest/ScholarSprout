@@ -39,6 +39,9 @@ class DomainOnboardingConfig(BaseModel):
     retrieval_cache_ttl_seconds: float = Field(default=3600.0, ge=0.0, le=86400.0)
     retrieval_cache_max_entries: int = Field(default=256, ge=0, le=4096)
     retrieval_source_workers: int = Field(default=3, ge=1, le=8)
+    retrieval_circuit_failure_threshold: int = Field(default=3, ge=1, le=20)
+    retrieval_circuit_cooldown_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
+    retrieval_stale_cache_seconds: float = Field(default=86400.0, ge=0.0, le=604800.0)
     arxiv_min_interval_seconds: float = Field(default=3.0, ge=0.0, le=10.0)
 
     @model_validator(mode="after")

@@ -7,14 +7,24 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from time import monotonic, sleep
+from time import monotonic, perf_counter, sleep
 from typing import Any, Callable, Protocol
 
 import httpx
 from pydantic import ValidationError
 
-from .retrieval_resilience import ResilientHTTPClient, RetrievalRetryPolicy, TTLQueryCache
-from .schemas import PaperCandidate, RetrievalResult, RetrievalStats
+from .retrieval_resilience import (
+    ProviderCircuitBreaker,
+    ResilientHTTPClient,
+    RetrievalRetryPolicy,
+    TTLQueryCache,
+)
+from .schemas import (
+    PaperCandidate,
+    ProviderRetrievalStats,
+    RetrievalResult,
+    RetrievalStats,
+)
 
 
 class PaperRetrievalError(RuntimeError):
@@ -72,13 +82,32 @@ class _ResilientRetriever:
             retry_count=self._http.retry_count,
             cache_hit_count=cache_hits,
             request_count=self._http.request_count,
+            rate_limit_count=self._http.rate_limit_count,
         )
+
+    def stale_results(
+        self,
+        queries: list[str],
+        *,
+        limit_per_query: int,
+        max_stale_seconds: float,
+    ) -> list[PaperCandidate]:
+        papers: list[PaperCandidate] = []
+        for query in queries:
+            cached = self._cache.get_stale(
+                self._cache_key(query, limit_per_query),
+                max_stale_seconds=max_stale_seconds,
+            )
+            if cached is not None:
+                papers.extend(cached)
+        return papers
 
     def clear_cache(self) -> None:
         self._cache.clear()
 
 
 class SemanticScholarRetriever(_ResilientRetriever):
+    source_name = "semantic_scholar"
     endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
 
     def __init__(
@@ -175,6 +204,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
 
 
 class ArxivRetriever(_ResilientRetriever):
+    source_name = "arxiv"
     endpoint = "https://export.arxiv.org/api/query"
     atom_namespace = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -291,6 +321,7 @@ class ArxivRetriever(_ResilientRetriever):
 
 
 class CrossrefRetriever(_ResilientRetriever):
+    source_name = "crossref"
     endpoint = "https://api.crossref.org/works"
 
     def __init__(
@@ -412,51 +443,186 @@ class CrossrefRetriever(_ResilientRetriever):
 class CompositePaperRetriever:
     """并发调用独立来源，隔离失败，并保持来源声明顺序合并结果。"""
 
-    def __init__(self, retrievers: list[PaperRetriever], *, max_workers: int | None = None):
+    def __init__(
+        self,
+        retrievers: list[PaperRetriever],
+        *,
+        max_workers: int | None = None,
+        circuit_failure_threshold: int = 3,
+        circuit_cooldown_seconds: float = 30.0,
+        stale_cache_seconds: float = 86400.0,
+        clock: Callable[[], float] = monotonic,
+    ):
         if not retrievers:
             raise ValueError("at least one paper retriever is required")
         self.retrievers = retrievers
         self.max_workers = max_workers or len(retrievers)
         if self.max_workers < 1:
             raise ValueError("max_workers must be positive")
+        self.stale_cache_seconds = stale_cache_seconds
+        self._clock = clock
+        self._circuits = {
+            self._source_name(retriever): ProviderCircuitBreaker(
+                failure_threshold=circuit_failure_threshold,
+                cooldown_seconds=circuit_cooldown_seconds,
+                clock=clock,
+            )
+            for retriever in retrievers
+        }
+
     def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
-        source_batches: list[list[PaperCandidate]] = []
+        source_batches: dict[int, list[PaperCandidate]] = {}
         combined_stats = RetrievalStats()
         workers = min(self.max_workers, len(self.retrievers))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="paper-retrieval") as executor:
-            futures = [
-                executor.submit(retriever.search, queries, limit_per_query=limit_per_query)
-                for retriever in self.retrievers
-            ]
-            for retriever, future in zip(self.retrievers, futures, strict=True):
-                source_name = type(retriever).__name__
-                try:
-                    source_result = future.result()
-                except Exception as error:
-                    combined_stats.source_failure_count += 1
-                    combined_stats.errors.append(f"{source_name}: {error}")
-                    if isinstance(error, PaperRetrievalError):
-                        provider_stats = error.stats.model_copy(deep=True)
-                        provider_stats.errors = [
-                            f"{source_name}: {message}" for message in provider_stats.errors
-                        ]
-                        combined_stats.add(provider_stats)
-                    source_batches.append([])
-                else:
-                    combined_stats.source_success_count += 1
-                    source_batches.append(source_result.papers)
-                    provider_stats = source_result.stats.model_copy(deep=True)
-                    provider_stats.errors = [
-                        f"{source_name}: {message}" for message in provider_stats.errors
-                    ]
-                    combined_stats.add(provider_stats)
-        results = self._interleave_sources(source_batches)
+            futures: dict[int, Any] = {}
+            for index, retriever in enumerate(self.retrievers):
+                source_name = self._source_name(retriever)
+                circuit = self._circuits[source_name]
+                if not circuit.allow_request():
+                    stale = self._stale_results(retriever, queries, limit_per_query)
+                    source_batches[index] = stale
+                    provider = ProviderRetrievalStats(
+                        provider=source_name,
+                        success=False,
+                        result_count=len(stale),
+                        error_count=1,
+                        circuit_open=True,
+                        circuit_skipped=True,
+                        stale_cache_used=bool(stale),
+                    )
+                    self._add_provider_stats(combined_stats, provider)
+                    combined_stats.errors.append(f"{source_name}: circuit open")
+                    continue
+                futures[index] = executor.submit(
+                    self._search_source,
+                    retriever,
+                    queries,
+                    limit_per_query,
+                )
+
+            for index, future in futures.items():
+                retriever = self.retrievers[index]
+                source_name = self._source_name(retriever)
+                source_result, error, latency_ms = future.result()
+                if error is None and source_result is not None:
+                    self._circuits[source_name].record_success()
+                    source_batches[index] = source_result.papers
+                    provider = self._provider_stats(
+                        source_name,
+                        source_result.stats,
+                        success=True,
+                        result_count=len(source_result.papers),
+                        latency_ms=latency_ms,
+                    )
+                    self._add_provider_stats(combined_stats, provider)
+                    combined_stats.errors.extend(
+                        f"{source_name}: {message}" for message in source_result.stats.errors
+                    )
+                    continue
+
+                self._circuits[source_name].record_failure()
+                error_stats = error.stats if isinstance(error, PaperRetrievalError) else RetrievalStats()
+                stale = self._stale_results(retriever, queries, limit_per_query)
+                source_batches[index] = stale
+                provider = self._provider_stats(
+                    source_name,
+                    error_stats,
+                    success=False,
+                    result_count=len(stale),
+                    latency_ms=latency_ms,
+                    circuit_open=self._circuits[source_name].is_open,
+                    stale_cache_used=bool(stale),
+                )
+                provider.error_count = max(1, provider.error_count)
+                self._add_provider_stats(combined_stats, provider)
+                combined_stats.errors.append(f"{source_name}: {error}")
+                combined_stats.errors.extend(
+                    f"{source_name}: {message}" for message in error_stats.errors
+                )
+
+        ordered_batches = [source_batches.get(index, []) for index in range(len(self.retrievers))]
+        results = self._interleave_sources(ordered_batches)
         if not results:
             raise PaperRetrievalError(
                 "all configured paper data sources failed",
                 stats=combined_stats,
             )
         return RetrievalResult(papers=results, stats=combined_stats)
+
+    @staticmethod
+    def _source_name(retriever: PaperRetriever) -> str:
+        return str(
+            getattr(retriever, "source_name", type(retriever).__name__)
+        ).strip().lower()
+
+    @staticmethod
+    def _search_source(
+        retriever: PaperRetriever,
+        queries: list[str],
+        limit_per_query: int,
+    ) -> tuple[RetrievalResult | None, Exception | None, float]:
+        started = perf_counter()
+        try:
+            result = retriever.search(queries, limit_per_query=limit_per_query)
+            return result, None, round((perf_counter() - started) * 1000, 3)
+        except Exception as error:
+            return None, error, round((perf_counter() - started) * 1000, 3)
+
+    def _stale_results(
+        self,
+        retriever: PaperRetriever,
+        queries: list[str],
+        limit_per_query: int,
+    ) -> list[PaperCandidate]:
+        stale = getattr(retriever, "stale_results", None)
+        if not callable(stale):
+            return []
+        return stale(
+            queries,
+            limit_per_query=limit_per_query,
+            max_stale_seconds=self.stale_cache_seconds,
+        )
+
+    @staticmethod
+    def _provider_stats(
+        source_name: str,
+        stats: RetrievalStats,
+        *,
+        success: bool,
+        result_count: int,
+        latency_ms: float,
+        circuit_open: bool = False,
+        stale_cache_used: bool = False,
+    ) -> ProviderRetrievalStats:
+        return ProviderRetrievalStats(
+            provider=source_name,
+            success=success,
+            latency_ms=latency_ms,
+            result_count=result_count,
+            error_count=len(stats.errors),
+            retry_count=stats.retry_count,
+            cache_hit_count=stats.cache_hit_count,
+            request_count=stats.request_count,
+            rate_limit_count=stats.rate_limit_count,
+            circuit_open=circuit_open,
+            stale_cache_used=stale_cache_used,
+        )
+
+    @staticmethod
+    def _add_provider_stats(
+        combined: RetrievalStats,
+        provider: ProviderRetrievalStats,
+    ) -> None:
+        combined.providers[provider.provider] = provider
+        combined.source_success_count += int(provider.success)
+        combined.source_failure_count += int(not provider.success)
+        combined.retry_count += provider.retry_count
+        combined.cache_hit_count += provider.cache_hit_count
+        combined.request_count += provider.request_count
+        combined.rate_limit_count += provider.rate_limit_count
+        combined.stale_cache_hit_count += int(provider.stale_cache_used)
+        combined.circuit_open_count += int(provider.circuit_open)
 
     @staticmethod
     def _interleave_sources(

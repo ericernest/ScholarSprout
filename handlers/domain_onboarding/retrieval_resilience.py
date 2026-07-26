@@ -57,6 +57,19 @@ class TTLQueryCache(Generic[T]):
                 return None
             expires_at, value = item
             if expires_at <= self._clock():
+                return None
+            self._values.move_to_end(key)
+            return deepcopy(value)
+
+    def get_stale(self, key: str, *, max_stale_seconds: float) -> T | None:
+        if max_stale_seconds <= 0 or self.max_entries <= 0:
+            return None
+        with self._lock:
+            item = self._values.get(key)
+            if item is None:
+                return None
+            expires_at, value = item
+            if expires_at + max_stale_seconds <= self._clock():
                 self._values.pop(key, None)
                 return None
             self._values.move_to_end(key)
@@ -97,10 +110,12 @@ class ResilientHTTPClient:
         self._next_request_at = 0.0
         self.retry_count = 0
         self.request_count = 0
+        self.rate_limit_count = 0
 
     def reset_stats(self) -> None:
         self.retry_count = 0
         self.request_count = 0
+        self.rate_limit_count = 0
 
     def get(self, url: str, *, params: dict[str, Any]) -> Any:
         last_error: httpx.HTTPError | None = None
@@ -120,6 +135,8 @@ class ResilientHTTPClient:
             if status_code is None:
                 response.raise_for_status()
                 return response
+            if status_code == 429:
+                self.rate_limit_count += 1
             if status_code in self.retry_policy.retry_status_codes:
                 if attempt >= self.retry_policy.max_attempts:
                     response.raise_for_status()
@@ -162,3 +179,55 @@ class ResilientHTTPClient:
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+class ProviderCircuitBreaker:
+    """线程安全的连续失败熔断器；冷却后允许一次探测请求。"""
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int,
+        cooldown_seconds: float,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be positive")
+        if cooldown_seconds < 0:
+            raise ValueError("cooldown_seconds must not be negative")
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+        self._clock = clock
+        self._lock = Lock()
+        self._consecutive_failures = 0
+        self._opened_at: float | None = None
+        self._probe_in_flight = False
+
+    def allow_request(self) -> bool:
+        with self._lock:
+            if self._opened_at is None:
+                return True
+            if self._clock() - self._opened_at < self.cooldown_seconds:
+                return False
+            if self._probe_in_flight:
+                return False
+            self._probe_in_flight = True
+            return True
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._opened_at = None
+            self._probe_in_flight = False
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._consecutive_failures += 1
+            self._probe_in_flight = False
+            if self._consecutive_failures >= self.failure_threshold:
+                self._opened_at = self._clock()
+
+    @property
+    def is_open(self) -> bool:
+        with self._lock:
+            return self._opened_at is not None
