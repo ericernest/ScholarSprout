@@ -14,9 +14,10 @@ from .generator import GenerationError, StructuredOnboardingGenerator
 from .metrics import DomainOnboardingRequestTrace
 from .planner import StormLitePlanner
 from .profile import RuleBasedProfileBuilder
-from .quality import CompositeQualityEvaluator, critical_dimensions_not_regressed
+from .quality import CompositeQualityEvaluator
 from .ranking import WeightedPaperRanker
 from .repair import TargetedRepairer
+from .repair_selection import RepairSelectionPolicy
 from .retrieval import (
     ArxivRetriever,
     CompositePaperRetriever,
@@ -32,6 +33,7 @@ from .schemas import (
     PipelineResult,
     QualityAttempt,
     RankingStats,
+    RepairRecord,
     RetrievalStats,
 )
 
@@ -49,6 +51,7 @@ class DomainOnboardingPipeline:
         repairer: Any,
         config: DomainOnboardingConfig,
         coverage_analyzer: Any | None = None,
+        selection_policy: RepairSelectionPolicy | None = None,
     ) -> None:
         self.profile_builder = profile_builder
         self.planner = planner
@@ -59,6 +62,9 @@ class DomainOnboardingPipeline:
         self.repairer = repairer
         self.config = config
         self.coverage_analyzer = coverage_analyzer or PaperCoverageAnalyzer(config)
+        self.selection_policy = selection_policy or RepairSelectionPolicy(
+            config.min_improvement_delta
+        )
 
     def run(
         self,
@@ -72,6 +78,7 @@ class DomainOnboardingPipeline:
         partial_output = None
         partial_quality = None
         quality_attempts: list[QualityAttempt] = []
+        partial_repair_record: RepairRecord | None = None
         try:
             profile, trace.profile_duration_ms = context.call(
                 "profile",
@@ -191,8 +198,13 @@ class DomainOnboardingPipeline:
                     output=output,
                     quality=first_quality,
                     quality_attempts=quality_attempts,
+                    repair_record=RepairRecord(
+                        triggered=False,
+                        decision=self.selection_policy.initial(first_quality),
+                    ),
                 )
 
+            partial_repair_record = RepairRecord(triggered=True)
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
                 self.config.repair_timeout_seconds,
@@ -205,6 +217,7 @@ class DomainOnboardingPipeline:
                 ranked,
             )
             repaired = repair_result.output
+            partial_repair_record = repair_result.record
             trace.repair_reason = repair_result.action
             self._record_retry_model_stats(trace, repair_result.stats)
             retry_quality, extra_eval_ms = context.call(
@@ -228,11 +241,13 @@ class DomainOnboardingPipeline:
                 )
             )
 
-            use_retry = (
-                retry_quality.passed_hard_gates
-                and retry_quality.score >= first_quality.score + self.config.min_improvement_delta
-                and critical_dimensions_not_regressed(first_quality, retry_quality)
+            decision = self.selection_policy.decide(
+                first_quality,
+                retry_quality,
+                repair_result.record,
             )
+            repair_result.record.decision = decision
+            use_retry = decision.decision == "repaired_selected"
             if use_retry:
                 retry_quality = self._with_retry(retry_quality, selected=2, status="improved")
                 trace.retry_status = "improved"
@@ -252,6 +267,7 @@ class DomainOnboardingPipeline:
                 output=selected_output,
                 quality=selected_quality,
                 quality_attempts=quality_attempts,
+                repair_record=repair_result.record,
             )
         except PipelineExecutionHalted as error:
             trace.interrupted_stage = error.stage
@@ -270,6 +286,7 @@ class DomainOnboardingPipeline:
                 output=partial_output,
                 quality=partial_quality,
                 quality_attempts=quality_attempts,
+                repair_record=partial_repair_record,
                 error=str(error),
             )
         except Exception as error:
