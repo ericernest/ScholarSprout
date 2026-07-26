@@ -431,6 +431,10 @@ class RepairRecord(OnboardingModel):
     decision: RepairDecision | None = None
 
 
+class RepairPlan(OnboardingModel):
+    actions: list[RepairActionRecord] = Field(default_factory=list)
+
+
 class PipelineResult(OnboardingModel):
     status: Literal[
         "ok",
@@ -556,3 +560,4 @@ class RepairResult(OnboardingModel):
         "llm_repair_failed",
     ]
     stats: ModelCallStats = Field(default_factory=ModelCallStats)
+    record: RepairRecord = Field(default_factory=RepairRecord)

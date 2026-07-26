@@ -7,6 +7,7 @@ from handlers.domain_onboarding.generator import StructuredOnboardingGenerator
 from handlers.domain_onboarding.quality import CompositeQualityEvaluator
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
+from handlers.domain_onboarding.repair_planning import RepairPlanner
 from handlers.domain_onboarding.schemas import (
     DomainOnboardingRequest,
     EvidenceClaim,
@@ -201,6 +202,22 @@ class QualityTests(unittest.TestCase):
 
 
 class RepairTests(unittest.TestCase):
+    def test_repair_planner_links_actions_to_quality_issues(self) -> None:
+        quality = CompositeQualityEvaluator(DomainOnboardingConfig()).evaluate(
+            self._invalid_output(),
+            self._ranked(),
+        )
+
+        plan = RepairPlanner().plan(quality, max_content_repairs=1)
+
+        self.assertTrue(plan.actions)
+        self.assertTrue(all(action.issue_ids for action in plan.actions))
+        self.assertTrue(all(action.target_paths for action in plan.actions))
+        self.assertEqual(
+            {action.action_type for action in plan.actions},
+            {"code", "llm"},
+        )
+
     def test_code_repair_removes_invalid_ids_and_repairs_numbering(self) -> None:
         config = DomainOnboardingConfig(max_content_repairs=0)
         ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
@@ -222,6 +239,11 @@ class RepairTests(unittest.TestCase):
         )
         self.assertEqual(repair_result.output.learning_path[0].step, "1")
         self.assertNotIn("invalid", repair_result.output.learning_path[0].paper_ids)
+        self.assertTrue(repair_result.record.triggered)
+        self.assertEqual(repair_result.record.actions[0].status, "applied")
+        self.assertTrue(
+            any(action.status == "skipped" for action in repair_result.record.actions)
+        )
 
     def test_targeted_repair_prompt_receives_quality_issues(self) -> None:
         config = DomainOnboardingConfig()
@@ -250,7 +272,55 @@ class RepairTests(unittest.TestCase):
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), output, quality, ranked
         )
         self.assertEqual(repair_result.action, "llm_targeted_repair")
+        self.assertEqual(repair_result.record.actions[-1].status, "applied")
         self.assertIn("repair_issues", model.calls[-1]["messages"][1]["content"])
+
+    def test_failed_llm_repair_is_recorded_with_error(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = self._ranked()
+        output = self._invalid_output()
+        quality = CompositeQualityEvaluator(config).evaluate(output, ranked)
+        generator = StructuredOnboardingGenerator(FakeJSONModel(["not json"]), config)
+
+        result = TargetedRepairer(generator, config).repair(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            output,
+            quality,
+            ranked,
+        )
+
+        llm_action = next(
+            action for action in result.record.actions if action.action_type == "llm"
+        )
+        self.assertEqual(result.action, "llm_repair_failed")
+        self.assertEqual(llm_action.status, "failed")
+        self.assertTrue(llm_action.error)
+
+    @staticmethod
+    def _ranked():
+        config = DomainOnboardingConfig()
+        return WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+
+    @classmethod
+    def _invalid_output(cls):
+        config = DomainOnboardingConfig()
+        ranked = cls._ranked()
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+        ).output
+        output.text = "太短"
+        output.development_stages = output.development_stages[:1]
+        return output
 
 
 if __name__ == "__main__":
