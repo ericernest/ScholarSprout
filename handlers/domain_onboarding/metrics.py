@@ -54,8 +54,16 @@ class DomainOnboardingRequestTrace:
 
     first_dimensions: dict[str, float] = field(default_factory=dict)
     final_dimensions: dict[str, float] = field(default_factory=dict)
+    first_quality_state: str = "not_evaluated"
+    final_quality_state: str = "not_evaluated"
+    first_issue_type_counts: dict[str, int] = field(default_factory=dict)
+    hard_gate_failure_counts: dict[str, int] = field(default_factory=dict)
     quality_delta: float = 0.0
     repair_reason: str = "not_needed"
+    repair_action_status_counts: dict[str, int] = field(default_factory=dict)
+    repair_selection_reasons: list[str] = field(default_factory=list)
+    repair_changed_path_count: int = 0
+    repair_dimension_deltas: dict[str, float] = field(default_factory=dict)
     retrieval_error_count: int = 0
     retrieval_retry_count: int = 0
     retrieval_cache_hit_count: int = 0
@@ -134,6 +142,14 @@ class DomainOnboardingMetrics:
         self._first_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._final_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._quality_deltas: deque[float] = deque(maxlen=window_size)
+        self._first_quality_states: Counter[str] = Counter()
+        self._final_quality_states: Counter[str] = Counter()
+        self._issue_type_counts: Counter[str] = Counter()
+        self._hard_gate_failure_counts: Counter[str] = Counter()
+        self._repair_action_status_counts: Counter[str] = Counter()
+        self._repair_selection_reasons: Counter[str] = Counter()
+        self._repair_changed_path_counts: deque[int] = deque(maxlen=window_size)
+        self._repair_dimension_deltas: dict[str, list[float]] = defaultdict(list)
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -194,6 +210,18 @@ class DomainOnboardingMetrics:
             for name, value in trace.final_dimensions.items():
                 self._final_dimension_values[name].append(value)
             self._quality_deltas.append(trace.quality_delta)
+            if trace.first_quality_state != "not_evaluated":
+                self._first_quality_states[trace.first_quality_state] += 1
+            if trace.final_quality_state != "not_evaluated":
+                self._final_quality_states[trace.final_quality_state] += 1
+            self._issue_type_counts.update(trace.first_issue_type_counts)
+            self._hard_gate_failure_counts.update(trace.hard_gate_failure_counts)
+            self._repair_action_status_counts.update(trace.repair_action_status_counts)
+            self._repair_selection_reasons.update(trace.repair_selection_reasons)
+            if trace.retry_attempted:
+                self._repair_changed_path_counts.append(trace.repair_changed_path_count)
+            for name, value in trace.repair_dimension_deltas.items():
+                self._repair_dimension_deltas[name].append(value)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -229,6 +257,16 @@ class DomainOnboardingMetrics:
                     ),
                     "reasons": dict(self._repair_reasons),
                 },
+                "repair": {
+                    "actions": dict(self._repair_action_status_counts),
+                    "selection_reasons": dict(self._repair_selection_reasons),
+                    "changed_paths": self._count_summary(
+                        list(self._repair_changed_path_counts)
+                    ),
+                    "dimension_deltas": self._dimension_averages(
+                        self._repair_dimension_deltas
+                    ),
+                },
                 "latency": {
                     "request": _duration_summary(list(self._request_durations)),
                     "first_call": _duration_summary(list(self._first_call_durations)),
@@ -253,6 +291,10 @@ class DomainOnboardingMetrics:
                 },
                 "evidence": dict(self._evidence_totals),
                 "quality": {
+                    "first_states": dict(self._first_quality_states),
+                    "final_states": dict(self._final_quality_states),
+                    "issue_types": dict(self._issue_type_counts),
+                    "hard_gate_failures": dict(self._hard_gate_failure_counts),
                     "first_dimensions": self._dimension_averages(self._first_dimension_values),
                     "final_dimensions": self._dimension_averages(self._final_dimension_values),
                     "average_delta": round(fmean(self._quality_deltas), 6) if self._quality_deltas else 0.0,
@@ -312,3 +354,11 @@ class DomainOnboardingMetrics:
     @staticmethod
     def _dimension_averages(values: dict[str, list[float]]) -> dict[str, float]:
         return {name: round(fmean(items), 6) for name, items in values.items() if items}
+
+    @staticmethod
+    def _count_summary(values: list[int]) -> dict[str, int | float]:
+        return {
+            "count": len(values),
+            "total": sum(values),
+            "average": round(fmean(values), 3) if values else 0.0,
+        }

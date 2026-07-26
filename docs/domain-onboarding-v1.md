@@ -126,6 +126,7 @@ export CROSSREF_MAILTO="researcher@example.org"
 
 - `structure`；
 - `paper_validity`；
+- `evidence_grounding`；
 - `topic_coverage`；
 - `development_coherence`；
 - `learning_path`；
@@ -138,6 +139,20 @@ export CROSSREF_MAILTO="researcher@example.org"
 Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈值时返回 `ok`；
 通过硬门槛但低于阈值时返回 `quality_warning`；未通过硬门槛时返回
 `quality_failed`。后两者仍携带结构化输出和质量问题，便于前端提示和定位修复点。
+
+`quality_attempts` 保留首次与修复后的完整评估，不会因最终选择某一版而丢失
+未选中候选的评分与问题。`repair_record` 记录修复动作、问题 ID、目标路径、
+实际变更路径、前后指纹以及结果选择决策。旧的 `score`、`attempts`、
+`selected_attempt` 和 `retry_status` 字段继续保留，以保持客户端兼容。
+
+修复结果选择原因使用稳定代码，包括：
+
+- `quality_threshold_met`；
+- `significant_improvement`；
+- `hard_gate_failed`；
+- `improvement_too_small`；
+- `critical_dimension_regressed`；
+- `repair_execution_failed`。
 
 输出中的关键技术与历史论述通过 `evidence_claims` 绑定已验证 `paper_id`，并区分
 `abstract_explicit`、`metadata_inference` 和 `background_synthesis`。质量评估会检查
@@ -160,6 +175,10 @@ Metrics 的 `model_usage` 分别聚合 `primary`、`retry` 和 `total` 调用。
 返回非法 JSON，响应中的 token 仍会计入；如果请求在获得 usage 前发生网络异常，
 仍记录模型调用次数和耗时，并增加 `unreported_usage_calls`。只有所有已发生调用都
 报告 usage 时，`usage_complete` 才为 `true`，避免把不完整 token 当作完整成本。
+
+Metrics 同时聚合首次和最终质量状态、问题类型、失败硬门槛、修复动作状态、
+选择原因、变更路径数量与维度改善值。这些指标只记录结构化摘要，不记录 Prompt、
+API Key 或完整生成内容。
 
 ## 测试
 

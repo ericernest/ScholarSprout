@@ -420,6 +420,47 @@ class PipelineTests(unittest.TestCase):
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
+    def test_metrics_aggregate_quality_and_repair_audit_fields(self) -> None:
+        metrics = DomainOnboardingMetrics()
+        metrics.record(
+            DomainOnboardingRequestTrace(
+                status="quality_warning",
+                retry_status="not_improved",
+                repair_reason="llm_targeted_repair",
+                first_quality_state="failed",
+                final_quality_state="warning",
+                first_issue_type_counts={"structure_error": 1, "missing_coverage": 2},
+                hard_gate_failure_counts={"required_structure": 1},
+                repair_action_status_counts={
+                    "code:applied": 1,
+                    "llm:failed": 1,
+                },
+                repair_selection_reasons=[
+                    "improvement_too_small",
+                    "repair_execution_failed",
+                ],
+                repair_changed_path_count=3,
+                repair_dimension_deltas={"structure": 0.2},
+            )
+        )
+
+        snapshot = metrics.snapshot()
+
+        self.assertEqual(snapshot["quality"]["first_states"], {"failed": 1})
+        self.assertEqual(snapshot["quality"]["final_states"], {"warning": 1})
+        self.assertEqual(snapshot["quality"]["issue_types"]["missing_coverage"], 2)
+        self.assertEqual(
+            snapshot["quality"]["hard_gate_failures"],
+            {"required_structure": 1},
+        )
+        self.assertEqual(snapshot["repair"]["actions"]["llm:failed"], 1)
+        self.assertEqual(
+            snapshot["repair"]["selection_reasons"]["repair_execution_failed"],
+            1,
+        )
+        self.assertEqual(snapshot["repair"]["changed_paths"]["total"], 3)
+        self.assertEqual(snapshot["repair"]["dimension_deltas"]["structure"], 0.2)
+
     def test_metrics_aggregate_timeout_and_interrupted_stage(self) -> None:
         metrics = DomainOnboardingMetrics()
         metrics.record(
@@ -497,6 +538,11 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("planning", snapshot["stage_latency"])
         self.assertGreaterEqual(snapshot["ranking"]["vectorizer_backends"]["tfidf"], 1)
         self.assertGreater(snapshot["evidence"]["evidence_claim_count"], 0)
+        self.assertEqual(snapshot["quality"]["final_states"]["passed"], 1)
+        self.assertEqual(
+            snapshot["repair"]["selection_reasons"]["quality_threshold_met"],
+            1,
+        )
 
     def test_handler_preserves_quality_warning_and_records_status(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
@@ -531,6 +577,7 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("quality", response)
         self.assertTrue(response["papers"])
         self.assertEqual(metrics.snapshot()["statuses"]["quality_warning"], 1)
+        self.assertTrue(metrics.snapshot()["repair"]["actions"])
 
     def test_empty_input_is_recorded(self) -> None:
         metrics = DomainOnboardingMetrics()
