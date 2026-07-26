@@ -1,0 +1,578 @@
+"""领域入门 V1 的模块间稳定数据契约。"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+Preference = Literal["theory_first", "experiment_first", "balanced"]
+PaperRole = Literal["survey", "foundational", "method", "evaluation", "frontier", "other"]
+QualityDimension = Literal[
+    "structure",
+    "paper_validity",
+    "evidence_grounding",
+    "topic_coverage",
+    "development_coherence",
+    "learning_path",
+    "goal_alignment",
+]
+QualityState = Literal["passed", "warning", "failed"]
+QualityGateStatus = Literal["passed", "failed", "not_evaluated"]
+Repairability = Literal["code", "llm", "retrieval", "manual", "none"]
+QualityAttemptSource = Literal["initial", "code_repair", "llm_repair"]
+RepairActionType = Literal["code", "llm", "retrieval"]
+RepairActionStatus = Literal["planned", "applied", "skipped", "failed"]
+RepairSelection = Literal["initial_selected", "repaired_selected", "initial_retained"]
+RepairDecisionReason = Literal[
+    "quality_threshold_met",
+    "significant_improvement",
+    "hard_gate_failed",
+    "improvement_too_small",
+    "critical_dimension_regressed",
+    "repair_execution_failed",
+    "repair_output_invalid",
+]
+QualityIssueType = Literal[
+    "structure_error",
+    "invalid_paper",
+    "missing_coverage",
+    "weak_development_stage",
+    "route_conflict",
+    "beginner_mismatch",
+    "format_error",
+    "missing_evidence",
+    "unsupported_claim",
+]
+RetryStatus = Literal[
+    "not_needed",
+    "improved",
+    "not_improved",
+    "invalid_response",
+    "llm_failed",
+    "retrieval_failed",
+]
+
+_ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
+    "structure_error": "structure",
+    "invalid_paper": "paper_validity",
+    "missing_coverage": "topic_coverage",
+    "weak_development_stage": "development_coherence",
+    "route_conflict": "learning_path",
+    "beginner_mismatch": "goal_alignment",
+    "format_error": "structure",
+    "missing_evidence": "evidence_grounding",
+    "unsupported_claim": "evidence_grounding",
+}
+_HARD_GATE_ISSUES = {
+    "structure_error",
+    "invalid_paper",
+    "format_error",
+    "missing_evidence",
+    "unsupported_claim",
+}
+_ISSUE_REPAIRABILITY: dict[str, Repairability] = {
+    "structure_error": "llm",
+    "invalid_paper": "code",
+    "missing_coverage": "retrieval",
+    "weak_development_stage": "llm",
+    "route_conflict": "code",
+    "beginner_mismatch": "llm",
+    "format_error": "code",
+    "missing_evidence": "llm",
+    "unsupported_claim": "llm",
+}
+
+DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
+ARXIV_ID_PATTERN = re.compile(
+    r"^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z-]+)?/\d{7})$",
+    re.IGNORECASE,
+)
+
+
+def stable_id(prefix: str, value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:36]
+    digest = hashlib.sha1(value.strip().lower().encode("utf-8")).hexdigest()[:10]
+    return f"{prefix}_{normalized or 'item'}_{digest}"
+
+
+class OnboardingModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+
+class DomainOnboardingRequest(OnboardingModel):
+    query: str
+    session_id: str | None = None
+    user_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        query = value.strip()
+        if not query:
+            raise ValueError("query must not be empty")
+        return query
+
+
+class LearnerProfile(OnboardingModel):
+    background: list[str] = Field(default_factory=list)
+    goal: str = "建立领域基础认知并具备阅读代表论文的能力"
+    time_budget_weeks: int | None = Field(default=None, ge=1, le=260)
+    preference: Preference = "balanced"
+    known_concepts: list[str] = Field(default_factory=list)
+
+
+class ResearchPerspective(OnboardingModel):
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    questions: list[str] = Field(default_factory=list)
+
+
+class DomainResearchPlan(OnboardingModel):
+    normalized_domain: str = Field(min_length=1)
+    perspectives: list[ResearchPerspective] = Field(min_length=3)
+    search_queries: list[str] = Field(min_length=1)
+    expected_subdirections: list[str] = Field(min_length=3)
+
+    @model_validator(mode="after")
+    def deduplicate(self) -> "DomainResearchPlan":
+        self.search_queries = list(dict.fromkeys(q.strip() for q in self.search_queries if q.strip()))
+        self.expected_subdirections = list(
+            dict.fromkeys(s.strip() for s in self.expected_subdirections if s.strip())
+        )
+        return self
+
+
+class CoverageGap(OnboardingModel):
+    subdirection_id: str
+    subdirection: str
+    missing_roles: list[PaperRole] = Field(default_factory=list)
+    reason: str
+    supplemental_queries: list[str] = Field(default_factory=list)
+
+
+class CoverageAnalysis(OnboardingModel):
+    gaps: list[CoverageGap] = Field(default_factory=list)
+    covered_subdirections: dict[str, list[str]] = Field(default_factory=dict)
+    covered_roles: list[PaperRole] = Field(default_factory=list)
+
+
+class PaperCandidate(OnboardingModel):
+    paper_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    abstract: str | None = None
+    year: int | None = Field(default=None, ge=1800, le=2100)
+    url: str
+    citation_count: int | None = Field(default=None, ge=0)
+    source: str
+    matched_queries: list[str] = Field(default_factory=list)
+    doi: str | None = None
+    arxiv_id: str | None = None
+    publication_types: list[str] = Field(default_factory=list)
+
+    @field_validator("paper_id", "title", "url", "source")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("paper identity fields must not be empty")
+        return value
+
+    @field_validator("doi", mode="before")
+    @classmethod
+    def normalize_doi(cls, value: object) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = re.sub(
+            r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)",
+            "",
+            str(value).strip(),
+            flags=re.IGNORECASE,
+        ).lower()
+        if not DOI_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid DOI")
+        return normalized
+
+    @field_validator("arxiv_id", mode="before")
+    @classmethod
+    def normalize_arxiv_id(cls, value: object) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = re.sub(
+            r"^(?:https?://arxiv\.org/(?:abs|pdf)/|arxiv:\s*)",
+            "",
+            str(value).strip(),
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"\.pdf$", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"v\d+$", "", normalized, flags=re.IGNORECASE).lower()
+        if not ARXIV_ID_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid arXiv identifier")
+        return normalized
+
+    @field_validator("publication_types", mode="before")
+    @classmethod
+    def normalize_publication_types(cls, value: object) -> list[str]:
+        values = value if isinstance(value, list) else ([value] if value else [])
+        return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+
+
+class RankedPaper(PaperCandidate):
+    relevance_score: float = Field(ge=0.0, le=1.0)
+    citation_score: float = Field(ge=0.0, le=1.0)
+    recency_score: float = Field(ge=0.0, le=1.0)
+    diversity_score: float = Field(ge=0.0, le=1.0)
+    final_score: float = Field(ge=0.0, le=1.0)
+    paper_role: PaperRole = "other"
+
+
+class SelectedPaper(OnboardingModel):
+    paper_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    abstract: str | None = None
+    year: int | None = None
+    url: str
+    citation_count: int | None = None
+    source: str
+    doi: str | None = None
+    arxiv_id: str | None = None
+    publication_types: list[str] = Field(default_factory=list)
+    paper_role: PaperRole = "other"
+    final_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @classmethod
+    def from_ranked(cls, paper: RankedPaper) -> "SelectedPaper":
+        return cls.model_validate(paper.model_dump())
+
+
+class PaperReference(OnboardingModel):
+    paper_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    url: str
+    contribution: str = ""
+
+
+class Prerequisite(OnboardingModel):
+    prerequisite_id: str | None = None
+    name: str
+    why_needed: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    related_paper_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "Prerequisite":
+        self.prerequisite_id = self.prerequisite_id or stable_id("pre", self.name)
+        return self
+
+
+class DevelopmentStage(OnboardingModel):
+    stage_id: str | None = None
+    name: str
+    summary: str = ""
+    motivation: str = ""
+    representative_papers: list[PaperReference] = Field(default_factory=list)
+    core_concepts: list[str] = Field(default_factory=list)
+    main_techniques: list[str] = Field(default_factory=list)
+    open_problems: list[str] = Field(default_factory=list)
+    related_paper_ids: list[str] = Field(default_factory=list)
+    prerequisite_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "DevelopmentStage":
+        self.stage_id = self.stage_id or stable_id("stage", self.name)
+        return self
+
+
+class CurrentLandscape(OnboardingModel):
+    problems: list[str] = Field(default_factory=list)
+    subdirections: list[str] = Field(default_factory=list)
+    subdirection_ids: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def ensure_ids(self) -> "CurrentLandscape":
+        self.subdirection_ids = {
+            name: self.subdirection_ids.get(name) or stable_id("sub", name)
+            for name in self.subdirections
+        }
+        return self
+
+
+class LearningStep(OnboardingModel):
+    step: str
+    goal: str = ""
+    topics: list[str] = Field(default_factory=list)
+    papers: list[PaperReference] = Field(default_factory=list)
+    paper_ids: list[str] = Field(default_factory=list)
+    activities: list[str] = Field(default_factory=list)
+    completion_criteria: list[str] = Field(default_factory=list)
+    expected_outcome: str = ""
+
+    @field_validator("step", mode="before")
+    @classmethod
+    def stringify_step(cls, value: Any) -> str:
+        return str(value).strip()
+
+
+class EvidenceClaim(OnboardingModel):
+    claim_id: str | None = None
+    claim: str = Field(min_length=1)
+    supporting_paper_ids: list[str] = Field(default_factory=list)
+    support_type: Literal[
+        "abstract_explicit",
+        "metadata_inference",
+        "background_synthesis",
+    ] = "background_synthesis"
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "EvidenceClaim":
+        self.claim_id = self.claim_id or stable_id("claim", self.claim)
+        self.supporting_paper_ids = list(dict.fromkeys(self.supporting_paper_ids))
+        return self
+
+
+class DomainOnboardingOutput(OnboardingModel):
+    domain: str
+    text: str
+    learner_profile: LearnerProfile
+    prerequisites: list[Prerequisite]
+    development_stages: list[DevelopmentStage]
+    current_landscape: CurrentLandscape
+    learning_path: list[LearningStep]
+    papers: list[SelectedPaper]
+    evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
+
+
+class QualityIssue(OnboardingModel):
+    issue_id: str | None = None
+    issue_type: QualityIssueType
+    severity: Literal["warning", "error", "critical"]
+    dimension: QualityDimension | None = None
+    hard_gate: bool | None = None
+    repairability: Repairability | None = None
+    target_path: str
+    message: str
+    recommended_action: str
+
+    @model_validator(mode="after")
+    def enrich_issue(self) -> "QualityIssue":
+        identity = f"{self.issue_type}:{self.target_path}:{self.message}"
+        self.issue_id = self.issue_id or stable_id("issue", identity)
+        self.dimension = self.dimension or _ISSUE_DIMENSIONS[self.issue_type]
+        if self.hard_gate is None:
+            self.hard_gate = (
+                self.issue_type in _HARD_GATE_ISSUES
+                and self.severity in {"error", "critical"}
+            )
+        self.repairability = self.repairability or _ISSUE_REPAIRABILITY[self.issue_type]
+        return self
+
+
+class QualityGateResult(OnboardingModel):
+    gate: str = Field(min_length=1)
+    status: QualityGateStatus
+    issue_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("issue_ids")
+    @classmethod
+    def deduplicate_issue_ids(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value for value in values if value))
+
+
+class ContentQuality(OnboardingModel):
+    score: float = Field(ge=0.0, le=1.0)
+    threshold: float = Field(ge=0.0, le=1.0)
+    passed_hard_gates: bool
+    dimensions: dict[str, float]
+    issues: list[QualityIssue] = Field(default_factory=list)
+    attempts: int = Field(default=1, ge=1, le=2)
+    selected_attempt: int = Field(default=1, ge=1, le=2)
+    retry_status: RetryStatus = "not_needed"
+    state: QualityState = "warning"
+    hard_gates: list[QualityGateResult] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def derive_state(self) -> "ContentQuality":
+        if not self.passed_hard_gates:
+            self.state = "failed"
+        elif self.score >= self.threshold:
+            self.state = "passed"
+        else:
+            self.state = "warning"
+        return self
+
+
+class QualityAttempt(OnboardingModel):
+    attempt_number: int = Field(ge=1, le=2)
+    source: QualityAttemptSource
+    quality: ContentQuality
+    duration_ms: float = Field(default=0.0, ge=0.0)
+
+
+class RepairActionRecord(OnboardingModel):
+    action_id: str
+    action_type: RepairActionType
+    status: RepairActionStatus
+    issue_ids: list[str] = Field(default_factory=list)
+    target_paths: list[str] = Field(default_factory=list)
+    changed_paths: list[str] = Field(default_factory=list)
+    before_fingerprint: str | None = None
+    after_fingerprint: str | None = None
+    error: str | None = None
+
+
+class RepairDecision(OnboardingModel):
+    selected_attempt: int = Field(ge=1, le=2)
+    decision: RepairSelection
+    reasons: list[RepairDecisionReason] = Field(default_factory=list)
+    score_delta: float = 0.0
+    dimension_deltas: dict[str, float] = Field(default_factory=dict)
+
+
+class RepairRecord(OnboardingModel):
+    triggered: bool = False
+    actions: list[RepairActionRecord] = Field(default_factory=list)
+    decision: RepairDecision | None = None
+
+
+class RepairPlan(OnboardingModel):
+    actions: list[RepairActionRecord] = Field(default_factory=list)
+
+
+class PipelineResult(OnboardingModel):
+    status: Literal[
+        "ok",
+        "quality_warning",
+        "quality_failed",
+        "invalid_input",
+        "planning_failed",
+        "retrieval_failed",
+        "generation_failed",
+        "timeout",
+        "cancelled",
+        "internal_error",
+    ]
+    mode: Literal["domain_onboarding"] = "domain_onboarding"
+    query: str
+    output: DomainOnboardingOutput | None = None
+    quality: ContentQuality | None = None
+    quality_attempts: list[QualityAttempt] = Field(default_factory=list)
+    repair_record: RepairRecord | None = None
+    error: str | None = None
+
+    def to_response(self) -> dict[str, Any]:
+        if self.output is None:
+            return self.model_dump(mode="json", exclude_none=True)
+        payload = self.output.model_dump(mode="json")
+        payload.update(
+            status=self.status,
+            mode=self.mode,
+            query=self.query,
+            quality=self.quality.model_dump(mode="json") if self.quality else None,
+            quality_attempts=[
+                attempt.model_dump(mode="json") for attempt in self.quality_attempts
+            ],
+            repair_record=(
+                self.repair_record.model_dump(mode="json")
+                if self.repair_record
+                else None
+            ),
+        )
+        if self.error:
+            payload["error"] = self.error
+        return payload
+
+
+class ModelCallStats(OnboardingModel):
+    duration_ms: float = 0.0
+    model_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    usage_reported: bool = False
+
+
+class PlanningResult(OnboardingModel):
+    plan: DomainResearchPlan
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)
+
+
+class ProviderRetrievalStats(OnboardingModel):
+    provider: str
+    success: bool = False
+    latency_ms: float = 0.0
+    result_count: int = 0
+    error_count: int = 0
+    retry_count: int = 0
+    cache_hit_count: int = 0
+    request_count: int = 0
+    rate_limit_count: int = 0
+    circuit_open: bool = False
+    circuit_skipped: bool = False
+    stale_cache_used: bool = False
+
+
+class RetrievalStats(OnboardingModel):
+    errors: list[str] = Field(default_factory=list)
+    retry_count: int = 0
+    cache_hit_count: int = 0
+    request_count: int = 0
+    source_success_count: int = 0
+    source_failure_count: int = 0
+    rate_limit_count: int = 0
+    stale_cache_hit_count: int = 0
+    circuit_open_count: int = 0
+    providers: dict[str, ProviderRetrievalStats] = Field(default_factory=dict)
+
+    def add(self, other: "RetrievalStats") -> None:
+        self.errors.extend(other.errors)
+        self.retry_count += other.retry_count
+        self.cache_hit_count += other.cache_hit_count
+        self.request_count += other.request_count
+        self.source_success_count += other.source_success_count
+        self.source_failure_count += other.source_failure_count
+        self.rate_limit_count += other.rate_limit_count
+        self.stale_cache_hit_count += other.stale_cache_hit_count
+        self.circuit_open_count += other.circuit_open_count
+        self.providers.update(other.providers)
+
+
+class RetrievalResult(OnboardingModel):
+    papers: list[PaperCandidate] = Field(default_factory=list)
+    stats: RetrievalStats = Field(default_factory=RetrievalStats)
+
+
+class RankingStats(OnboardingModel):
+    deduplicated_count: int = 0
+    invalid_count: int = 0
+    candidate_source_counts: dict[str, int] = Field(default_factory=dict)
+    mmr_scores: dict[str, float] = Field(default_factory=dict)
+    vectorizer_backend: str = "unknown"
+    vectorizer_fallback_used: bool = False
+    low_relevance_filtered_count: int = 0
+
+
+class RankingResult(OnboardingModel):
+    papers: list[RankedPaper] = Field(default_factory=list)
+    stats: RankingStats = Field(default_factory=RankingStats)
+
+
+class GenerationResult(OnboardingModel):
+    output: DomainOnboardingOutput
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)
+
+
+class RepairResult(OnboardingModel):
+    output: DomainOnboardingOutput
+    action: Literal[
+        "code_repair",
+        "llm_targeted_repair",
+        "llm_repair_failed",
+    ]
+    stats: ModelCallStats = Field(default_factory=ModelCallStats)
+    record: RepairRecord = Field(default_factory=RepairRecord)

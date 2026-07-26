@@ -1,0 +1,37 @@
+[
+  {
+    "name": "rag_mixed_candidates",
+    "domain": "retrieval augmented generation",
+    "search_queries": ["retrieval augmented generation survey", "RAG benchmark evaluation"],
+    "subdirections": ["retrieval", "generation", "evaluation"],
+    "k": 4,
+    "minimum_precision": 0.75,
+    "minimum_ndcg": 0.75,
+    "papers": [
+      {"paper_id": "rag-survey", "title": "A Survey on Retrieval-Augmented Generation", "abstract": "survey of retrieval augmented generation methods and evaluation", "year": 2023, "citation_count": 500},
+      {"paper_id": "rag-core", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "abstract": "retrieval augmented generation method using dense passage retrieval", "year": 2020, "citation_count": 2400},
+      {"paper_id": "rag-eval", "title": "Benchmarking Retrieval-Augmented Generation", "abstract": "benchmark evaluation of retrieval generation factuality", "year": 2024, "citation_count": 120},
+      {"paper_id": "rag-frontier", "title": "Self-RAG: Learning to Retrieve Generate and Critique", "abstract": "recent retrieval augmented generation framework", "year": 2025, "citation_count": 80},
+      {"paper_id": "gnn-unrelated", "title": "Graph Convolutional Networks", "abstract": "semi-supervised graph node classification", "year": 2017, "citation_count": 15000},
+      {"paper_id": "diffusion-unrelated", "title": "Diffusion Models for Image Synthesis", "abstract": "image generation with denoising diffusion", "year": 2025, "citation_count": 3000}
+    ],
+    "relevance_grades": {"rag-survey": 3, "rag-core": 3, "rag-eval": 2, "rag-frontier": 2, "gnn-unrelated": 0, "diffusion-unrelated": 0}
+  },
+  {
+    "name": "gnn_mixed_candidates",
+    "domain": "graph neural networks",
+    "search_queries": ["graph neural networks survey", "graph representation learning benchmark"],
+    "subdirections": ["message passing", "graph attention", "evaluation"],
+    "k": 3,
+    "minimum_precision": 0.666667,
+    "minimum_ndcg": 0.7,
+    "papers": [
+      {"paper_id": "gnn-survey", "title": "A Comprehensive Survey on Graph Neural Networks", "abstract": "survey of graph neural networks message passing and attention", "year": 2021, "citation_count": 5000},
+      {"paper_id": "gat", "title": "Graph Attention Networks", "abstract": "attention method for graph representation learning", "year": 2018, "citation_count": 12000},
+      {"paper_id": "gnn-benchmark", "title": "Benchmarking Graph Neural Networks", "abstract": "benchmark evaluation datasets for graph neural network models", "year": 2023, "citation_count": 800},
+      {"paper_id": "rag-unrelated", "title": "Retrieval-Augmented Generation Survey", "abstract": "retrieval for language model generation", "year": 2024, "citation_count": 3000},
+      {"paper_id": "vision-unrelated", "title": "Vision Transformer", "abstract": "transformers for image recognition", "year": 2021, "citation_count": 20000}
+    ],
+    "relevance_grades": {"gnn-survey": 3, "gat": 3, "gnn-benchmark": 2, "rag-unrelated": 0, "vision-unrelated": 0}
+  }
+]
