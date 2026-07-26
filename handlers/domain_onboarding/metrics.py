@@ -48,6 +48,9 @@ class DomainOnboardingRequestTrace:
     ranking_vectorizer_backend: str = "unknown"
     ranking_vectorizer_fallback_used: bool = False
     low_relevance_filtered_count: int = 0
+    evidence_claim_count: int = 0
+    unsupported_claim_count: int = 0
+    missing_evidence_count: int = 0
 
     first_dimensions: dict[str, float] = field(default_factory=dict)
     final_dimensions: dict[str, float] = field(default_factory=dict)
@@ -127,6 +130,7 @@ class DomainOnboardingMetrics:
         self._provider_latencies: dict[str, list[float]] = defaultdict(list)
         self._ranking_backends: Counter[str] = Counter()
         self._ranking_fallbacks = 0
+        self._evidence_totals: Counter[str] = Counter()
         self._first_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._final_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._quality_deltas: deque[float] = deque(maxlen=window_size)
@@ -179,6 +183,12 @@ class DomainOnboardingMetrics:
             self._paper_totals["low_relevance_filtered_count"] += int(
                 trace.low_relevance_filtered_count
             )
+            for field_name in (
+                "evidence_claim_count",
+                "unsupported_claim_count",
+                "missing_evidence_count",
+            ):
+                self._evidence_totals[field_name] += int(getattr(trace, field_name))
             for name, value in trace.first_dimensions.items():
                 self._first_dimension_values[name].append(value)
             for name, value in trace.final_dimensions.items():
@@ -241,6 +251,7 @@ class DomainOnboardingMetrics:
                     "vectorizer_backends": dict(self._ranking_backends),
                     "fallback_count": self._ranking_fallbacks,
                 },
+                "evidence": dict(self._evidence_totals),
                 "quality": {
                     "first_dimensions": self._dimension_averages(self._first_dimension_values),
                     "final_dimensions": self._dimension_averages(self._final_dimension_values),

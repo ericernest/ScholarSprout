@@ -17,6 +17,7 @@ class DomainOnboardingConfig(BaseModel):
     min_learning_steps: int = Field(default=4, ge=1, le=8)
     coverage_similarity_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     ranking_min_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
+    evidence_support_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     quality_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     min_improvement_delta: float = Field(default=0.05, ge=0.0, le=1.0)
     max_content_repairs: int = Field(default=1, ge=0, le=1)

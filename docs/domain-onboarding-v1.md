@@ -139,6 +139,13 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 通过硬门槛但低于阈值时返回 `quality_warning`；未通过硬门槛时返回
 `quality_failed`。后两者仍携带结构化输出和质量问题，便于前端提示和定位修复点。
 
+输出中的关键技术与历史论述通过 `evidence_claims` 绑定已验证 `paper_id`，并区分
+`abstract_explicit`、`metadata_inference` 和 `background_synthesis`。质量评估会检查
+非法或空证据、发展阶段证据覆盖，以及标题和摘要是否能支持论述。候选集合之外的
+证据 ID 和同语言下明显不受支持的直接断言属于硬失败；中英文跨语言文本在未配置
+跨语言 embedding 时只产生警告，避免把词面不一致误判为虚假论文。证据维度也参与
+修复结果的关键维度回退保护。
+
 ## Deadline 与取消
 
 Pipeline 默认共享一个请求级 90 秒 deadline，并为画像、规划、检索、排序、生成、

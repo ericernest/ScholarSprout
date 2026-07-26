@@ -15,6 +15,7 @@ from .schemas import (
     DomainOnboardingOutput,
     DomainOnboardingRequest,
     DomainResearchPlan,
+    EvidenceClaim,
     GenerationResult,
     LearnerProfile,
     LearningStep,
@@ -172,6 +173,8 @@ class StructuredOnboardingGenerator:
             "name, summary, motivation, related_paper_ids, prerequisite_ids, core_concepts, main_techniques, open_problems. "
             "current_landscape has problems and subdirections. Each learning step has step, goal, topics, paper_ids, "
             "activities, completion_criteria, expected_outcome. Produce at least 3 development stages and 3 subdirections. "
+            "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
+            "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
             "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入."
         )
         user_payload: dict[str, Any] = {
@@ -220,6 +223,11 @@ class StructuredOnboardingGenerator:
         learning_path = self.path_planner.normalize(
             payload.get("learning_path"), profile=profile, papers=papers, references=references
         )
+        evidence_claims = self._normalize_evidence_claims(
+            payload.get("evidence_claims"),
+            references,
+            stages,
+        )
         try:
             return DomainOnboardingOutput(
                 domain=str(payload.get("domain") or plan.normalized_domain or request.query),
@@ -233,9 +241,50 @@ class StructuredOnboardingGenerator:
                 ),
                 learning_path=learning_path,
                 papers=[SelectedPaper.from_ranked(paper) for paper in papers],
+                evidence_claims=evidence_claims,
             )
         except ValidationError as error:
             raise GenerationError(f"generated output failed validation: {error}") from error
+
+    def _normalize_evidence_claims(
+        self,
+        value: object,
+        references: dict[str, PaperReference],
+        stages: list[DevelopmentStage],
+    ) -> list[EvidenceClaim]:
+        items = value if isinstance(value, list) else []
+        claims: list[EvidenceClaim] = []
+        allowed_support_types = {
+            "abstract_explicit",
+            "metadata_inference",
+            "background_synthesis",
+        }
+        for item in items:
+            if not isinstance(item, dict) or not str(item.get("claim") or "").strip():
+                continue
+            paper_ids = self._valid_ids(item.get("supporting_paper_ids"), references)
+            support_type = str(item.get("support_type") or "background_synthesis")
+            if support_type not in allowed_support_types:
+                support_type = "background_synthesis"
+            claims.append(
+                EvidenceClaim(
+                    claim_id=item.get("claim_id"),
+                    claim=str(item["claim"]),
+                    supporting_paper_ids=paper_ids,
+                    support_type=support_type,
+                )
+            )
+        if claims:
+            return claims
+        return [
+            EvidenceClaim(
+                claim=stage.summary or stage.name,
+                supporting_paper_ids=stage.related_paper_ids,
+                support_type="background_synthesis",
+            )
+            for stage in stages
+            if stage.related_paper_ids and (stage.summary.strip() or stage.name.strip())
+        ]
 
     def _normalize_prerequisites(
         self,

@@ -7,7 +7,11 @@ from handlers.domain_onboarding.generator import StructuredOnboardingGenerator
 from handlers.domain_onboarding.quality import CompositeQualityEvaluator
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
-from handlers.domain_onboarding.schemas import DomainOnboardingRequest, QualityIssue
+from handlers.domain_onboarding.schemas import (
+    DomainOnboardingRequest,
+    EvidenceClaim,
+    QualityIssue,
+)
 
 from .fakes import (
     FakeJSONModel,
@@ -53,6 +57,29 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(any("复现" in activity for step in output.learning_path[2:] for activity in step.activities))
         self.assertTrue(all(step.completion_criteria for step in output.learning_path))
 
+    def test_evidence_claims_keep_only_allowed_paper_ids(self) -> None:
+        payload = make_generation_payload([paper.paper_id for paper in self.ranked])
+        payload["evidence_claims"] = [
+            {
+                "claim": "retrieval augmented generation method benchmark evaluation",
+                "supporting_paper_ids": [self.ranked[0].paper_id, "invented-paper"],
+                "support_type": "abstract_explicit",
+            }
+        ]
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            self.ranked,
+        ).output
+
+        self.assertEqual(
+            output.evidence_claims[0].supporting_paper_ids,
+            [self.ranked[0].paper_id],
+        )
+
 
 class QualityTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -72,7 +99,15 @@ class QualityTests(unittest.TestCase):
         self.assertGreaterEqual(quality.score, quality.threshold)
         self.assertEqual(
             set(quality.dimensions),
-            {"structure", "paper_validity", "topic_coverage", "development_coherence", "learning_path", "goal_alignment"},
+            {
+                "structure",
+                "paper_validity",
+                "evidence_grounding",
+                "topic_coverage",
+                "development_coherence",
+                "learning_path",
+                "goal_alignment",
+            },
         )
 
     def test_modified_paper_metadata_fails_hard_gate(self) -> None:
@@ -86,6 +121,69 @@ class QualityTests(unittest.TestCase):
         quality = self.evaluator.evaluate(self.output, self.ranked)
         self.assertFalse(quality.passed_hard_gates)
         self.assertEqual(quality.dimensions["paper_validity"], 1.0)
+
+    def test_unsupported_explicit_claim_fails_hard_gate(self) -> None:
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="This paper proves a quantum computing theorem",
+                supporting_paper_ids=[self.ranked[0].paper_id],
+                support_type="abstract_explicit",
+            )
+        ]
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertFalse(quality.passed_hard_gates)
+        self.assertTrue(
+            any(issue.issue_type == "unsupported_claim" for issue in quality.issues)
+        )
+
+    def test_evidence_id_outside_candidate_set_fails_hard_gate(self) -> None:
+        self.output.evidence_claims[0].supporting_paper_ids.append("invented-paper")
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertFalse(quality.passed_hard_gates)
+        self.assertTrue(
+            any(
+                issue.issue_type == "invalid_paper"
+                and issue.target_path.startswith("evidence_claims")
+                for issue in quality.issues
+            )
+        )
+
+    def test_supported_explicit_claim_scores_full_claim_support(self) -> None:
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="retrieval augmented generation method benchmark evaluation",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:3]],
+                support_type="abstract_explicit",
+            )
+        ]
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertTrue(quality.passed_hard_gates)
+        self.assertGreaterEqual(quality.dimensions["evidence_grounding"], 0.75)
+
+    def test_cross_language_explicit_claim_is_warning_not_hard_failure(self) -> None:
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="该方法通过检索外部证据增强生成结果",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:3]],
+                support_type="abstract_explicit",
+            )
+        ]
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertTrue(quality.passed_hard_gates)
+        self.assertTrue(
+            any(
+                issue.issue_type == "unsupported_claim" and issue.severity == "warning"
+                for issue in quality.issues
+            )
+        )
 
 
 class RepairTests(unittest.TestCase):

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Protocol
 
 from .config import DomainOnboardingConfig
+from .evidence import ClaimEvidenceValidator
 from .schemas import (
     ContentQuality,
     DomainOnboardingOutput,
@@ -34,16 +35,18 @@ def _average(values: Iterable[float]) -> float:
 
 class CompositeQualityEvaluator:
     dimension_weights = {
-        "structure": 0.20,
-        "paper_validity": 0.20,
-        "topic_coverage": 0.18,
-        "development_coherence": 0.16,
-        "learning_path": 0.16,
-        "goal_alignment": 0.10,
+        "structure": 0.17,
+        "paper_validity": 0.18,
+        "evidence_grounding": 0.15,
+        "topic_coverage": 0.15,
+        "development_coherence": 0.13,
+        "learning_path": 0.13,
+        "goal_alignment": 0.09,
     }
 
     def __init__(self, config: DomainOnboardingConfig):
         self.config = config
+        self.evidence_validator = ClaimEvidenceValidator(config)
 
     def evaluate(
         self,
@@ -51,16 +54,19 @@ class CompositeQualityEvaluator:
         allowed_papers: list[RankedPaper],
     ) -> ContentQuality:
         issues: list[QualityIssue] = []
+        evidence = self.evidence_validator.validate(output, allowed_papers)
+        issues.extend(evidence.issues)
         dimensions = {
             "structure": self.evaluate_structure_quality(output, issues),
             "paper_validity": self.evaluate_paper_validity(output, allowed_papers, issues),
+            "evidence_grounding": evidence.score,
             "topic_coverage": self.evaluate_topic_coverage(output, issues),
             "development_coherence": self.evaluate_development_coherence(output, issues),
             "learning_path": self.evaluate_learning_path_quality(output, issues),
             "goal_alignment": self.evaluate_goal_alignment(output, issues),
         }
         hard_issue_types = {"structure_error", "invalid_paper", "format_error"}
-        passed_hard_gates = not any(
+        passed_hard_gates = not evidence.hard_failure and not any(
             issue.severity in {"error", "critical"} and issue.issue_type in hard_issue_types
             for issue in issues
         )
@@ -268,13 +274,15 @@ class CompositeQualityEvaluator:
         for step in output.learning_path:
             yield from step.paper_ids
             yield from (paper.paper_id for paper in step.papers)
+        for claim in output.evidence_claims:
+            yield from claim.supporting_paper_ids
 
 
 def critical_dimensions_not_regressed(
     first: ContentQuality,
     retry: ContentQuality,
 ) -> bool:
-    for name in ("structure", "paper_validity", "learning_path"):
+    for name in ("structure", "paper_validity", "evidence_grounding", "learning_path"):
         if retry.dimensions.get(name, 0.0) + 1e-9 < first.dimensions.get(name, 0.0):
             return False
     return True
