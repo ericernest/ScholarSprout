@@ -6,6 +6,9 @@ from typing import Protocol
 
 from .config import DomainOnboardingConfig
 from .generator import GenerationError, StructuredOnboardingGenerator
+from .repair_code import CodeRepairExecutor
+from .repair_diff import changed_output_paths, fingerprint_output, paths_outside_targets
+from .repair_llm import LLMRepairExecutor
 from .repair_planning import RepairPlanner
 from .schemas import (
     ContentQuality,
@@ -13,11 +16,9 @@ from .schemas import (
     DomainOnboardingRequest,
     DomainResearchPlan,
     LearnerProfile,
-    PaperReference,
     RankedPaper,
     RepairResult,
     RepairRecord,
-    SelectedPaper,
 )
 
 
@@ -39,10 +40,14 @@ class TargetedRepairer:
         generator: StructuredOnboardingGenerator,
         config: DomainOnboardingConfig,
         planner: RepairPlanner | None = None,
+        code_executor: CodeRepairExecutor | None = None,
+        llm_executor: LLMRepairExecutor | None = None,
     ):
         self.generator = generator
         self.config = config
         self.planner = planner or RepairPlanner()
+        self.code_executor = code_executor or CodeRepairExecutor()
+        self.llm_executor = llm_executor or LLMRepairExecutor(generator)
 
     def repair(
         self,
@@ -58,13 +63,16 @@ class TargetedRepairer:
             max_content_repairs=self.config.max_content_repairs,
         )
         actions = [action.model_copy(deep=True) for action in plan.actions]
-        normalized = self._code_repair(previous_output, allowed_papers)
+        normalized = self.code_executor.execute(previous_output, allowed_papers)
         code_action = next(
             (action for action in actions if action.action_type == "code"),
             None,
         )
         if code_action is not None:
-            code_action.status = "applied"
+            code_action.before_fingerprint = fingerprint_output(previous_output)
+            code_action.after_fingerprint = fingerprint_output(normalized)
+            code_action.changed_paths = changed_output_paths(previous_output, normalized)
+            code_action.status = "applied" if code_action.changed_paths else "skipped"
         llm_action = next(
             (action for action in actions if action.action_type == "llm"),
             None,
@@ -81,7 +89,7 @@ class TargetedRepairer:
                 record=record,
             )
         try:
-            generation = self.generator.repair(
+            generation = self.llm_executor.execute(
                 request,
                 profile,
                 plan,
@@ -89,11 +97,40 @@ class TargetedRepairer:
                 normalized,
                 selected_issues,
             )
+            candidate = self.code_executor.execute(generation.output, allowed_papers)
+            changed_paths = changed_output_paths(normalized, candidate)
+            outside_targets = paths_outside_targets(
+                changed_paths,
+                llm_action.target_paths if llm_action else [],
+            )
+            if outside_targets:
+                message = f"repair changed fields outside target paths: {outside_targets}"
+                return RepairResult(
+                    output=normalized,
+                    action="llm_repair_failed",
+                    stats=generation.stats,
+                    record=self._with_action_status(
+                        record,
+                        "llm",
+                        "failed",
+                        before=normalized,
+                        after=candidate,
+                        changed_paths=changed_paths,
+                        error=message,
+                    ),
+                )
             return RepairResult(
-                output=generation.output,
+                output=candidate,
                 action="llm_targeted_repair",
                 stats=generation.stats,
-                record=self._with_action_status(record, "llm", "applied"),
+                record=self._with_action_status(
+                    record,
+                    "llm",
+                    "applied" if changed_paths else "skipped",
+                    before=normalized,
+                    after=candidate,
+                    changed_paths=changed_paths,
+                ),
             )
         except GenerationError as error:
             return RepairResult(
@@ -104,6 +141,7 @@ class TargetedRepairer:
                     record,
                     "llm",
                     "failed",
+                    before=normalized,
                     error=str(error),
                 ),
             )
@@ -114,6 +152,9 @@ class TargetedRepairer:
         action_type: str,
         status: str,
         *,
+        before: DomainOnboardingOutput | None = None,
+        after: DomainOnboardingOutput | None = None,
+        changed_paths: list[str] | None = None,
         error: str | None = None,
     ) -> RepairRecord:
         updated = record.model_copy(deep=True)
@@ -121,65 +162,9 @@ class TargetedRepairer:
             item for item in updated.actions if item.action_type == action_type
         )
         action.status = status
+        action.changed_paths = list(changed_paths or [])
+        action.before_fingerprint = fingerprint_output(before) if before else None
+        action.after_fingerprint = fingerprint_output(after) if after else None
         action.error = error
         return updated
-
-    def _code_repair(
-        self,
-        output: DomainOnboardingOutput,
-        allowed_papers: list[RankedPaper],
-    ) -> DomainOnboardingOutput:
-        repaired = output.model_copy(deep=True)
-        allowed_map = {paper.paper_id: paper for paper in allowed_papers}
-        allowed = set(allowed_map)
-        output_ids = list(dict.fromkeys(paper.paper_id for paper in repaired.papers if paper.paper_id in allowed))
-        repaired.papers = [SelectedPaper.from_ranked(allowed_map[paper_id]) for paper_id in output_ids]
-        for prerequisite in repaired.prerequisites:
-            prerequisite.related_paper_ids = self._valid_unique(prerequisite.related_paper_ids, allowed)
-        for stage in repaired.development_stages:
-            stage.related_paper_ids = self._valid_unique(stage.related_paper_ids, allowed)
-            stage.representative_papers = [self._reference(allowed_map[paper_id]) for paper_id in stage.related_paper_ids]
-            stage.core_concepts = self._nonempty_unique(stage.core_concepts)
-            stage.main_techniques = self._nonempty_unique(stage.main_techniques)
-            stage.open_problems = self._nonempty_unique(stage.open_problems)
-        for index, step in enumerate(repaired.learning_path, start=1):
-            step.step = str(index)
-            step.paper_ids = self._valid_unique(step.paper_ids, allowed)
-            step.papers = [self._reference(allowed_map[paper_id]) for paper_id in step.paper_ids]
-            step.topics = self._nonempty_unique(step.topics)
-            step.activities = self._nonempty_unique(step.activities)
-            step.completion_criteria = self._nonempty_unique(step.completion_criteria)
-        repaired.current_landscape.problems = self._nonempty_unique(repaired.current_landscape.problems)
-        repaired.current_landscape.subdirections = self._nonempty_unique(repaired.current_landscape.subdirections)
-        seen_claims: set[str] = set()
-        normalized_claims = []
-        for claim in repaired.evidence_claims:
-            claim.supporting_paper_ids = self._valid_unique(
-                claim.supporting_paper_ids,
-                allowed,
-            )
-            if claim.claim_id in seen_claims:
-                continue
-            seen_claims.add(str(claim.claim_id))
-            normalized_claims.append(claim)
-        repaired.evidence_claims = normalized_claims
-        return repaired
-
-    @staticmethod
-    def _valid_unique(values: list[str], allowed: set[str]) -> list[str]:
-        return list(dict.fromkeys(value for value in values if value in allowed))
-
-    @staticmethod
-    def _nonempty_unique(values: list[str]) -> list[str]:
-        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
-
-    @staticmethod
-    def _reference(paper: RankedPaper) -> PaperReference:
-        return PaperReference(
-            paper_id=paper.paper_id,
-            title=paper.title,
-            authors=paper.authors,
-            year=paper.year,
-            url=paper.url,
-        )
     RepairResult,
