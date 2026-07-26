@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 
 from channels.base import ChannelMessage
@@ -13,33 +15,38 @@ from handlers.domain_onboarding.quality import CompositeQualityEvaluator
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
 from handlers.domain_onboarding.retrieval import PaperRetrievalError
-from handlers.domain_onboarding.schemas import DomainOnboardingRequest, ModelCallStats
+from handlers.domain_onboarding.schemas import (
+    DomainOnboardingRequest,
+    GenerationResult,
+    ModelCallStats,
+    PlanningResult,
+    RetrievalResult,
+    RetrievalStats,
+)
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 
 from .fakes import FakeJSONModel, make_candidates, make_generation_payload, make_plan
 
 
 class FakePlanner:
-    def __init__(self) -> None:
-        self.last_stats = ModelCallStats()
-
     def plan(self, query: str, profile: object) -> object:
-        return make_plan()
+        return PlanningResult(plan=make_plan())
 
 
 class FakeRetriever:
     def __init__(self, *, fail: bool = False, empty: bool = False) -> None:
         self.fail = fail
         self.empty = empty
-        self.last_errors: list[str] = []
         self.calls = 0
 
-    def search(self, queries: list[str], *, limit_per_query: int) -> list[object]:
+    def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
         self.calls += 1
         if self.fail:
-            self.last_errors = ["offline"]
-            raise PaperRetrievalError("all paper queries failed")
-        return [] if self.empty else make_candidates()
+            raise PaperRetrievalError(
+                "all paper queries failed",
+                stats=RetrievalStats(errors=["offline"]),
+            )
+        return RetrievalResult(papers=[] if self.empty else make_candidates())
 
 
 def make_pipeline(
@@ -64,6 +71,82 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_concurrent_requests_keep_stage_stats_request_scoped(self) -> None:
+        retrieval_barrier = Barrier(2)
+        generation_barrier = Barrier(2)
+
+        class ConcurrentPlanner:
+            def plan(self, query: str, profile: object) -> PlanningResult:
+                token_count = 11 if query == "request-a" else 22
+                return PlanningResult(
+                    plan=make_plan().model_copy(update={"search_queries": [query]}),
+                    stats=ModelCallStats(
+                        model_calls=1,
+                        total_tokens=token_count,
+                        usage_reported=True,
+                    ),
+                )
+
+        class ConcurrentRetriever:
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                retrieval_barrier.wait(timeout=2)
+                cache_hits = 1 if queries == ["request-a"] else 2
+                return RetrievalResult(
+                    papers=make_candidates(),
+                    stats=RetrievalStats(
+                        request_count=1,
+                        cache_hit_count=cache_hits,
+                    ),
+                )
+
+        class ConcurrentGenerator:
+            def generate(self, request, profile, plan, papers) -> GenerationResult:
+                generation_barrier.wait(timeout=2)
+                generated = StructuredOnboardingGenerator(
+                    FakeJSONModel([make_generation_payload([paper.paper_id for paper in papers])]),
+                    config,
+                ).generate(request, profile, plan, papers)
+                token_count = 101 if request.query == "request-a" else 202
+                return generated.model_copy(
+                    update={
+                        "stats": ModelCallStats(
+                            model_calls=1,
+                            total_tokens=token_count,
+                            usage_reported=True,
+                        )
+                    }
+                )
+
+        config = DomainOnboardingConfig()
+        generator = ConcurrentGenerator()
+        pipeline = DomainOnboardingPipeline(
+            profile_builder=RuleBasedProfileBuilder(),
+            planner=ConcurrentPlanner(),
+            retriever=ConcurrentRetriever(),
+            ranker=WeightedPaperRanker(config),
+            generator=generator,
+            evaluator=CompositeQualityEvaluator(config),
+            repairer=TargetedRepairer(generator, config),
+            config=config,
+        )
+
+        def run(query: str) -> tuple[object, DomainOnboardingRequestTrace]:
+            trace = DomainOnboardingRequestTrace()
+            return pipeline.run(DomainOnboardingRequest(query=query), trace), trace
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_a = executor.submit(run, "request-a")
+            future_b = executor.submit(run, "request-b")
+            result_a, trace_a = future_a.result(timeout=5)
+            result_b, trace_b = future_b.result(timeout=5)
+
+        self.assertEqual(result_a.status, "ok")
+        self.assertEqual(result_b.status, "ok")
+        self.assertEqual(trace_a.first_usage.total_tokens, 112)
+        self.assertEqual(trace_b.first_usage.total_tokens, 224)
+        self.assertEqual(trace_a.retrieval_cache_hit_count, 1)
+        self.assertEqual(trace_b.retrieval_cache_hit_count, 2)
+
     def test_six_fixed_domains_run_end_to_end_with_fakes(self) -> None:
         domains = [
             "多模态大模型",

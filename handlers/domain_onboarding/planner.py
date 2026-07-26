@@ -9,13 +9,17 @@ from pydantic import ValidationError
 
 from .config import DomainOnboardingConfig
 from .llm import StructuredLLMError, invoke_json
-from .schemas import DomainResearchPlan, LearnerProfile, ModelCallStats, ResearchPerspective
+from .schemas import (
+    DomainResearchPlan,
+    LearnerProfile,
+    ModelCallStats,
+    PlanningResult,
+    ResearchPerspective,
+)
 
 
 class DomainPlanner(Protocol):
-    last_stats: ModelCallStats
-
-    def plan(self, query: str, profile: LearnerProfile) -> DomainResearchPlan: ...
+    def plan(self, query: str, profile: LearnerProfile) -> PlanningResult: ...
 
 
 _DOMAIN_ALIASES = {
@@ -33,10 +37,8 @@ class StormLitePlanner:
     def __init__(self, model: Any, config: DomainOnboardingConfig):
         self.model = model
         self.config = config
-        self.last_stats = ModelCallStats()
 
-    def plan(self, query: str, profile: LearnerProfile) -> DomainResearchPlan:
-        self.last_stats = ModelCallStats()
+    def plan(self, query: str, profile: LearnerProfile) -> PlanningResult:
         system_prompt = (
             "You are a STORM-lite research planner. Return one JSON object only. "
             "Decompose the domain from multiple research perspectives before retrieval. "
@@ -50,19 +52,18 @@ class StormLitePlanner:
             ensure_ascii=False,
         )
         try:
-            payload, self.last_stats = invoke_json(
+            payload, stats = invoke_json(
                 self.model, system_prompt=system_prompt, user_prompt=user_prompt
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
             plan.search_queries = plan.search_queries[: self.config.search_queries_limit]
-            return plan
+            return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
-            self.last_stats = error.stats
-            return self._fallback_plan(query)
+            return PlanningResult(plan=self._fallback_plan(query), stats=error.stats)
         except (ValidationError, ValueError):
-            return self._fallback_plan(query)
+            return PlanningResult(plan=self._fallback_plan(query), stats=stats)
 
     def _fallback_plan(self, query: str) -> DomainResearchPlan:
         domain = query.strip()

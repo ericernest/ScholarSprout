@@ -9,15 +9,25 @@ from typing import Protocol
 from urllib.parse import unquote, urlparse
 
 from .config import DomainOnboardingConfig
-from .schemas import DomainResearchPlan, PaperCandidate, PaperRole, RankedPaper
+from .schemas import (
+    DomainResearchPlan,
+    PaperCandidate,
+    PaperRole,
+    RankedPaper,
+    RankingResult,
+    RankingStats,
+)
 from .text_similarity import TextVectorizer, TfidfTextVectorizer, cosine_similarity
 
 
 class PaperRanker(Protocol):
-    last_deduplicated_count: int
-    last_invalid_count: int
-
-    def rank(self, papers: list[PaperCandidate], plan: DomainResearchPlan, *, limit: int) -> list[RankedPaper]: ...
+    def rank(
+        self,
+        papers: list[PaperCandidate],
+        plan: DomainResearchPlan,
+        *,
+        limit: int,
+    ) -> RankingResult: ...
 
 
 def _normalize_title(title: str) -> str:
@@ -32,22 +42,22 @@ class WeightedPaperRanker:
     ):
         self.config = config
         self.vectorizer = vectorizer or TfidfTextVectorizer()
-        self.last_deduplicated_count = 0
-        self.last_invalid_count = 0
-        self.last_candidate_source_counts: dict[str, int] = {}
-        self.last_mmr_scores: dict[str, float] = {}
 
-    def rank(self, papers: list[PaperCandidate], plan: DomainResearchPlan, *, limit: int) -> list[RankedPaper]:
-        self.last_mmr_scores = {}
+    def rank(
+        self,
+        papers: list[PaperCandidate],
+        plan: DomainResearchPlan,
+        *,
+        limit: int,
+    ) -> RankingResult:
         unique = self._deduplicate(papers)
-        self.last_deduplicated_count = len(unique)
         valid = [paper for paper in unique if self._is_valid(paper)]
-        self.last_invalid_count = len(unique) - len(valid)
+        invalid_count = len(unique) - len(valid)
         valid = self._limit_candidates_by_source(
             valid,
             self.config.candidate_paper_limit,
         )
-        self.last_candidate_source_counts = dict(
+        source_counts = dict(
             sorted(
                 (
                     (source, sum(1 for paper in valid if paper.source == source))
@@ -57,7 +67,13 @@ class WeightedPaperRanker:
             )
         )
         if not valid:
-            return []
+            return RankingResult(
+                stats=RankingStats(
+                    deduplicated_count=len(unique),
+                    invalid_count=invalid_count,
+                    candidate_source_counts=source_counts,
+                )
+            )
 
         max_citations = max((paper.citation_count or 0) for paper in valid)
         query_text = " ".join(
@@ -112,10 +128,19 @@ class WeightedPaperRanker:
                 )
             )
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
-        return self._select_mmr(
+        selected, mmr_scores = self._select_mmr(
             ranked,
             vector_by_id,
             min(limit, self.config.selected_paper_limit),
+        )
+        return RankingResult(
+            papers=selected,
+            stats=RankingStats(
+                deduplicated_count=len(unique),
+                invalid_count=invalid_count,
+                candidate_source_counts=source_counts,
+                mmr_scores=mmr_scores,
+            ),
         )
 
     @staticmethod
@@ -241,10 +266,10 @@ class WeightedPaperRanker:
         ranked: list[RankedPaper],
         vectors: dict[str, dict[str, float]],
         limit: int,
-    ) -> list[RankedPaper]:
+    ) -> tuple[list[RankedPaper], dict[str, float]]:
         if limit <= 0:
-            return []
-        self.last_mmr_scores = {}
+            return [], {}
+        mmr_scores: dict[str, float] = {}
         selected: list[RankedPaper] = []
         remaining = list(ranked)
         covered_roles: set[PaperRole] = set()
@@ -273,6 +298,6 @@ class WeightedPaperRanker:
             mmr_score, _, _, chosen = max(scored, key=lambda item: item[:3])
             selected.append(chosen)
             covered_roles.add(chosen.paper_role)
-            self.last_mmr_scores[chosen.paper_id] = round(mmr_score, 6)
+            mmr_scores[chosen.paper_id] = round(mmr_score, 6)
             remaining.remove(chosen)
-        return selected
+        return selected, mmr_scores

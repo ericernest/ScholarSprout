@@ -15,6 +15,7 @@ from .schemas import (
     DomainOnboardingOutput,
     DomainOnboardingRequest,
     DomainResearchPlan,
+    GenerationResult,
     LearnerProfile,
     LearningStep,
     ModelCallStats,
@@ -27,19 +28,19 @@ from .schemas import (
 
 
 class GenerationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, stats: ModelCallStats | None = None):
+        super().__init__(message)
+        self.stats = stats or ModelCallStats()
 
 
 class OnboardingGenerator(Protocol):
-    last_stats: ModelCallStats
-
     def generate(
         self,
         request: DomainOnboardingRequest,
         profile: LearnerProfile,
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
-    ) -> DomainOnboardingOutput: ...
+    ) -> GenerationResult: ...
 
 
 class SimpleStagePathPlanner:
@@ -113,7 +114,6 @@ class StructuredOnboardingGenerator:
         self.model = model
         self.config = config
         self.path_planner = SimpleStagePathPlanner()
-        self.last_stats = ModelCallStats()
 
     def generate(
         self,
@@ -121,9 +121,14 @@ class StructuredOnboardingGenerator:
         profile: LearnerProfile,
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
-    ) -> DomainOnboardingOutput:
-        payload = self._call_model(request, profile, plan, papers)
-        return self._normalize(payload, request, profile, plan, papers)
+    ) -> GenerationResult:
+        payload, stats = self._call_model(request, profile, plan, papers)
+        try:
+            output = self._normalize(payload, request, profile, plan, papers)
+        except GenerationError as error:
+            error.stats = stats
+            raise
+        return GenerationResult(output=output, stats=stats)
 
     def repair(
         self,
@@ -133,8 +138,8 @@ class StructuredOnboardingGenerator:
         papers: list[RankedPaper],
         previous_output: DomainOnboardingOutput,
         issues: list[QualityIssue],
-    ) -> DomainOnboardingOutput:
-        payload = self._call_model(
+    ) -> GenerationResult:
+        payload, stats = self._call_model(
             request,
             profile,
             plan,
@@ -142,7 +147,12 @@ class StructuredOnboardingGenerator:
             previous_output=previous_output,
             issues=issues,
         )
-        return self._normalize(payload, request, profile, plan, papers)
+        try:
+            output = self._normalize(payload, request, profile, plan, papers)
+        except GenerationError as error:
+            error.stats = stats
+            raise
+        return GenerationResult(output=output, stats=stats)
 
     def _call_model(
         self,
@@ -153,8 +163,7 @@ class StructuredOnboardingGenerator:
         *,
         previous_output: DomainOnboardingOutput | None = None,
         issues: list[QualityIssue] | None = None,
-    ) -> dict[str, Any]:
-        self.last_stats = ModelCallStats()
+    ) -> tuple[dict[str, Any], ModelCallStats]:
         system_prompt = (
             "You generate a beginner-friendly Chinese domain onboarding plan. Return one JSON object only. "
             "You MUST use only paper_id values from allowed_papers; never invent or modify paper metadata. "
@@ -176,15 +185,14 @@ class StructuredOnboardingGenerator:
             user_payload["repair_issues"] = [issue.model_dump(mode="json") for issue in issues or []]
             user_payload["instruction"] = "Repair only the reported weaknesses while preserving valid paper IDs."
         try:
-            payload, self.last_stats = invoke_json(
+            payload, stats = invoke_json(
                 self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
             )
-            return payload
+            return payload, stats
         except StructuredLLMError as error:
-            self.last_stats = error.stats
-            raise GenerationError(str(error)) from error
+            raise GenerationError(str(error), stats=error.stats) from error
 
     def _normalize(
         self,
@@ -307,3 +315,4 @@ class StructuredOnboardingGenerator:
     @classmethod
     def _valid_ids(cls, value: object, references: dict[str, PaperReference]) -> list[str]:
         return list(dict.fromkeys(str(item) for item in cls._as_list(value) if str(item) in references))
+    GenerationResult,

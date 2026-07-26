@@ -23,7 +23,7 @@ class GeneratorTests(unittest.TestCase):
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
             make_candidates(), make_plan(), limit=6
-        )
+        ).papers
 
     def test_generator_uses_only_canonical_candidate_metadata(self) -> None:
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])
@@ -32,7 +32,7 @@ class GeneratorTests(unittest.TestCase):
         generator = StructuredOnboardingGenerator(FakeJSONModel([payload]), self.config)
         output = generator.generate(
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), self.ranked
-        )
+        ).output
         allowed = {paper.paper_id for paper in self.ranked}
         self.assertEqual({paper.paper_id for paper in output.papers}, allowed)
         self.assertNotIn("invented-paper", output.development_stages[0].related_paper_ids)
@@ -48,7 +48,7 @@ class GeneratorTests(unittest.TestCase):
             make_profile("experiment_first"),
             make_plan(),
             self.ranked,
-        )
+        ).output
         self.assertEqual([step.step for step in output.learning_path], ["1", "2", "3", "4", "5"])
         self.assertTrue(any("复现" in activity for step in output.learning_path[2:] for activity in step.activities))
         self.assertTrue(all(step.completion_criteria for step in output.learning_path))
@@ -57,11 +57,13 @@ class GeneratorTests(unittest.TestCase):
 class QualityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
-        self.ranked = WeightedPaperRanker(self.config).rank(make_candidates(), make_plan(), limit=6)
+        self.ranked = WeightedPaperRanker(self.config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])
         self.output = StructuredOnboardingGenerator(FakeJSONModel([payload]), self.config).generate(
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), self.ranked
-        )
+        ).output
         self.evaluator = CompositeQualityEvaluator(self.config)
 
     def test_complete_output_passes_hard_gates(self) -> None:
@@ -89,16 +91,16 @@ class QualityTests(unittest.TestCase):
 class RepairTests(unittest.TestCase):
     def test_code_repair_removes_invalid_ids_and_repairs_numbering(self) -> None:
         config = DomainOnboardingConfig(max_content_repairs=0)
-        ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6)
+        ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
         payload = make_generation_payload([paper.paper_id for paper in ranked])
         generator = StructuredOnboardingGenerator(FakeJSONModel([payload]), config)
         output = generator.generate(
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), ranked
-        )
+        ).output
         output.learning_path[0].step = "9"
         output.learning_path[0].paper_ids.append("invalid")
         quality = CompositeQualityEvaluator(config).evaluate(output, ranked)
-        repaired = TargetedRepairer(generator, config).repair(
+        repair_result = TargetedRepairer(generator, config).repair(
             DomainOnboardingRequest(query="RAG"),
             make_profile(),
             make_plan(),
@@ -106,16 +108,18 @@ class RepairTests(unittest.TestCase):
             quality,
             ranked,
         )
-        self.assertEqual(repaired.learning_path[0].step, "1")
-        self.assertNotIn("invalid", repaired.learning_path[0].paper_ids)
+        self.assertEqual(repair_result.output.learning_path[0].step, "1")
+        self.assertNotIn("invalid", repair_result.output.learning_path[0].paper_ids)
 
     def test_targeted_repair_prompt_receives_quality_issues(self) -> None:
         config = DomainOnboardingConfig()
-        ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6)
+        ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
         payload = make_generation_payload([paper.paper_id for paper in ranked])
         model = FakeJSONModel([payload, payload])
         generator = StructuredOnboardingGenerator(model, config)
-        output = generator.generate(DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), ranked)
+        output = generator.generate(
+            DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), ranked
+        ).output
         quality = CompositeQualityEvaluator(config).evaluate(output, ranked).model_copy(
             update={
                 "issues": [
@@ -130,10 +134,10 @@ class RepairTests(unittest.TestCase):
             }
         )
         repairer = TargetedRepairer(generator, config)
-        repairer.repair(
+        repair_result = repairer.repair(
             DomainOnboardingRequest(query="RAG"), make_profile(), make_plan(), output, quality, ranked
         )
-        self.assertEqual(repairer.last_action, "llm_targeted_repair")
+        self.assertEqual(repair_result.action, "llm_targeted_repair")
         self.assertIn("repair_issues", model.calls[-1]["messages"][1]["content"])
 
 
