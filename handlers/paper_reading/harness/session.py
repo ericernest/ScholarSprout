@@ -218,6 +218,11 @@ class SessionManager:
             session.progress["percentage"] = (
                 len(completed_list) / max(total, 1) * 100
             )
+            session.progress.setdefault("section_statuses", {})[section_id] = "completed"
+        else:
+            statuses = session.progress.setdefault("section_statuses", {})
+            if statuses.get(section_id) != "completed":
+                statuses[section_id] = "reading"
 
         session.updated_at = datetime.now(timezone.utc).isoformat()
         return session

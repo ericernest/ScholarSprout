@@ -292,11 +292,12 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
         trigger="fork" if session.parent_session_id else "auto",
     )
 
-    # 4. 更新进度
+    # 4. 更新进度（章节完成一次精读即计入已完成）
     session_mgr.update_progress(
         session.session_id,
         section_id=current_section or "abstract",
         paragraph_index=0,
+        completed=True,
     )
 
     # 5. 构建响应

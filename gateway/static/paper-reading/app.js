@@ -26,12 +26,15 @@ const NODE_COLORS = {
   Concept: "#87a7ff", Limitation: "#ff738f", Claim: "#ffe082", RelatedWork: "#c39bff", Insight: "#ffd35c",
 };
 
+const KG_STAGE_ORDER = ["abstract", "introduction", "method", "experiment", "conclusion", "general"];
+
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   revealedKgElements: [], queryKgElements: [], selectedNode: null,
-  selectedText: "", activeForkSessionId: "", uploadSummary: null,
-  sessionState: "", restored: false, busy: false,
+  selectedText: "", uploadSummary: null,
+  sessionState: "", restored: false, busy: false, kgLayout: "force",
+  forks: [], activeFeedId: "main", kgMaxStageIndex: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +57,7 @@ function boot() {
   renderSkillControls();
   renderQuickActions();
   renderLegend();
+  renderCopilotTabs();
   bindIntake();
   bindWorkbench();
   bindReader();
@@ -101,6 +105,7 @@ function bindWorkbench() {
   $("pause-button").addEventListener("click", pauseReading);
   $("resume-button").addEventListener("click", resumeReading);
   $("progress-button").addEventListener("click", refreshProgress);
+  $("regenerate-button").addEventListener("click", regenerateAnalysis);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -109,7 +114,9 @@ function bindWorkbench() {
     const question = input.value.trim();
     if (!question) return;
     input.value = "";
-    startReading(question);
+    const fork = state.forks.find((item) => item.id === state.activeFeedId);
+    if (fork) runForkTurn(fork, question);
+    else startReading(question);
   });
   window.addEventListener("beforeunload", saveBeforeUnload);
 }
@@ -119,10 +126,12 @@ function bindReader() {
     button.addEventListener("click", () => setReaderMode(button.dataset.readerMode));
   });
   $("analyze-section-button").addEventListener("click", () => startReading("请深入分析当前章节的核心问题、方法、证据和潜在局限。"));
+  $("fork-explore-button").addEventListener("click", () => openFork("reading.math_verifier", ""));
   $("previous-section-button").addEventListener("click", () => moveSection(-1));
   $("next-section-button").addEventListener("click", () => moveSection(1));
   $("pdf-fit-select").addEventListener("change", renderPdf);
   $("structured-reader").addEventListener("mouseup", captureSelection);
+  bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
   document.addEventListener("mousedown", (event) => {
     if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader")) {
@@ -138,6 +147,10 @@ function bindKg() {
     $("kg-question-input").required = type !== "neighbors";
   });
   $("kg-query-form").addEventListener("submit", queryKg);
+  $("kg-layout-select").addEventListener("change", () => {
+    state.kgLayout = $("kg-layout-select").value;
+    renderKg(state.queryKgElements.length ? state.queryKgElements : state.revealedKgElements);
+  });
   $("reset-kg-button").addEventListener("click", () => {
     state.queryKgElements = [];
     $("kg-answer").hidden = true;
@@ -154,8 +167,11 @@ function bindFork() {
   });
   $("fork-skill-select").value = "reading.math_verifier";
   $("fork-create-button").addEventListener("click", createFork);
-  $("fork-merge-button").addEventListener("click", mergeFork);
   $("fork-close-button").addEventListener("click", closeFork);
+  document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("fork-modal").hidden) closeFork();
+  });
 }
 
 function bindResizeHandle() {
@@ -253,6 +269,7 @@ function renderSearchResults(papers) {
     const card = create("article", "paper-result");
     const tags = create("div", "tag-row");
     [paper.source, paper.year, paper.venue].filter(Boolean).forEach((value) => tags.append(create("span", "", String(value))));
+    if (paper.citation_count != null) tags.append(create("span", "", `引用 ${paper.citation_count}`));
     card.append(tags, create("h3", "", paper.title || "未命名论文"));
     card.append(create("p", "", (paper.authors || []).join("、") || "作者信息暂无"));
     card.append(create("p", "", truncate(paper.abstract || "暂无摘要", 230)));
@@ -351,7 +368,8 @@ async function loadPaperDetail() {
   const initialKg = data.initial_kg || {};
   if (initialKg.cytoscape_elements?.length) {
     state.revealedKgElements = initialKg.cytoscape_elements;
-    $("kg-stage-copy").textContent = `已恢复图谱：${initialKg.current_stage || "abstract"} · ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系`;
+    state.kgMaxStageIndex = Math.max(0, KG_STAGE_ORDER.indexOf(initialKg.current_stage || "abstract"));
+    $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex]} 阶段 · 累计 ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系（随阅读只增不减）`;
   }
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
@@ -361,7 +379,7 @@ function renderReadyCard(sourceLabel = "已保存论文") {
   if (!state.paper) return;
   $("ready-title").textContent = state.paper.title || "未命名论文";
   $("ready-authors").textContent = (state.paper.authors || []).join("、") || "作者信息暂无";
-  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看结构化正文。";
+  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看论文重排。";
   $("ready-sections").textContent = state.paper.sections?.length || 0;
   $("ready-nodes").textContent = state.uploadSummary?.new_nodes ?? "—";
   $("ready-edges").textContent = state.uploadSummary?.new_edges ?? "—";
@@ -489,8 +507,13 @@ function renderSections() {
     reader.append(article);
   });
   requestAnimationFrame(() => {
-    const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
-    if (state.restored && savedScroll) reader.scrollTop = savedScroll;
+    if (!state.restored) return;
+    if (state.currentSection && document.getElementById(domSectionId(state.currentSection))) {
+      scrollReaderToSection(state.currentSection, false);
+    } else {
+      const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
+      if (savedScroll) reader.scrollTop = savedScroll;
+    }
   });
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
@@ -536,9 +559,8 @@ function renderPaperFigure(figure) {
     const sourceButton = create("button", "figure-source-button", `原文第 ${figure.page} 页`);
     sourceButton.type = "button";
     sourceButton.addEventListener("click", () => {
-      $("pdf-fit-select").value = "width";
       const baseUrl = state.pdfUrl.split("#", 1)[0];
-      $("pdf-frame").src = `${baseUrl}#page=${figure.page}&zoom=75`;
+      $("pdf-frame").src = `${baseUrl}#${pdfFragment(figure.page, $("pdf-fit-select").value || "width")}`;
       setReaderMode("pdf");
     });
     caption.append(sourceButton);
@@ -547,30 +569,44 @@ function renderPaperFigure(figure) {
   return card;
 }
 
+function pdfFragment(page, fit) {
+  const view = { width: "view=FitH", page: "view=Fit", 100: "zoom=100" }[fit] || "view=FitH";
+  return `page=${page || 1}&${view}`;
+}
+
+function currentPdfPage() {
+  const section = state.paper?.sections?.find((item) => item.section_id === state.currentSection);
+  return section?.start_page || 1;
+}
+
 function renderPdf() {
   const fit = $("pdf-fit-select").value || "width";
-  const fragments = {
-    width: "page=1&zoom=75",
-    page: "page=1&zoom=55",
-    100: "page=1&zoom=100",
-  };
   const baseUrl = state.pdfUrl.split("#", 1)[0];
-  const nextUrl = state.hasPdf ? `${baseUrl}#${fragments[fit] || fragments.width}` : "about:blank";
+  const nextUrl = state.hasPdf ? `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}` : "about:blank";
   if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
   $("pdf-frame").hidden = !state.hasPdf;
   $("pdf-empty").hidden = state.hasPdf;
 }
 
+function syncPdfToSection(sectionId) {
+  if (!state.hasPdf) return;
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  const page = section?.start_page;
+  if (!page) return;
+  const fit = $("pdf-fit-select").value || "width";
+  const baseUrl = state.pdfUrl.split("#", 1)[0];
+  const nextUrl = `${baseUrl}#${pdfFragment(page, fit)}`;
+  if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
+}
+
 function setReaderMode(mode) {
   const isPdf = mode === "pdf";
-  $("workbench-grid").classList.toggle("is-pdf-mode", isPdf);
   $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
-  $("previous-section-button").hidden = isPdf;
-  $("analyze-section-button").hidden = isPdf;
-  $("next-section-button").hidden = isPdf;
+  $("pdf-mode-hint").hidden = !isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
+  if (isPdf) syncPdfToSection(state.currentSection);
 }
 
 async function selectSection(sectionId, analyze) {
@@ -578,8 +614,9 @@ async function selectSection(sectionId, analyze) {
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
-  document.getElementById(domSectionId(sectionId))?.scrollIntoView({ behavior: "smooth", block: "start" });
-  $("composer-context").textContent = `当前：${sectionTitle(sectionId)}`;
+  if ($("structured-reader").hidden) syncPdfToSection(sectionId);
+  else scrollReaderToSection(sectionId);
+  syncComposerContext();
   if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
 }
 
@@ -614,16 +651,21 @@ async function startReading(content, sessionId = state.sessionId) {
   }
 }
 
-function showThinkingCard(detail) {
+function showThinkingCard(detail, target = $("analysis-feed")) {
   const card = create("article", "thinking-card");
   card.append(create("span", "loading-orb"));
   const body = create("div");
   body.append(create("strong", "", "Synapse Copilot 正在精读"));
   body.append(create("p", "", detail || "请稍候…"));
   card.append(body);
-  $("analysis-feed").append(card);
-  $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
   return card;
+}
+
+async function regenerateAnalysis() {
+  if (!state.sessionId) return toast("请先开始章节阅读，再重新生成分析。", true);
+  await startReading(`请重新分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出更深入的核心内容、论证结构与重点概念解读。`);
 }
 
 function applyReadingPayload(payload) {
@@ -635,7 +677,9 @@ function applyReadingPayload(payload) {
   state.activeSkills = session.active_skills || state.activeSkills;
   state.progress = payload.progress || state.progress;
   state.skillOutputs = payload.skill_outputs || [];
-  state.revealedKgElements = data.revealed_kg?.cytoscape_elements || state.revealedKgElements;
+  state.revealedKgElements = mergeKgElements(state.revealedKgElements, data.revealed_kg?.cytoscape_elements || []);
+  const stageIndex = KG_STAGE_ORDER.indexOf(data.revealed_kg?.current_stage || "general");
+  if (stageIndex > state.kgMaxStageIndex) state.kgMaxStageIndex = stageIndex;
   state.queryKgElements = [];
   persistState();
   appendAnalysis(data.agent_response || "后端已完成本次阅读操作。", data);
@@ -644,17 +688,34 @@ function applyReadingPayload(payload) {
   renderOutline();
   syncSkillControls();
   updateSessionBadge();
-  $("kg-stage-copy").textContent = `当前展开阶段：${data.revealed_kg?.current_stage || "general"} · ${data.revealed_kg?.node_count ?? 0} 节点 / ${data.revealed_kg?.edge_count ?? 0} 关系`;
+  const revealedNodes = state.revealedKgElements.filter((item) => !item.data?.source).length;
+  const revealedEdges = state.revealedKgElements.length - revealedNodes;
+  $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex] || "general"} 阶段 · 累计 ${revealedNodes} 节点 / ${revealedEdges} 关系（随阅读只增不减）`;
   renderKg(state.revealedKgElements);
 }
 
-function appendAnalysis(text, metadata = {}) {
+function mergeKgElements(existing, incoming) {
+  if (!incoming?.length) return existing || [];
+  if (!existing?.length) return incoming;
+  const seen = new Set(existing.map((item) => item.data?.id));
+  const merged = [...existing];
+  incoming.forEach((item) => {
+    const key = item.data?.id;
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      merged.push(item);
+    }
+  });
+  return merged;
+}
+
+function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   const card = create("article", "analysis-card");
   const header = create("header");
   header.append(create("strong", "", "Synapse Copilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
   card.append(header, renderMarkdown(text));
-  $("analysis-feed").append(card);
-  $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
 }
 
 function renderSkillOutputs(outputs, target) {
@@ -663,7 +724,9 @@ function renderSkillOutputs(outputs, target) {
     const header = create("header");
     header.append(create("strong", "", output.skill_name || skillLabel(output.skill_id)), create("span", "", output.output_type || output.parse_status || "Skill"));
     card.append(header);
-    if (output.content && Object.keys(output.content).length) card.append(renderStructuredValue(output.content));
+    const content = output.content;
+    const hasStructured = output.parse_status === "parsed" && content && typeof content === "object" && Object.keys(content).length;
+    if (hasStructured) card.append(renderSkillContent(output));
     else card.append(renderMarkdown(output.rendered || "Skill 已执行，但没有返回可展示内容。"));
     const candidates = output.kg_candidates;
     if (candidates?.nodes?.length || candidates?.edges?.length) {
@@ -671,6 +734,63 @@ function renderSkillOutputs(outputs, target) {
     }
     target.append(card);
   });
+}
+
+function renderSkillContent(output) {
+  if (output.output_type === "math_derivation") return renderMathTabs(output.content);
+  return renderStructuredValue(output.content);
+}
+
+function renderMathTabs(content) {
+  const tabs = [
+    { key: "layer_1_intuition", label: "直觉理解" },
+    { key: "layer_2_derivation", label: "逐步推导" },
+    { key: "layer_3_numerical_example", label: "数值例子" },
+    { key: "detected_gaps", label: "推导跳跃" },
+  ].filter((tab) => {
+    const value = content?.[tab.key];
+    if (value == null) return false;
+    if (Array.isArray(value) && !value.length) return false;
+    if (typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length) return false;
+    return true;
+  });
+  if (tabs.length < 2) return renderStructuredValue(content);
+
+  const wrap = create("div", "skill-tabs");
+  const nav = create("div", "skill-tabs-nav");
+  const panels = create("div", "skill-tabs-panels");
+  tabs.forEach((tab, index) => {
+    const button = create("button", `skill-tab${index === 0 ? " is-active" : ""}`, tab.label);
+    button.type = "button";
+    const panel = create("div", `skill-tab-panel${index === 0 ? " is-active" : ""}`);
+    panel.append(renderTabBody(content[tab.key]));
+    button.addEventListener("click", () => {
+      nav.querySelectorAll(".skill-tab").forEach((item) => item.classList.remove("is-active"));
+      panels.querySelectorAll(".skill-tab-panel").forEach((item) => item.classList.remove("is-active"));
+      button.classList.add("is-active");
+      panel.classList.add("is-active");
+    });
+    nav.append(button);
+    panels.append(panel);
+  });
+  wrap.append(nav, panels);
+  return wrap;
+}
+
+function renderTabBody(value) {
+  if (Array.isArray(value)) {
+    const list = create("ul", "tab-list");
+    value.forEach((entry) => {
+      const li = create("li");
+      if (entry && typeof entry === "object") li.append(renderStructuredValue(entry));
+      else li.textContent = String(entry);
+      list.append(li);
+    });
+    return list;
+  }
+  if (value && typeof value === "object") return renderStructuredValue(value);
+  const paragraph = create("p", "", String(value));
+  return paragraph;
 }
 
 function renderStructuredValue(value, depth = 0) {
@@ -911,6 +1031,7 @@ async function resumeReading(showToast = true) {
     state.activeSkills = payload.data?.active_skills || state.activeSkills;
     await refreshProgress(false);
     renderOutline();
+    jumpToSection(state.currentSection);
     syncSkillControls();
     updateSessionBadge();
     if (showToast) toast(payload.data?.message || "阅读已恢复。");
@@ -1009,42 +1130,87 @@ function openFork(skillId, question) {
   $("fork-context-input").value = state.selectedText || sectionTitle(state.currentSection);
   $("fork-question-input").value = question || "请深入分析这段内容。";
   $("fork-skill-select").value = skillId || "reading.math_verifier";
-  $("fork-output").hidden = true;
-  $("fork-output").replaceChildren();
-  $("fork-merge-button").hidden = true;
-  state.activeForkSessionId = "";
-  $("fork-panel").hidden = false;
+  $("fork-modal").hidden = false;
   $("fork-question-input").focus();
-  $("fork-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function closeFork() {
-  $("fork-panel").hidden = true;
+  $("fork-modal").hidden = true;
 }
 
 async function createFork() {
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
   const skillId = $("fork-skill-select").value;
-  setBusy(true, "正在创建探索分支", skillLabel(skillId));
+  closeFork();
+
+  const fork = {
+    id: `fork-${Date.now()}`,
+    sessionId: "",
+    skillId,
+    label: `${skillShort(skillId)} ${state.forks.length + 1}`,
+    feedEl: null,
+  };
+  addForkTab(fork);
+  switchFeed(fork.id);
+
+  const thinking = showThinkingCard(`正在创建 ${fork.label} 分支并分析…`, fork.feedEl);
   try {
     const { payload } = await callPaperReading({
       action: "fork", session_id: state.sessionId, paper_id: state.paperId,
       fork_context: context, fork_question: question, fork_skills: [skillId],
       metadata: { selected_text: context, source_section_id: state.currentSection },
     });
-    state.activeForkSessionId = payload.data?.fork_session_id || "";
-    if (!state.activeForkSessionId) throw new Error("Fork 响应缺少 fork_session_id。");
+    fork.sessionId = payload.data?.fork_session_id || "";
+    if (!fork.sessionId) throw new Error("Fork 响应缺少 fork_session_id。");
     const result = await callPaperReading({
-      action: "start_reading", session_id: state.activeForkSessionId, paper_id: state.paperId,
+      action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
     });
-    const output = $("fork-output");
-    output.replaceChildren(renderMarkdown(result.payload.data?.agent_response || "分支分析完成。"));
-    renderSkillOutputs(result.payload.skill_outputs || [], output);
-    output.hidden = false;
-    $("fork-merge-button").hidden = false;
-    toast("Fork 分支分析已完成。");
+    thinking.remove();
+    appendAnalysis(result.payload.data?.agent_response || "分支分析完成。", {}, fork.feedEl);
+    renderSkillOutputs(result.payload.skill_outputs || [], fork.feedEl);
+    toast("Fork 分支已创建，可在此选项卡继续追问。");
+  } catch (error) {
+    thinking.remove();
+    toast(error.message, true);
+  }
+}
+
+async function runForkTurn(fork, question) {
+  if (!fork.sessionId) return toast("分支会话尚未就绪，请稍候再试。", true);
+  const thinking = showThinkingCard(`正在追问 ${fork.label}…`, fork.feedEl);
+  try {
+    const { payload } = await callPaperReading({
+      action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
+      target_section: state.currentSection, content: question,
+    });
+    thinking.remove();
+    appendAnalysis(payload.data?.agent_response || "分支已完成本次回答。", {}, fork.feedEl);
+    renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+  } catch (error) {
+    thinking.remove();
+    toast(error.message, true);
+  }
+}
+
+async function mergeFork(fork) {
+  if (!fork?.sessionId) return;
+  setBusy(true, "正在合并探索结论", "把分支成果带回主阅读流…");
+  try {
+    const { payload } = await callPaperReading({
+      action: "merge", session_id: state.sessionId, merge_session_id: fork.sessionId,
+    });
+    const data = payload.data || {};
+    state.activeSkills = [...new Set([...state.activeSkills, ...(data.merged_skills || [])])];
+    const card = create("article", "fork-summary");
+    card.append(create("strong", "", `Fork 结论已合并 · ${fork.label}`));
+    (data.key_findings || []).forEach((finding) => card.append(create("p", "", finding)));
+    $("analysis-feed").append(card);
+    syncSkillControls();
+    removeForkTab(fork.id);
+    switchFeed("main");
+    toast(data.message || "分支已合并。");
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -1052,27 +1218,78 @@ async function createFork() {
   }
 }
 
-async function mergeFork() {
-  if (!state.activeForkSessionId) return;
-  setBusy(true, "正在合并探索结论", "把分支成果带回主阅读流…");
-  try {
-    const { payload } = await callPaperReading({
-      action: "merge", session_id: state.sessionId, merge_session_id: state.activeForkSessionId,
+function addForkTab(fork) {
+  const feed = create("div", "analysis-feed copilot-feed fork-feed");
+  feed.dataset.feedId = fork.id;
+  const toolbar = create("div", "fork-feed-toolbar");
+  toolbar.append(create("span", "fork-feed-label", `⑂ ${fork.label}`));
+  const mergeButton = create("button", "mini-button is-accent", "合并回主流程");
+  mergeButton.type = "button";
+  mergeButton.addEventListener("click", () => mergeFork(fork));
+  const closeButton = create("button", "mini-button", "关闭分支");
+  closeButton.type = "button";
+  closeButton.addEventListener("click", () => closeForkTab(fork.id));
+  toolbar.append(mergeButton, closeButton);
+  feed.append(toolbar);
+  $("copilot-feeds").append(feed);
+  fork.feedEl = feed;
+  state.forks.push(fork);
+  renderCopilotTabs();
+}
+
+function closeForkTab(forkId) {
+  const wasActive = state.activeFeedId === forkId;
+  removeForkTab(forkId);
+  if (wasActive) switchFeed("main");
+}
+
+function removeForkTab(forkId) {
+  const index = state.forks.findIndex((item) => item.id === forkId);
+  if (index === -1) return;
+  state.forks[index].feedEl?.remove();
+  state.forks.splice(index, 1);
+  renderCopilotTabs();
+}
+
+function renderCopilotTabs() {
+  const bar = $("copilot-tabs");
+  bar.replaceChildren();
+  const mainTab = create("button", `copilot-tab${state.activeFeedId === "main" ? " is-active" : ""}`, "主流程");
+  mainTab.type = "button";
+  mainTab.addEventListener("click", () => switchFeed("main"));
+  bar.append(mainTab);
+  state.forks.forEach((fork) => {
+    const tab = create("button", `copilot-tab${state.activeFeedId === fork.id ? " is-active" : ""}`);
+    tab.type = "button";
+    tab.append(document.createTextNode(`⑂ ${fork.label}`));
+    const close = create("span", "copilot-tab-close", "×");
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeForkTab(fork.id);
     });
-    const data = payload.data || {};
-    state.activeSkills = [...new Set([...state.activeSkills, ...(data.merged_skills || [])])];
-    const card = create("article", "fork-summary");
-    card.append(create("strong", "", "Fork 结论已合并"));
-    (data.key_findings || []).forEach((finding) => card.append(create("p", "", finding)));
-    $("analysis-feed").append(card);
-    syncSkillControls();
-    closeFork();
-    toast(data.message || "分支已合并。");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
+    tab.append(close);
+    tab.addEventListener("click", () => switchFeed(fork.id));
+    bar.append(tab);
+  });
+}
+
+function switchFeed(feedId) {
+  state.activeFeedId = feedId;
+  document.querySelectorAll(".copilot-feed").forEach((feed) => {
+    feed.classList.toggle("is-active", feed.dataset.feedId === feedId);
+  });
+  renderCopilotTabs();
+  syncComposerContext();
+}
+
+function syncComposerContext() {
+  const fork = state.forks.find((item) => item.id === state.activeFeedId);
+  $("composer-context").textContent = fork ? `Fork：${fork.label}` : `当前：${sectionTitle(state.currentSection) || "全文"}`;
+}
+
+function skillShort(id) {
+  const skill = SKILLS.find((item) => item.id === id);
+  return skill ? skill.short : "探索";
 }
 
 async function queryKg(event) {
@@ -1132,7 +1349,120 @@ function renderLegend() {
   });
 }
 
+function computeKgLayout(nodes, edges, layout) {
+  const ids = nodes.map((item) => item.data.id || item.data.node_id);
+  if (layout === "grid") return layoutGrid(ids);
+  if (layout === "grouped") return layoutGrouped(nodes);
+  if (layout === "circle") return layoutCircle(ids);
+  return layoutForce(ids, edges);
+}
+
+function layoutCircle(ids) {
+  const positions = new Map();
+  const centerX = 450, centerY = 175;
+  const radiusX = Math.min(360, 110 + ids.length * 18);
+  const radiusY = Math.min(120, 60 + ids.length * 6);
+  ids.forEach((id, index) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / ids.length;
+    positions.set(id, { x: centerX + Math.cos(angle) * radiusX, y: centerY + Math.sin(angle) * radiusY });
+  });
+  return positions;
+}
+
+function layoutGrid(ids) {
+  const positions = new Map();
+  const cols = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
+  const rows = Math.max(1, Math.ceil(ids.length / cols));
+  const left = 70, right = 830, top = 45, bottom = 290;
+  const stepX = cols > 1 ? (right - left) / (cols - 1) : 0;
+  const stepY = rows > 1 ? (bottom - top) / (rows - 1) : 0;
+  ids.forEach((id, index) => {
+    const col = index % cols, row = Math.floor(index / cols);
+    positions.set(id, { x: cols > 1 ? left + col * stepX : 450, y: rows > 1 ? top + row * stepY : 175 });
+  });
+  return positions;
+}
+
+function layoutGrouped(nodes) {
+  const positions = new Map();
+  const groups = new Map();
+  nodes.forEach((item) => {
+    const type = item.data.node_type || "Concept";
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(item.data.id || item.data.node_id);
+  });
+  const types = Array.from(groups.keys());
+  const left = 70, right = 830, top = 50, bottom = 285;
+  const colW = types.length > 1 ? (right - left) / (types.length - 1) : 0;
+  types.forEach((type, colIndex) => {
+    const members = groups.get(type);
+    const x = types.length > 1 ? left + colIndex * colW : 450;
+    const stepY = members.length > 1 ? (bottom - top) / (members.length - 1) : 0;
+    members.forEach((id, rowIndex) => {
+      positions.set(id, { x, y: members.length > 1 ? top + rowIndex * stepY : 170 });
+    });
+  });
+  return positions;
+}
+
+function layoutForce(ids, edges) {
+  const n = ids.length;
+  const positions = new Map();
+  if (!n) return positions;
+  const width = 820, height = 260, left = 70, top = 50;
+  const index = new Map(ids.map((id, i) => [id, i]));
+  const px = new Array(n), py = new Array(n);
+  ids.forEach((id, i) => {
+    const angle = -Math.PI / 2 + i * Math.PI * 2 / n;
+    px[i] = left + width / 2 + Math.cos(angle) * width * 0.32;
+    py[i] = top + height / 2 + Math.sin(angle) * height * 0.36;
+  });
+  const links = edges
+    .map((edge) => [index.get(edge.data.source), index.get(edge.data.target)])
+    .filter(([a, b]) => a != null && b != null && a !== b);
+  const k = Math.sqrt((width * height) / n) * 0.62;
+  let temperature = width * 0.09;
+  const iterations = 160;
+  for (let iter = 0; iter < iterations; iter += 1) {
+    const dx = new Array(n).fill(0), dy = new Array(n).fill(0);
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) {
+        let vx = px[i] - px[j], vy = py[i] - py[j];
+        let dist = Math.hypot(vx, vy) || 0.01;
+        const repel = (k * k) / dist;
+        vx = vx / dist * repel; vy = vy / dist * repel;
+        dx[i] += vx; dy[i] += vy; dx[j] -= vx; dy[j] -= vy;
+      }
+    }
+    for (const [a, b] of links) {
+      let vx = px[a] - px[b], vy = py[a] - py[b];
+      const dist = Math.hypot(vx, vy) || 0.01;
+      const attract = (dist * dist) / k;
+      vx = vx / dist * attract; vy = vy / dist * attract;
+      dx[a] -= vx; dy[a] -= vy; dx[b] += vx; dy[b] += vy;
+    }
+    for (let i = 0; i < n; i += 1) {
+      const disp = Math.hypot(dx[i], dy[i]) || 0.01;
+      const scale = Math.min(disp, temperature) / disp;
+      px[i] += dx[i] * scale; py[i] += dy[i] * scale;
+      px[i] = Math.max(left, Math.min(left + width, px[i]));
+      py[i] = Math.max(top, Math.min(top + height, py[i]));
+    }
+    temperature *= 0.965;
+  }
+  ids.forEach((id, i) => positions.set(id, { x: px[i], y: py[i] }));
+  return positions;
+}
+
+let kgSim = null;
+
+function stopKgSim() {
+  if (kgSim?.rafId) cancelAnimationFrame(kgSim.rafId);
+  kgSim = null;
+}
+
 function renderKg(elements) {
+  stopKgSim();
   const svg = $("kg-graph");
   svg.replaceChildren();
   const nodes = elements.filter((item) => !item.data?.source && (item.data?.id || item.data?.node_id));
@@ -1144,29 +1474,21 @@ function renderKg(elements) {
   marker.append(svgNode("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "rgba(154,194,183,.55)" }));
   defs.append(marker);
   svg.append(defs);
-  const positions = new Map();
-  const centerX = 450, centerY = 190, radiusX = Math.min(350, 110 + nodes.length * 18), radiusY = Math.min(125, 70 + nodes.length * 6);
-  nodes.forEach((item, index) => {
-    const angle = -Math.PI / 2 + index * Math.PI * 2 / nodes.length;
-    positions.set(item.data.id || item.data.node_id, { x: centerX + Math.cos(angle) * radiusX, y: centerY + Math.sin(angle) * radiusY });
-  });
+
+  const nodeEls = new Map();
+  const edgeEls = [];
   edges.forEach((item) => {
-    const source = positions.get(item.data.source), target = positions.get(item.data.target);
-    if (!source || !target) return;
-    svg.append(svgNode("line", {
-      class: "kg-edge", x1: source.x, y1: source.y, x2: target.x, y2: target.y,
-      "data-source": item.data.source, "data-target": item.data.target, "marker-end": "url(#kg-arrow)",
-    }));
-    const text = svgNode("text", { class: "kg-edge-label", x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 - 5 });
-    text.textContent = truncate(item.data.label || item.data.edge_type || "", 14);
-    svg.append(text);
+    const line = svgNode("line", { class: "kg-edge", "data-source": item.data.source, "data-target": item.data.target, "marker-end": "url(#kg-arrow)" });
+    const label = svgNode("text", { class: "kg-edge-label" });
+    label.textContent = truncate(item.data.label || item.data.edge_type || "", 14);
+    svg.append(line, label);
+    edgeEls.push({ line, label, source: item.data.source, target: item.data.target });
   });
   nodes.forEach((item) => {
     const data = { ...item.data, id: item.data.id || item.data.node_id };
-    const position = positions.get(data.id);
     const group = svgNode("g", {
       class: `kg-node${state.selectedNode?.id === data.id ? " is-selected" : ""}`,
-      transform: `translate(${position.x} ${position.y})`, "data-node-id": data.id, tabindex: "0", role: "button",
+      "data-node-id": data.id, tabindex: "0", role: "button",
     });
     group.append(svgNode("circle", { r: "24", fill: NODE_COLORS[data.node_type] || "#87a7ff" }));
     const label = svgNode("text", { y: "39" });
@@ -1175,12 +1497,139 @@ function renderKg(elements) {
     group.addEventListener("click", () => selectKgNode(data));
     group.addEventListener("keydown", (event) => { if (event.key === "Enter") selectKgNode(data); });
     svg.append(group);
+    nodeEls.set(data.id, group);
   });
+
+  if (state.kgLayout === "force") {
+    startKgSim(nodes, edgeEls, nodeEls);
+  } else {
+    applyKgPositions(computeKgLayout(nodes, edges, state.kgLayout), nodeEls, edgeEls);
+  }
+}
+
+function applyKgPositions(positions, nodeEls, edgeEls) {
+  nodeEls.forEach((group, id) => {
+    const p = positions.get(id);
+    if (p) group.setAttribute("transform", `translate(${p.x} ${p.y})`);
+  });
+  edgeEls.forEach(({ line, label, source, target }) => {
+    const s = positions.get(source), t = positions.get(target);
+    if (!s || !t) return;
+    line.setAttribute("x1", s.x); line.setAttribute("y1", s.y);
+    line.setAttribute("x2", t.x); line.setAttribute("y2", t.y);
+    label.setAttribute("x", (s.x + t.x) / 2);
+    label.setAttribute("y", (s.y + t.y) / 2 - 5);
+  });
+}
+
+function startKgSim(nodes, edgeEls, nodeEls) {
+  const count = nodes.length;
+  const simNodes = nodes.map((item, i) => {
+    const angle = -Math.PI / 2 + i * 2 * Math.PI / count;
+    return {
+      id: item.data.id || item.data.node_id,
+      x: 450 + Math.cos(angle) * 300,
+      y: 175 + Math.sin(angle) * 110,
+      vx: 0, vy: 0, fixed: false,
+    };
+  });
+  const index = new Map(simNodes.map((n) => [n.id, n]));
+  const links = edgeEls
+    .map((e) => ({ s: index.get(e.source), t: index.get(e.target) }))
+    .filter((l) => l.s && l.t && l.s !== l.t);
+  kgSim = { nodes: simNodes, links, nodeEls, edgeEls, alpha: 1, rafId: null, dragging: null };
+  simNodes.forEach((n) => {
+    nodeEls.get(n.id).addEventListener("mousedown", (event) => startNodeDrag(event, n));
+  });
+  kgSim.rafId = requestAnimationFrame(tickKgSim);
+}
+
+function tickKgSim() {
+  const sim = kgSim;
+  if (!sim) return;
+  stepKgSim(sim);
+  applyKgPositions(new Map(sim.nodes.map((n) => [n.id, n])), sim.nodeEls, sim.edgeEls);
+  sim.alpha *= 0.985;
+  if (sim.alpha > 0.02 || sim.dragging) {
+    sim.rafId = requestAnimationFrame(tickKgSim);
+  } else {
+    sim.rafId = null;
+  }
+}
+
+function stepKgSim(sim) {
+  const { nodes, links } = sim;
+  const n = nodes.length;
+  const alpha = sim.dragging ? Math.max(sim.alpha, 0.35) : sim.alpha;
+  if (alpha <= 0.001) return;
+  const k = Math.sqrt((820 * 260) / Math.max(n, 1)) * 0.62;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 1; j < n; j += 1) {
+      const a = nodes[i], b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+      const d = Math.sqrt(d2);
+      const f = (k * k) / d * alpha;
+      const fx = dx / d * f, fy = dy / d * f;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+  }
+  links.forEach(({ s, t }) => {
+    const dx = s.x - t.x, dy = s.y - t.y;
+    const d = Math.hypot(dx, dy) || 0.01;
+    const f = (d * d) / k * alpha * 0.1;
+    const fx = dx / d * f, fy = dy / d * f;
+    s.vx -= fx; s.vy -= fy; t.vx += fx; t.vy += fy;
+  });
+  nodes.forEach((node) => {
+    if (node.fixed) { node.vx = 0; node.vy = 0; return; }
+    node.vx *= 0.32; node.vy *= 0.32;
+    node.x += node.vx; node.y += node.vy;
+    node.x = Math.max(70, Math.min(830, node.x));
+    node.y = Math.max(50, Math.min(310, node.y));
+  });
+}
+
+function startNodeDrag(event, node) {
+  if (state.kgLayout !== "force" || !kgSim) return;
+  event.preventDefault();
+  const sim = kgSim;
+  const svg = $("kg-graph");
+  node.fixed = true;
+  sim.dragging = node;
+  sim.alpha = Math.max(sim.alpha, 0.2);
+  if (!sim.rafId) sim.rafId = requestAnimationFrame(tickKgSim);
+  const onMove = (e) => {
+    const p = svgPoint(svg, e.clientX, e.clientY);
+    node.x = Math.max(70, Math.min(830, p.x));
+    node.y = Math.max(50, Math.min(310, p.y));
+    node.vx = 0; node.vy = 0;
+    sim.alpha = Math.max(sim.alpha, 0.35);
+  };
+  const onUp = () => {
+    node.fixed = false;
+    sim.dragging = null;
+    sim.alpha = Math.min(sim.alpha, 0.04);
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function svgPoint(svg, clientX, clientY) {
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  const ctm = svg.getScreenCTM();
+  return ctm ? pt.matrixTransform(ctm.inverse()) : { x: clientX, y: clientY };
 }
 
 function selectKgNode(data) {
   state.selectedNode = data;
-  renderKg(state.queryKgElements.length ? state.queryKgElements : state.revealedKgElements);
+  document.querySelectorAll(".kg-node").forEach((node) => {
+    node.classList.toggle("is-selected", node.dataset.nodeId === data.id);
+  });
   const detail = $("kg-node-detail");
   detail.replaceChildren(create("p", "panel-label", data.node_type || "Node"), create("h3", "", data.label || data.id));
   if (data.summary) detail.append(create("p", "muted-copy", data.summary));
@@ -1213,12 +1662,54 @@ function highlightPath(path) {
   toast(`${path.source_label || "起点"} → ${path.target_label || "终点"}`);
 }
 
+function scrollReaderToSection(sectionId, smooth = true) {
+  const reader = $("structured-reader");
+  const target = document.getElementById(domSectionId(sectionId));
+  if (!reader || !target) return;
+  const top = target.getBoundingClientRect().top - reader.getBoundingClientRect().top + reader.scrollTop - 12;
+  reader.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+}
+
+function bindScrollSpy() {
+  const reader = $("structured-reader");
+  let ticking = false;
+  reader.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      updateCurrentSectionFromScroll();
+    });
+  }, { passive: true });
+}
+
+function updateCurrentSectionFromScroll() {
+  if ($("structured-reader").hidden) return;
+  const reader = $("structured-reader");
+  const sections = Array.from(reader.querySelectorAll(".paper-section"));
+  if (!sections.length) return;
+  const readerTop = reader.getBoundingClientRect().top;
+  let current = sections[0].dataset.sectionId;
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top - readerTop <= 110) current = section.dataset.sectionId;
+    else break;
+  }
+  if (current === state.currentSection) return;
+  state.currentSection = current;
+  persistState();
+  document.querySelectorAll(".outline-item").forEach((item, index) => {
+    item.classList.toggle("is-active", (state.paper?.sections?.[index]?.section_id) === current);
+  });
+  document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === current));
+  syncComposerContext();
+}
+
 function jumpToSection(sectionId) {
   if (!sectionId) return;
   setReaderMode("structured");
   state.currentSection = sectionId;
   renderOutline();
-  document.getElementById(domSectionId(sectionId))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollReaderToSection(sectionId);
 }
 
 async function restoreLocalState() {
