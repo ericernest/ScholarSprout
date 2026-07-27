@@ -15,6 +15,7 @@ from channels.base import ChannelMessage
 from channels.web import WebChannel
 from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
+from handlers.domain_onboarding.audit import create_audit_sink_from_env
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
@@ -121,6 +122,16 @@ def domain_onboarding_metrics(request: Request) -> dict:
     return metrics.snapshot()
 
 
+@app.on_event("shutdown")
+def close_domain_onboarding_resources() -> None:
+    pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
+    if pipeline is not None:
+        pipeline.close()
+    audit_sink = getattr(app.state, "domain_onboarding_audit_sink", None)
+    if audit_sink is not None:
+        audit_sink.close()
+
+
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
@@ -155,6 +166,7 @@ def start_gateway_server(host: str, port: int) -> None:
         input_cost_per_million_tokens=config.client.input_cost_per_million_tokens,
         output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
     )
+    app.state.domain_onboarding_audit_sink = create_audit_sink_from_env()
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
     app.state.capability_selector = capability_selector

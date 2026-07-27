@@ -8,12 +8,14 @@ from math import ceil
 from statistics import fmean
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 from runtime.agent_runner import TokenUsage
 
 
 @dataclass(slots=True)
 class DomainOnboardingRequestTrace:
+    request_id: str = field(default_factory=lambda: str(uuid4()))
     policy_version: str = "domain-quality-v1.0.0"
     policy_fingerprint: str | None = None
     status: str = "unknown"
@@ -79,6 +81,15 @@ class DomainOnboardingRequestTrace:
     interrupted_stage: str | None = None
     deadline_exceeded: bool = False
     cancelled: bool = False
+    audit_write_failed: bool = False
+    adaptive_policy_version: str | None = None
+    adaptive_recommendations: dict[str, str] = field(default_factory=dict)
+    knowledge_graph_duration_ms: float = 0.0
+    knowledge_graph_node_count: int = 0
+    knowledge_graph_edge_count: int = 0
+    knowledge_graph_valid: bool = False
+    knowledge_graph_fallback_used: bool = False
+    knowledge_graph_build_failed: bool = False
 
     @property
     def retry_attempted(self) -> bool:
@@ -154,6 +165,16 @@ class DomainOnboardingMetrics:
         self._repair_dimension_deltas: dict[str, list[float]] = defaultdict(list)
         self._policy_versions: Counter[str] = Counter()
         self._policy_fingerprints: Counter[str] = Counter()
+        self._audit_write_failures = 0
+        self._adaptive_policy_versions: Counter[str] = Counter()
+        self._adaptive_recommendations: Counter[str] = Counter()
+        self._graph_builds = 0
+        self._graph_valid = 0
+        self._graph_fallbacks = 0
+        self._graph_failures = 0
+        self._graph_nodes = 0
+        self._graph_edges = 0
+        self._graph_durations: deque[float] = deque(maxlen=window_size)
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -163,6 +184,19 @@ class DomainOnboardingMetrics:
                 self._policy_fingerprints[
                     f"{trace.policy_version}:{trace.policy_fingerprint}"
                 ] += 1
+            self._audit_write_failures += int(trace.audit_write_failed)
+            if trace.adaptive_policy_version:
+                self._adaptive_policy_versions[trace.adaptive_policy_version] += 1
+            for issue_type, action_type in trace.adaptive_recommendations.items():
+                self._adaptive_recommendations[f"{issue_type}:{action_type}"] += 1
+            if trace.knowledge_graph_node_count or trace.knowledge_graph_build_failed:
+                self._graph_builds += 1
+                self._graph_valid += int(trace.knowledge_graph_valid)
+                self._graph_fallbacks += int(trace.knowledge_graph_fallback_used)
+                self._graph_failures += int(trace.knowledge_graph_build_failed)
+                self._graph_nodes += trace.knowledge_graph_node_count
+                self._graph_edges += trace.knowledge_graph_edge_count
+                self._graph_durations.append(trace.knowledge_graph_duration_ms)
             self._statuses[trace.status] += 1
             if trace.interrupted_stage:
                 self._interrupted_stages[trace.interrupted_stage] += 1
@@ -254,6 +288,22 @@ class DomainOnboardingMetrics:
                 "policies": {
                     "versions": dict(self._policy_versions),
                     "fingerprints": dict(self._policy_fingerprints),
+                },
+                "audit": {"write_failures": self._audit_write_failures},
+                "adaptive_repair": {
+                    "mode": "shadow",
+                    "policy_versions": dict(self._adaptive_policy_versions),
+                    "recommendations": dict(self._adaptive_recommendations),
+                },
+                "knowledge_graph": {
+                    "mode": "shadow",
+                    "builds": self._graph_builds,
+                    "valid": self._graph_valid,
+                    "fallbacks": self._graph_fallbacks,
+                    "failures": self._graph_failures,
+                    "nodes": self._graph_nodes,
+                    "edges": self._graph_edges,
+                    "latency": _duration_summary(list(self._graph_durations)),
                 },
                 "statuses": dict(self._statuses),
                 "interruptions": {

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from runtime.agent_runner import TokenUsage
 
+from .adaptive_repair import AdaptiveRepairAdvisor, load_advisor
 from .config import DomainOnboardingConfig
 from .coverage import PaperCoverageAnalyzer
 from .execution import PipelineExecutionContext, PipelineExecutionHalted
 from .generator import GenerationError, StructuredOnboardingGenerator
+from .graph_path_planner import GraphBasedPathPlanner
+from .graph_validator import DomainKnowledgeGraphValidator
+from .knowledge_graph import DomainKnowledgeGraphBuilder
 from .metrics import DomainOnboardingRequestTrace
 from .planner import StormLitePlanner
 from .profile import RuleBasedProfileBuilder
@@ -52,6 +57,10 @@ class DomainOnboardingPipeline:
         config: DomainOnboardingConfig,
         coverage_analyzer: Any | None = None,
         selection_policy: RepairSelectionPolicy | None = None,
+        repair_advisor: AdaptiveRepairAdvisor | None = None,
+        graph_builder: Any | None = None,
+        graph_validator: Any | None = None,
+        graph_path_planner: Any | None = None,
     ) -> None:
         self.profile_builder = profile_builder
         self.planner = planner
@@ -67,6 +76,10 @@ class DomainOnboardingPipeline:
             self.policy.min_improvement_delta,
             self.policy.critical_dimensions,
         )
+        self.repair_advisor = repair_advisor
+        self.graph_builder = graph_builder or DomainKnowledgeGraphBuilder()
+        self.graph_validator = graph_validator or DomainKnowledgeGraphValidator()
+        self.graph_path_planner = graph_path_planner or GraphBasedPathPlanner()
 
     def run(
         self,
@@ -209,6 +222,9 @@ class DomainOnboardingPipeline:
                     quality=first_quality,
                     quality_attempts=quality_attempts,
                     repair_record=initial_record,
+                    knowledge_graph=self._build_knowledge_graph(
+                        output, first_quality, trace
+                    ),
                 )
 
             partial_repair_record = RepairRecord(
@@ -216,6 +232,7 @@ class DomainOnboardingPipeline:
                 policy_version=self.policy.policy_version,
                 policy_fingerprint=self.policy.fingerprint,
             )
+            self._attach_shadow_recommendations(partial_repair_record, first_quality, trace)
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
                 self.config.repair_timeout_seconds,
@@ -231,6 +248,7 @@ class DomainOnboardingPipeline:
             partial_repair_record = repair_result.record
             partial_repair_record.policy_version = self.policy.policy_version
             partial_repair_record.policy_fingerprint = self.policy.fingerprint
+            self._attach_shadow_recommendations(partial_repair_record, first_quality, trace)
             trace.repair_reason = repair_result.action
             self._record_retry_model_stats(trace, repair_result.stats)
             retry_quality, extra_eval_ms = context.call(
@@ -281,6 +299,9 @@ class DomainOnboardingPipeline:
                 quality=selected_quality,
                 quality_attempts=quality_attempts,
                 repair_record=repair_result.record,
+                knowledge_graph=self._build_knowledge_graph(
+                    selected_output, selected_quality, trace
+                ),
             )
         except PipelineExecutionHalted as error:
             trace.interrupted_stage = error.stage
@@ -320,6 +341,49 @@ class DomainOnboardingPipeline:
     def _bind_quality_policy(self, quality: ContentQuality) -> None:
         quality.policy_version = self.policy.policy_version
         quality.policy_fingerprint = self.policy.fingerprint
+
+    def _attach_shadow_recommendations(
+        self,
+        record: RepairRecord,
+        quality: ContentQuality,
+        trace: DomainOnboardingRequestTrace,
+    ) -> None:
+        if self.repair_advisor is None:
+            return
+        record.adaptive_policy_version = self.repair_advisor.policy.policy_version
+        record.shadow_recommendations = self.repair_advisor.recommend(quality)
+        trace.adaptive_policy_version = record.adaptive_policy_version
+        trace.adaptive_recommendations = dict(record.shadow_recommendations)
+
+    def _build_knowledge_graph(
+        self,
+        output: Any,
+        quality: ContentQuality,
+        trace: DomainOnboardingRequestTrace,
+    ) -> Any | None:
+        if not self.config.knowledge_graph_enabled or not quality.passed_hard_gates:
+            return None
+        started = time.perf_counter()
+        try:
+            graph = self.graph_builder.build(
+                output,
+                request_id=trace.request_id,
+                quality_policy_version=self.policy.policy_version,
+            )
+            graph.validation = self.graph_validator.validate(graph)
+            graph.path_plan = self.graph_path_planner.plan(graph)
+            trace.knowledge_graph_node_count = len(graph.nodes)
+            trace.knowledge_graph_edge_count = len(graph.edges)
+            trace.knowledge_graph_valid = graph.validation.valid
+            trace.knowledge_graph_fallback_used = bool(
+                graph.path_plan and graph.path_plan.fallback_used
+            )
+            return graph
+        except Exception:
+            trace.knowledge_graph_build_failed = True
+            return None
+        finally:
+            trace.knowledge_graph_duration_ms += (time.perf_counter() - started) * 1000
 
     def _supplement_papers(
         self,
@@ -578,4 +642,7 @@ def create_default_pipeline(
         evaluator=CompositeQualityEvaluator(settings),
         repairer=TargetedRepairer(generator, settings),
         config=settings,
+        repair_advisor=load_advisor(
+            os.getenv("DOMAIN_ONBOARDING_ADAPTIVE_POLICY_FILE")
+        ),
     )

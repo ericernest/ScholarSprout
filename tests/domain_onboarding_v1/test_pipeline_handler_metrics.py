@@ -58,6 +58,7 @@ def make_pipeline(
     fail_retrieval: bool = False,
     empty_retrieval: bool = False,
     config: DomainOnboardingConfig | None = None,
+    repair_advisor: object | None = None,
 ) -> DomainOnboardingPipeline:
     config = config or DomainOnboardingConfig()
     generator = StructuredOnboardingGenerator(FakeJSONModel(responses), config)
@@ -70,6 +71,7 @@ def make_pipeline(
         evaluator=CompositeQualityEvaluator(config),
         repairer=TargetedRepairer(generator, config),
         config=config,
+        repair_advisor=repair_advisor,
     )
 
 
@@ -303,6 +305,30 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(trace.repair_reason, "llm_targeted_repair")
         self.assertEqual(pipeline.retriever.calls, 2)
 
+    def test_adaptive_repair_recommendation_is_shadow_only_and_recorded(self) -> None:
+        class FakeAdvisor:
+            policy = SimpleNamespace(policy_version="domain-repair-adaptive-v1.0.0")
+
+            def recommend(self, quality):
+                return {quality.issues[0].issue_type: "code"}
+
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["development_stages"] = low["development_stages"][:1]
+        pipeline = make_pipeline([low, low], repair_advisor=FakeAdvisor())
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertEqual(
+            result.repair_record.adaptive_policy_version,
+            "domain-repair-adaptive-v1.0.0",
+        )
+        self.assertTrue(result.repair_record.shadow_recommendations)
+        self.assertEqual(trace.adaptive_recommendations, result.repair_record.shadow_recommendations)
+        self.assertNotEqual(result.repair_record.actions, [])
+
     def test_unimproved_repair_keeps_first_result(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
         low = make_generation_payload(paper_ids)
@@ -441,6 +467,8 @@ class HandlerAndMetricsTests(unittest.TestCase):
                 ],
                 repair_changed_path_count=3,
                 repair_dimension_deltas={"structure": 0.2},
+                adaptive_policy_version="domain-repair-adaptive-v1.0.0",
+                adaptive_recommendations={"route_conflict": "code"},
             )
         )
 
@@ -460,6 +488,10 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["repair"]["changed_paths"]["total"], 3)
         self.assertEqual(snapshot["repair"]["dimension_deltas"]["structure"], 0.2)
+        self.assertEqual(
+            snapshot["adaptive_repair"]["recommendations"],
+            {"route_conflict:code": 1},
+        )
 
     def test_metrics_aggregate_timeout_and_interrupted_stage(self) -> None:
         metrics = DomainOnboardingMetrics()

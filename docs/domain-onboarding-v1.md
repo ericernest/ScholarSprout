@@ -180,6 +180,54 @@ Metrics 同时聚合首次和最终质量状态、问题类型、失败硬门槛
 选择原因、变更路径数量与维度改善值。这些指标只记录结构化摘要，不记录 Prompt、
 API Key 或完整生成内容。
 
+### 请求审计持久化
+
+设置 `DOMAIN_ONBOARDING_AUDIT_DIR` 后，每个 V1 请求会按 UTC 日期追加到
+`domain-onboarding-YYYY-MM-DD.jsonl`。记录包含请求 ID、策略版本、阶段耗时、
+模型用量、论文计数、质量尝试和修复记录，但只保存用户、会话与查询的 SHA-256
+摘要，不保存原始输入、Prompt、API Key 或完整生成内容。设置
+`DOMAIN_ONBOARDING_AUDIT_FSYNC=true` 可在每次追加后强制同步文件。未配置目录时
+使用 No-Op 存储；写入失败不会改变业务响应，但会计入 Metrics 的
+`audit.write_failures`。
+
+### 离线质量评测
+
+固定六领域数据位于
+`evaluation/fixtures/domain_onboarding/v1/cases.jsonl`，通过以下命令生成报告：
+
+```bash
+python -m evaluation.domain_onboarding \
+  evaluation/fixtures/domain_onboarding/v1/cases.jsonl \
+  --output .artifacts/domain-onboarding-offline-report.json
+```
+
+报告按策略版本和领域计算首次硬门槛通过率、与标注的一致率、修复改善率、问题
+误报率、七个维度与标注的平均绝对误差及重复评估稳定性。仓库内首批六条记录是用于
+锁定框架行为的 `seed` 标注，不冒充已经完成的人工实验；团队复核后应把
+`annotation_status` 更新为 `human_verified`，再将结果用于策略上线门槛。
+
+### 受控在线端到端测试
+
+真实论文源和真实模型测试默认禁用。固定中英文配对用例位于
+`evaluation/fixtures/domain_onboarding/v1/online-cases.jsonl`，运行时必须同时提供
+环境开关、费用确认、最大用例数和费用上限：
+
+```bash
+RUN_DOMAIN_ONBOARDING_ONLINE=1 \
+python -m evaluation.domain_onboarding.online_cli \
+  evaluation/fixtures/domain_onboarding/v1/online-cases.jsonl \
+  --output .artifacts/domain-onboarding-online-report.json \
+  --max-cases 2 \
+  --max-estimated-cost-usd 0.5 \
+  --cost-reserve-per-case-usd 0.25 \
+  --confirm-online
+```
+
+默认要求配置输入与输出 token 单价；只有显式传入 `--allow-unpriced` 才能在无法
+估算费用时运行。报告记录成功率、论文元数据有效率、硬门槛通过率、p50/p95
+延迟、token、费用和跨语言证据警告率。跨语言警告只作为待人工复核队列，不能在
+缺少人工标签时直接宣称为误报。
+
 ### 质量策略版本
 
 阈值、七个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小

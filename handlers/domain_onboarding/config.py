@@ -77,6 +77,8 @@ class DomainOnboardingConfig(BaseModel):
     retrieval_circuit_cooldown_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
     retrieval_stale_cache_seconds: float = Field(default=86400.0, ge=0.0, le=604800.0)
     arxiv_min_interval_seconds: float = Field(default=3.0, ge=0.0, le=10.0)
+    knowledge_graph_enabled: bool = False
+    knowledge_graph_shadow_mode: bool = True
 
     @model_validator(mode="after")
     def validate_settings(self) -> "DomainOnboardingConfig":
@@ -92,6 +94,8 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError("ranking weights must sum to 1.0")
         if self.retrieval_max_backoff_seconds < self.retrieval_backoff_seconds:
             raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
+        if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
+            raise ValueError("knowledge graph foundation supports shadow mode only")
         self.to_policy()
         return self
 

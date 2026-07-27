@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from channels.base import ChannelMessage
+from handlers.domain_onboarding.audit import build_audit_record
 from handlers.domain_onboarding.legacy import (
     build_empty_result,
     build_llm_failed_result,
@@ -20,7 +21,7 @@ from handlers.domain_onboarding.legacy import (
     with_retry_metadata,
 )
 from handlers.domain_onboarding.metrics import DomainOnboardingRequestTrace
-from handlers.domain_onboarding.schemas import DomainOnboardingRequest
+from handlers.domain_onboarding.schemas import DomainOnboardingRequest, PipelineResult
 
 
 def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) -> dict[str, Any]:
@@ -30,6 +31,7 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
         return handle_legacy_domain_onboarding_message(message, app_state)
 
     trace = DomainOnboardingRequestTrace()
+    pipeline_result: PipelineResult | None = None
     started_at = perf_counter()
     try:
         try:
@@ -43,9 +45,9 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
             trace.status = "invalid_input"
             return build_empty_result()
 
-        result = pipeline.run(request, trace)
-        trace.status = result.status
-        return result.to_response()
+        pipeline_result = pipeline.run(request, trace)
+        trace.status = pipeline_result.status
+        return pipeline_result.to_response()
     except Exception as error:
         trace.status = "internal_error"
         return {
@@ -56,6 +58,20 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
         }
     finally:
         trace.total_duration_ms = round((perf_counter() - started_at) * 1000, 3)
+        audit_sink = getattr(app_state, "domain_onboarding_audit_sink", None)
+        if audit_sink is not None:
+            try:
+                audit_sink.write(
+                    build_audit_record(
+                        trace,
+                        query=str(message.content or ""),
+                        session_id=message.session_id,
+                        user_id=message.user_id,
+                        result=pipeline_result,
+                    )
+                )
+            except Exception:
+                trace.audit_write_failed = True
         metrics = getattr(app_state, "domain_onboarding_metrics", None)
         if metrics is not None:
             metrics.record(trace)
