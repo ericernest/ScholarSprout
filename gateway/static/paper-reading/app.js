@@ -26,13 +26,15 @@ const NODE_COLORS = {
   Concept: "#87a7ff", Limitation: "#ff738f", Claim: "#ffe082", RelatedWork: "#c39bff", Insight: "#ffd35c",
 };
 
+const KG_STAGE_ORDER = ["abstract", "introduction", "method", "experiment", "conclusion", "general"];
+
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   revealedKgElements: [], queryKgElements: [], selectedNode: null,
   selectedText: "", uploadSummary: null,
   sessionState: "", restored: false, busy: false, kgLayout: "force",
-  forks: [], activeFeedId: "main",
+  forks: [], activeFeedId: "main", kgMaxStageIndex: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -366,7 +368,8 @@ async function loadPaperDetail() {
   const initialKg = data.initial_kg || {};
   if (initialKg.cytoscape_elements?.length) {
     state.revealedKgElements = initialKg.cytoscape_elements;
-    $("kg-stage-copy").textContent = `已恢复图谱：${initialKg.current_stage || "abstract"} · ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系`;
+    state.kgMaxStageIndex = Math.max(0, KG_STAGE_ORDER.indexOf(initialKg.current_stage || "abstract"));
+    $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex]} 阶段 · 累计 ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系（随阅读只增不减）`;
   }
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
@@ -376,7 +379,7 @@ function renderReadyCard(sourceLabel = "已保存论文") {
   if (!state.paper) return;
   $("ready-title").textContent = state.paper.title || "未命名论文";
   $("ready-authors").textContent = (state.paper.authors || []).join("、") || "作者信息暂无";
-  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看结构化正文。";
+  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看论文重排。";
   $("ready-sections").textContent = state.paper.sections?.length || 0;
   $("ready-nodes").textContent = state.uploadSummary?.new_nodes ?? "—";
   $("ready-edges").textContent = state.uploadSummary?.new_edges ?? "—";
@@ -595,14 +598,9 @@ function syncPdfToSection(sectionId) {
 
 function setReaderMode(mode) {
   const isPdf = mode === "pdf";
-  $("workbench-grid").classList.toggle("is-pdf-mode", isPdf);
   $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
-  $("previous-section-button").hidden = isPdf;
-  $("analyze-section-button").hidden = isPdf;
-  $("fork-explore-button").hidden = isPdf;
-  $("next-section-button").hidden = isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
   if (isPdf) syncPdfToSection(state.currentSection);
 }
@@ -612,7 +610,8 @@ async function selectSection(sectionId, analyze) {
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
-  scrollReaderToSection(sectionId);
+  if ($("structured-reader").hidden) syncPdfToSection(sectionId);
+  else scrollReaderToSection(sectionId);
   syncComposerContext();
   if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
 }
@@ -674,7 +673,9 @@ function applyReadingPayload(payload) {
   state.activeSkills = session.active_skills || state.activeSkills;
   state.progress = payload.progress || state.progress;
   state.skillOutputs = payload.skill_outputs || [];
-  state.revealedKgElements = data.revealed_kg?.cytoscape_elements || state.revealedKgElements;
+  state.revealedKgElements = mergeKgElements(state.revealedKgElements, data.revealed_kg?.cytoscape_elements || []);
+  const stageIndex = KG_STAGE_ORDER.indexOf(data.revealed_kg?.current_stage || "general");
+  if (stageIndex > state.kgMaxStageIndex) state.kgMaxStageIndex = stageIndex;
   state.queryKgElements = [];
   persistState();
   appendAnalysis(data.agent_response || "后端已完成本次阅读操作。", data);
@@ -683,8 +684,25 @@ function applyReadingPayload(payload) {
   renderOutline();
   syncSkillControls();
   updateSessionBadge();
-  $("kg-stage-copy").textContent = `当前展开阶段：${data.revealed_kg?.current_stage || "general"} · ${data.revealed_kg?.node_count ?? 0} 节点 / ${data.revealed_kg?.edge_count ?? 0} 关系`;
+  const revealedNodes = state.revealedKgElements.filter((item) => !item.data?.source).length;
+  const revealedEdges = state.revealedKgElements.length - revealedNodes;
+  $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex] || "general"} 阶段 · 累计 ${revealedNodes} 节点 / ${revealedEdges} 关系（随阅读只增不减）`;
   renderKg(state.revealedKgElements);
+}
+
+function mergeKgElements(existing, incoming) {
+  if (!incoming?.length) return existing || [];
+  if (!existing?.length) return incoming;
+  const seen = new Set(existing.map((item) => item.data?.id));
+  const merged = [...existing];
+  incoming.forEach((item) => {
+    const key = item.data?.id;
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      merged.push(item);
+    }
+  });
+  return merged;
 }
 
 function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
