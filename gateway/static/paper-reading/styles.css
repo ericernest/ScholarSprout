@@ -251,6 +251,10 @@ select option { color: #07120f; }
 }
 .pdf-reader { position: relative; min-height: 0; }
 .pdf-reader iframe { width: 100%; height: 100%; border: 0; background: #d8dedc; }
+.pdf-mode-hint {
+  padding: .55rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
+  color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .7rem; line-height: 1.55;
+}
 .reader-panel .empty-state { color: #68736f; }
 .empty-state, .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
 .selection-toolbar {
@@ -349,7 +353,8 @@ select option { color: #07120f; }
 #kg-graph { width: 100%; height: 100%; min-height: 350px; }
 .kg-edge { stroke: rgba(154,194,183,.35); stroke-width: 1.4; }
 .kg-edge-label { fill: #789b92; font-size: 9px; text-anchor: middle; }
-.kg-node { cursor: pointer; }
+.kg-node { cursor: grab; }
+.kg-node:active { cursor: grabbing; }
 .kg-node circle { stroke: rgba(234,255,247,.55); stroke-width: 1.2; filter: drop-shadow(0 0 7px rgba(102,245,214,.2)); }
 .kg-node:hover circle, .kg-node.is-selected circle { stroke: white; stroke-width: 2.5; }
 .kg-node text { fill: #eafff7; font-size: 10px; text-anchor: middle; pointer-events: none; }

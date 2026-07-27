@@ -559,9 +559,8 @@ function renderPaperFigure(figure) {
     const sourceButton = create("button", "figure-source-button", `原文第 ${figure.page} 页`);
     sourceButton.type = "button";
     sourceButton.addEventListener("click", () => {
-      $("pdf-fit-select").value = "width";
       const baseUrl = state.pdfUrl.split("#", 1)[0];
-      $("pdf-frame").src = `${baseUrl}#page=${figure.page}&zoom=75`;
+      $("pdf-frame").src = `${baseUrl}#${pdfFragment(figure.page, $("pdf-fit-select").value || "width")}`;
       setReaderMode("pdf");
     });
     caption.append(sourceButton);
@@ -570,15 +569,20 @@ function renderPaperFigure(figure) {
   return card;
 }
 
+function pdfFragment(page, fit) {
+  const view = { width: "view=FitH", page: "view=Fit", 100: "zoom=100" }[fit] || "view=FitH";
+  return `page=${page || 1}&${view}`;
+}
+
+function currentPdfPage() {
+  const section = state.paper?.sections?.find((item) => item.section_id === state.currentSection);
+  return section?.start_page || 1;
+}
+
 function renderPdf() {
   const fit = $("pdf-fit-select").value || "width";
-  const fragments = {
-    width: "page=1&zoom=75",
-    page: "page=1&zoom=55",
-    100: "page=1&zoom=100",
-  };
   const baseUrl = state.pdfUrl.split("#", 1)[0];
-  const nextUrl = state.hasPdf ? `${baseUrl}#${fragments[fit] || fragments.width}` : "about:blank";
+  const nextUrl = state.hasPdf ? `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}` : "about:blank";
   if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
   $("pdf-frame").hidden = !state.hasPdf;
   $("pdf-empty").hidden = state.hasPdf;
@@ -590,9 +594,8 @@ function syncPdfToSection(sectionId) {
   const page = section?.start_page;
   if (!page) return;
   const fit = $("pdf-fit-select").value || "width";
-  const zoom = { width: 75, page: 55, 100: 100 }[fit] || 75;
   const baseUrl = state.pdfUrl.split("#", 1)[0];
-  const nextUrl = `${baseUrl}#page=${page}&zoom=${zoom}`;
+  const nextUrl = `${baseUrl}#${pdfFragment(page, fit)}`;
   if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
 }
 
@@ -601,6 +604,7 @@ function setReaderMode(mode) {
   $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
+  $("pdf-mode-hint").hidden = !isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
   if (isPdf) syncPdfToSection(state.currentSection);
 }
@@ -1450,7 +1454,15 @@ function layoutForce(ids, edges) {
   return positions;
 }
 
+let kgSim = null;
+
+function stopKgSim() {
+  if (kgSim?.rafId) cancelAnimationFrame(kgSim.rafId);
+  kgSim = null;
+}
+
 function renderKg(elements) {
+  stopKgSim();
   const svg = $("kg-graph");
   svg.replaceChildren();
   const nodes = elements.filter((item) => !item.data?.source && (item.data?.id || item.data?.node_id));
@@ -1462,24 +1474,21 @@ function renderKg(elements) {
   marker.append(svgNode("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "rgba(154,194,183,.55)" }));
   defs.append(marker);
   svg.append(defs);
-  const positions = computeKgLayout(nodes, edges, state.kgLayout);
+
+  const nodeEls = new Map();
+  const edgeEls = [];
   edges.forEach((item) => {
-    const source = positions.get(item.data.source), target = positions.get(item.data.target);
-    if (!source || !target) return;
-    svg.append(svgNode("line", {
-      class: "kg-edge", x1: source.x, y1: source.y, x2: target.x, y2: target.y,
-      "data-source": item.data.source, "data-target": item.data.target, "marker-end": "url(#kg-arrow)",
-    }));
-    const text = svgNode("text", { class: "kg-edge-label", x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 - 5 });
-    text.textContent = truncate(item.data.label || item.data.edge_type || "", 14);
-    svg.append(text);
+    const line = svgNode("line", { class: "kg-edge", "data-source": item.data.source, "data-target": item.data.target, "marker-end": "url(#kg-arrow)" });
+    const label = svgNode("text", { class: "kg-edge-label" });
+    label.textContent = truncate(item.data.label || item.data.edge_type || "", 14);
+    svg.append(line, label);
+    edgeEls.push({ line, label, source: item.data.source, target: item.data.target });
   });
   nodes.forEach((item) => {
     const data = { ...item.data, id: item.data.id || item.data.node_id };
-    const position = positions.get(data.id);
     const group = svgNode("g", {
       class: `kg-node${state.selectedNode?.id === data.id ? " is-selected" : ""}`,
-      transform: `translate(${position.x} ${position.y})`, "data-node-id": data.id, tabindex: "0", role: "button",
+      "data-node-id": data.id, tabindex: "0", role: "button",
     });
     group.append(svgNode("circle", { r: "24", fill: NODE_COLORS[data.node_type] || "#87a7ff" }));
     const label = svgNode("text", { y: "39" });
@@ -1488,12 +1497,139 @@ function renderKg(elements) {
     group.addEventListener("click", () => selectKgNode(data));
     group.addEventListener("keydown", (event) => { if (event.key === "Enter") selectKgNode(data); });
     svg.append(group);
+    nodeEls.set(data.id, group);
   });
+
+  if (state.kgLayout === "force") {
+    startKgSim(nodes, edgeEls, nodeEls);
+  } else {
+    applyKgPositions(computeKgLayout(nodes, edges, state.kgLayout), nodeEls, edgeEls);
+  }
+}
+
+function applyKgPositions(positions, nodeEls, edgeEls) {
+  nodeEls.forEach((group, id) => {
+    const p = positions.get(id);
+    if (p) group.setAttribute("transform", `translate(${p.x} ${p.y})`);
+  });
+  edgeEls.forEach(({ line, label, source, target }) => {
+    const s = positions.get(source), t = positions.get(target);
+    if (!s || !t) return;
+    line.setAttribute("x1", s.x); line.setAttribute("y1", s.y);
+    line.setAttribute("x2", t.x); line.setAttribute("y2", t.y);
+    label.setAttribute("x", (s.x + t.x) / 2);
+    label.setAttribute("y", (s.y + t.y) / 2 - 5);
+  });
+}
+
+function startKgSim(nodes, edgeEls, nodeEls) {
+  const count = nodes.length;
+  const simNodes = nodes.map((item, i) => {
+    const angle = -Math.PI / 2 + i * 2 * Math.PI / count;
+    return {
+      id: item.data.id || item.data.node_id,
+      x: 450 + Math.cos(angle) * 300,
+      y: 175 + Math.sin(angle) * 110,
+      vx: 0, vy: 0, fixed: false,
+    };
+  });
+  const index = new Map(simNodes.map((n) => [n.id, n]));
+  const links = edgeEls
+    .map((e) => ({ s: index.get(e.source), t: index.get(e.target) }))
+    .filter((l) => l.s && l.t && l.s !== l.t);
+  kgSim = { nodes: simNodes, links, nodeEls, edgeEls, alpha: 1, rafId: null, dragging: null };
+  simNodes.forEach((n) => {
+    nodeEls.get(n.id).addEventListener("mousedown", (event) => startNodeDrag(event, n));
+  });
+  kgSim.rafId = requestAnimationFrame(tickKgSim);
+}
+
+function tickKgSim() {
+  const sim = kgSim;
+  if (!sim) return;
+  stepKgSim(sim);
+  applyKgPositions(new Map(sim.nodes.map((n) => [n.id, n])), sim.nodeEls, sim.edgeEls);
+  sim.alpha *= 0.985;
+  if (sim.alpha > 0.02 || sim.dragging) {
+    sim.rafId = requestAnimationFrame(tickKgSim);
+  } else {
+    sim.rafId = null;
+  }
+}
+
+function stepKgSim(sim) {
+  const { nodes, links } = sim;
+  const n = nodes.length;
+  const alpha = sim.dragging ? Math.max(sim.alpha, 0.45) : sim.alpha;
+  if (alpha <= 0.001) return;
+  const k = Math.sqrt((820 * 260) / Math.max(n, 1)) * 0.62;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 1; j < n; j += 1) {
+      const a = nodes[i], b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+      const d = Math.sqrt(d2);
+      const f = (k * k) / d * alpha;
+      const fx = dx / d * f, fy = dy / d * f;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+  }
+  links.forEach(({ s, t }) => {
+    const dx = s.x - t.x, dy = s.y - t.y;
+    const d = Math.hypot(dx, dy) || 0.01;
+    const f = (d * d) / k * alpha * 0.5;
+    const fx = dx / d * f, fy = dy / d * f;
+    s.vx -= fx; s.vy -= fy; t.vx += fx; t.vy += fy;
+  });
+  nodes.forEach((node) => {
+    if (node.fixed) { node.vx = 0; node.vy = 0; return; }
+    node.vx *= 0.72; node.vy *= 0.72;
+    node.x += node.vx; node.y += node.vy;
+    node.x = Math.max(70, Math.min(830, node.x));
+    node.y = Math.max(50, Math.min(310, node.y));
+  });
+}
+
+function startNodeDrag(event, node) {
+  if (state.kgLayout !== "force" || !kgSim) return;
+  event.preventDefault();
+  const sim = kgSim;
+  const svg = $("kg-graph");
+  node.fixed = true;
+  sim.dragging = node;
+  sim.alpha = Math.max(sim.alpha, 0.12);
+  if (!sim.rafId) sim.rafId = requestAnimationFrame(tickKgSim);
+  const onMove = (e) => {
+    const p = svgPoint(svg, e.clientX, e.clientY);
+    node.x = Math.max(70, Math.min(830, p.x));
+    node.y = Math.max(50, Math.min(310, p.y));
+    node.vx = 0; node.vy = 0;
+    sim.alpha = Math.max(sim.alpha, 0.45);
+  };
+  const onUp = () => {
+    node.fixed = false;
+    sim.dragging = null;
+    sim.alpha = Math.max(sim.alpha, 0.3);
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function svgPoint(svg, clientX, clientY) {
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  const ctm = svg.getScreenCTM();
+  return ctm ? pt.matrixTransform(ctm.inverse()) : { x: clientX, y: clientY };
 }
 
 function selectKgNode(data) {
   state.selectedNode = data;
-  renderKg(state.queryKgElements.length ? state.queryKgElements : state.revealedKgElements);
+  document.querySelectorAll(".kg-node").forEach((node) => {
+    node.classList.toggle("is-selected", node.dataset.nodeId === data.id);
+  });
   const detail = $("kg-node-detail");
   detail.replaceChildren(create("p", "panel-label", data.node_type || "Node"), create("h3", "", data.label || data.id));
   if (data.summary) detail.append(create("p", "muted-copy", data.summary));
