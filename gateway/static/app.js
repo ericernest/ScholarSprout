@@ -50,6 +50,11 @@ function bindChatPage() {
       return;
     }
 
+    if (button.dataset.mode === "paper_reading") {
+      window.location.href = "/paper-reading";
+      return;
+    }
+
     setMode(button.dataset.mode);
     input.focus();
   });

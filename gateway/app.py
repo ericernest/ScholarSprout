@@ -58,6 +58,13 @@ def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
 
 
+# 返回独立论文精读工作台。
+@app.get("/paper-reading")
+@app.get("/paper_reading/app")
+def paper_reading_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "paper-reading" / "index.html")
+
+
 # 返回浏览器标签页图标。
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> FileResponse:

@@ -31,5 +31,5 @@ include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evalua
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
-gateway = ["static/*"]
+gateway = ["static/*", "static/paper-reading/*"]
 skills = ["builtin/*/*/SKILL.md", "builtin/*/*/*/SKILL.md"]

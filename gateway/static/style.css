@@ -153,6 +153,7 @@ h1 {
 }
 
 .primary-button,
+.secondary-button,
 .send-button,
 .icon-button,
 .mode-menu button {
@@ -186,6 +187,29 @@ h1 {
 
 .primary-button:active {
   transform: translateY(1px) scale(0.98);
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 1rem 1.45rem;
+  border: 1px solid rgba(135, 167, 255, 0.38);
+  border-radius: 999px;
+  color: #e8edff;
+  background: rgba(135, 167, 255, 0.1);
+  text-decoration: none;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.secondary-button:hover {
+  background: rgba(135, 167, 255, 0.2);
+  transform: translateY(-2px);
 }
 
 .chat-page {

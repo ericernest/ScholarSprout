@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07120f" />
+    <title>论文精读 · NoviceSynapse</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/paper-reading/styles.css" />
+  </head>
+  <body class="paper-reading-body">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div id="cursor-glow" aria-hidden="true"></div>
+
+    <header class="pr-topbar">
+      <a class="pr-brand" href="/"><span class="brand-mark">N</span><span>NoviceSynapse</span></a>
+      <div class="topbar-center"><span class="status-dot"></span><span id="workspace-status">论文精读工作台</span></div>
+      <nav class="topbar-actions" aria-label="页面导航">
+        <button id="new-paper-button" class="ghost-button" type="button" hidden>换一篇论文</button>
+        <a class="ghost-button" href="/app">返回对话</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="paper-intake" class="intake-view">
+        <div class="intake-hero">
+          <p class="eyebrow">Deep Paper Reading</p>
+          <h1>把一篇论文，拆成可理解的知识网络。</h1>
+          <p>上传本地 PDF、粘贴论文链接，或先搜索再导入。系统会解析章节、构建知识图谱，并让不同 AI 专家协同分析。</p>
+          <div class="capability-row"><span>PDF 结构化解析</span><span>8 个阅读 Skill</span><span>动态知识图谱</span><span>Fork 深入探索</span></div>
+        </div>
+
+        <div class="intake-grid">
+          <article class="intake-card upload-card">
+            <div class="card-index">01</div><p class="card-kicker">本地论文</p><h2>上传 PDF</h2>
+            <p>适合本地保存的论文。文件只发送到当前 NoviceSynapse 后端进行解析。</p>
+            <label id="upload-dropzone" class="upload-dropzone" for="pdf-file-input">
+              <span class="upload-icon">↥</span><strong>选择或拖入 PDF</strong><small id="upload-file-label">仅支持 .pdf 文件</small>
+            </label>
+            <input id="pdf-file-input" type="file" accept="application/pdf,.pdf" hidden />
+          </article>
+
+          <article class="intake-card">
+            <div class="card-index">02</div><p class="card-kicker">在线论文</p><h2>从链接导入</h2>
+            <p>支持 PDF 直链与 arXiv abs/pdf 地址，arXiv 摘要页会自动转换为 PDF 地址。</p>
+            <form id="url-import-form" class="stack-form">
+              <label for="paper-url-input">论文链接</label>
+              <input id="paper-url-input" type="url" placeholder="https://arxiv.org/abs/2506.07398" required />
+              <button class="accent-button" type="submit">解析这篇论文 <span>→</span></button>
+            </form>
+          </article>
+
+          <article class="intake-card search-card">
+            <div class="card-index">03</div><p class="card-kicker">论文检索</p><h2>搜索并选择</h2>
+            <form id="paper-search-form" class="search-form">
+              <label for="paper-search-input">关键词、标题或 arXiv ID</label>
+              <div class="search-row">
+                <input id="paper-search-input" type="search" placeholder="例如：hierarchical memory agents" required />
+                <button class="accent-button" type="submit">搜索</button>
+              </div>
+              <div class="search-options">
+                <label>来源<select id="paper-search-source"><option value="all">全部来源</option><option value="arxiv">arXiv</option><option value="semantic_scholar">Semantic Scholar</option></select></label>
+                <label>数量<input id="paper-search-limit" type="number" min="1" max="50" value="6" /></label>
+              </div>
+            </form>
+          </article>
+        </div>
+
+        <section id="search-results-section" class="result-section" hidden>
+          <div class="section-heading"><div><p class="card-kicker">Search results</p><h2>选择要精读的论文</h2></div><span id="search-result-count" class="count-pill">0 篇</span></div>
+          <div id="search-results" class="paper-result-grid"></div>
+        </section>
+
+        <section id="paper-ready-section" class="ready-section" hidden>
+          <div class="ready-orbit" aria-hidden="true"></div>
+          <article id="paper-ready-card" class="paper-ready-card" tabindex="0" role="button">
+            <div class="ready-topline"><span>解析完成</span><span id="ready-source">PDF</span></div>
+            <h2 id="ready-title">论文标题</h2><p id="ready-authors">作者</p><p id="ready-abstract" class="ready-abstract"></p>
+            <div class="ready-stats">
+              <span><strong id="ready-sections">0</strong> 章节</span><span><strong id="ready-nodes">0</strong> KG 节点</span><span><strong id="ready-edges">0</strong> KG 关系</span>
+            </div>
+            <div class="enter-hint">点击进入精读工作台 <span>↗</span></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="paper-workbench" class="workbench" hidden>
+        <header class="paper-ribbon">
+          <div><p id="paper-ribbon-meta">正在阅读</p><h1 id="paper-ribbon-title">未命名论文</h1></div>
+          <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span><button id="refresh-session-button" class="icon-text-button" type="button">同步状态</button></div>
+        </header>
+
+        <div class="workbench-grid">
+          <aside class="workspace-panel navigator-panel">
+            <section class="side-section paper-summary"><p class="panel-label">Paper</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
+            <section class="side-section">
+              <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
+              <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
+            </section>
+            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count">0</strong></div><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
+            <section class="side-section"><div class="panel-heading"><span>AI 专家</span><small>动态加载</small></div><div id="skill-switches" class="skill-switches"></div></section>
+            <section class="session-actions">
+              <button id="pause-button" class="soft-button" type="button">暂停并保存</button><button id="resume-button" class="soft-button" type="button">恢复阅读</button><button id="progress-button" class="soft-button" type="button">刷新进度</button>
+            </section>
+          </aside>
+
+          <article class="workspace-panel reader-panel">
+            <header class="reader-toolbar">
+              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">结构化正文</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
+              <div class="reader-actions"><button id="previous-section-button" class="mini-button" type="button">← 上一章</button><button id="analyze-section-button" class="mini-button is-accent" type="button">分析本节</button><button id="next-section-button" class="mini-button" type="button">下一章 →</button></div>
+            </header>
+            <div id="selection-toolbar" class="selection-toolbar" hidden>
+              <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念脉络</button><button data-selection-action="fork" type="button">Fork 深入</button><button data-selection-action="candidate" type="button">KG 候选</button>
+            </div>
+            <div id="structured-reader" class="structured-reader"></div>
+            <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
+          </article>
+
+          <aside class="workspace-panel copilot-panel">
+            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><span id="active-skill-count" class="count-pill">0 Skills</span></header>
+            <div id="quick-actions" class="quick-actions"></div>
+            <div id="analysis-feed" class="analysis-feed" aria-live="polite">
+              <article class="welcome-card"><span class="assistant-avatar">N</span><div><strong>准备开始精读</strong><p>点击章节或直接提问。我会结合当前正文、阅读进度和已展开知识图谱回答。</p></div></article>
+            </div>
+            <form id="reading-chat-form" class="reading-composer">
+              <textarea id="reading-chat-input" rows="3" placeholder="针对当前章节提问，或让专家继续分析…" required></textarea>
+              <div class="composer-row"><span id="composer-context">当前：全文</span><button class="accent-button" type="submit">发送</button></div>
+            </form>
+          </aside>
+        </div>
+
+        <section class="workspace-panel kg-panel">
+          <header class="kg-header">
+            <div><p class="panel-label">Knowledge Graph</p><h2>论文知识图谱</h2><p id="kg-stage-copy" class="muted-copy">图谱会随阅读章节逐步展开。</p></div>
+            <form id="kg-query-form" class="kg-query-form">
+              <select id="kg-query-type"><option value="search">智能检索</option><option value="path">关系路径</option><option value="neighbors">节点邻域</option><option value="subgraph">相关子图</option></select>
+              <input id="kg-question-input" type="text" placeholder="向知识图谱提问…" required /><button class="accent-button" type="submit">问 KG</button>
+            </form>
+          </header>
+          <div id="kg-path-fields" class="kg-path-fields" hidden><input id="kg-source-input" type="text" placeholder="起点标签" /><span>→</span><input id="kg-target-input" type="text" placeholder="终点标签" /></div>
+          <div class="kg-layout">
+            <div class="graph-shell">
+              <div class="graph-toolbar"><div id="kg-legend" class="kg-legend"></div><button id="reset-kg-button" class="mini-button" type="button">恢复已展开图谱</button></div>
+              <svg id="kg-graph" viewBox="0 0 900 360" role="img" aria-label="论文知识图谱"></svg>
+              <div id="kg-empty" class="graph-empty">开始阅读后，这里会出现论文中的问题、方法、模块与证据关系。</div>
+            </div>
+            <aside class="kg-inspector">
+              <div id="kg-node-detail" class="kg-node-detail"><p class="panel-label">Node inspector</p><h3>选择一个节点</h3><p class="muted-copy">点击图中的节点查看证据、属性并跳转到对应章节。</p></div>
+              <div id="kg-answer" class="kg-answer" hidden></div><div id="kg-reasoning" class="kg-reasoning"></div>
+            </aside>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="fork-dialog" class="fork-dialog">
+      <form method="dialog" class="dialog-shell">
+        <header><div><p class="panel-label">Fork exploration</p><h2>创建专项探索分支</h2></div><button class="dialog-close" value="cancel" aria-label="关闭">×</button></header>
+        <label>选中上下文<textarea id="fork-context-input" rows="4" placeholder="选中的公式、段落或概念"></textarea></label>
+        <label>专项专家<select id="fork-skill-select"></select></label>
+        <label>探索问题<textarea id="fork-question-input" rows="3" placeholder="希望这个分支重点回答什么？"></textarea></label>
+        <div id="fork-output" class="fork-output" hidden></div>
+        <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button><button id="fork-merge-button" class="soft-button" type="button" hidden>合并回主阅读流</button></footer>
+      </form>
+    </dialog>
+
+    <div id="global-loading" class="global-loading" hidden><span class="loading-orb"></span><div><strong id="loading-title">正在处理</strong><p id="loading-detail">请稍候…</p></div></div>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+    <script type="module" src="/static/paper-reading/app.js"></script>
+  </body>
+</html>
