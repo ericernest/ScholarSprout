@@ -47,6 +47,8 @@ class OnlineCaseResult(OnlineModel):
     valid_paper_count: int
     hard_gate_passed: bool | None = None
     cross_language_warning_count: int = 0
+    interrupted_stage: str | None = None
+    stage_durations_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class OnlineEvaluationReport(OnlineModel):
@@ -185,6 +187,15 @@ def run_online_evaluation(
                     else None
                 ),
                 cross_language_warning_count=warnings,
+                interrupted_stage=trace.interrupted_stage,
+                stage_durations_ms={
+                    stage: round(float(getattr(trace, f"{stage}_duration_ms")), 3)
+                    for stage in (
+                        "profile", "planning", "retrieval", "ranking",
+                        "generation", "evaluation", "repair",
+                    )
+                    if float(getattr(trace, f"{stage}_duration_ms")) > 0
+                },
             )
         )
         if spent > limits.max_estimated_cost_usd:

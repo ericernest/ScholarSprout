@@ -208,6 +208,11 @@ python -m evaluation.domain_onboarding \
 
 ### 受控在线端到端测试
 
+2026-07-27 的三领域受控真实评测记录到总耗时 111–147 秒、规划
+13–26 秒、生成 78–103 秒。默认超时因此校准为请求 300 秒、规划
+45 秒、生成和修复各 120 秒。在线报告会记录 `interrupted_stage` 和分阶段
+耗时，以区分模型延迟、论文检索延迟和质量失败。
+
 真实论文源和真实模型测试默认禁用。固定中英文配对用例位于
 `evaluation/fixtures/domain_onboarding/v1/online-cases.jsonl`，运行时必须同时提供
 环境开关、费用确认、最大用例数和费用上限：
