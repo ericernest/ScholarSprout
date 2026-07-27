@@ -30,8 +30,9 @@ const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   revealedKgElements: [], queryKgElements: [], selectedNode: null,
-  selectedText: "", activeForkSessionId: "", uploadSummary: null,
-  sessionState: "", restored: false, busy: false,
+  selectedText: "", uploadSummary: null,
+  sessionState: "", restored: false, busy: false, kgLayout: "force",
+  forks: [], activeFeedId: "main",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +55,7 @@ function boot() {
   renderSkillControls();
   renderQuickActions();
   renderLegend();
+  renderCopilotTabs();
   bindIntake();
   bindWorkbench();
   bindReader();
@@ -110,7 +112,9 @@ function bindWorkbench() {
     const question = input.value.trim();
     if (!question) return;
     input.value = "";
-    startReading(question);
+    const fork = state.forks.find((item) => item.id === state.activeFeedId);
+    if (fork) runForkTurn(fork, question);
+    else startReading(question);
   });
   window.addEventListener("beforeunload", saveBeforeUnload);
 }
@@ -125,6 +129,7 @@ function bindReader() {
   $("next-section-button").addEventListener("click", () => moveSection(1));
   $("pdf-fit-select").addEventListener("change", renderPdf);
   $("structured-reader").addEventListener("mouseup", captureSelection);
+  bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
   document.addEventListener("mousedown", (event) => {
     if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader")) {
@@ -140,6 +145,10 @@ function bindKg() {
     $("kg-question-input").required = type !== "neighbors";
   });
   $("kg-query-form").addEventListener("submit", queryKg);
+  $("kg-layout-select").addEventListener("change", () => {
+    state.kgLayout = $("kg-layout-select").value;
+    renderKg(state.queryKgElements.length ? state.queryKgElements : state.revealedKgElements);
+  });
   $("reset-kg-button").addEventListener("click", () => {
     state.queryKgElements = [];
     $("kg-answer").hidden = true;
@@ -156,7 +165,6 @@ function bindFork() {
   });
   $("fork-skill-select").value = "reading.math_verifier";
   $("fork-create-button").addEventListener("click", createFork);
-  $("fork-merge-button").addEventListener("click", mergeFork);
   $("fork-close-button").addEventListener("click", closeFork);
   document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
   document.addEventListener("keydown", (event) => {
@@ -573,6 +581,18 @@ function renderPdf() {
   $("pdf-empty").hidden = state.hasPdf;
 }
 
+function syncPdfToSection(sectionId) {
+  if (!state.hasPdf) return;
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  const page = section?.start_page;
+  if (!page) return;
+  const fit = $("pdf-fit-select").value || "width";
+  const zoom = { width: 75, page: 55, 100: 100 }[fit] || 75;
+  const baseUrl = state.pdfUrl.split("#", 1)[0];
+  const nextUrl = `${baseUrl}#page=${page}&zoom=${zoom}`;
+  if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
+}
+
 function setReaderMode(mode) {
   const isPdf = mode === "pdf";
   $("workbench-grid").classList.toggle("is-pdf-mode", isPdf);
@@ -584,6 +604,7 @@ function setReaderMode(mode) {
   $("fork-explore-button").hidden = isPdf;
   $("next-section-button").hidden = isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
+  if (isPdf) syncPdfToSection(state.currentSection);
 }
 
 async function selectSection(sectionId, analyze) {
@@ -592,7 +613,7 @@ async function selectSection(sectionId, analyze) {
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
   scrollReaderToSection(sectionId);
-  $("composer-context").textContent = `当前：${sectionTitle(sectionId)}`;
+  syncComposerContext();
   if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
 }
 
@@ -627,15 +648,15 @@ async function startReading(content, sessionId = state.sessionId) {
   }
 }
 
-function showThinkingCard(detail) {
+function showThinkingCard(detail, target = $("analysis-feed")) {
   const card = create("article", "thinking-card");
   card.append(create("span", "loading-orb"));
   const body = create("div");
   body.append(create("strong", "", "Synapse Copilot 正在精读"));
   body.append(create("p", "", detail || "请稍候…"));
   card.append(body);
-  $("analysis-feed").append(card);
-  $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
   return card;
 }
 
@@ -666,13 +687,13 @@ function applyReadingPayload(payload) {
   renderKg(state.revealedKgElements);
 }
 
-function appendAnalysis(text, metadata = {}) {
+function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   const card = create("article", "analysis-card");
   const header = create("header");
   header.append(create("strong", "", "Synapse Copilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
   card.append(header, renderMarkdown(text));
-  $("analysis-feed").append(card);
-  $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
 }
 
 function renderSkillOutputs(outputs, target) {
@@ -1087,10 +1108,6 @@ function openFork(skillId, question) {
   $("fork-context-input").value = state.selectedText || sectionTitle(state.currentSection);
   $("fork-question-input").value = question || "请深入分析这段内容。";
   $("fork-skill-select").value = skillId || "reading.math_verifier";
-  $("fork-output").hidden = true;
-  $("fork-output").replaceChildren();
-  $("fork-merge-button").hidden = true;
-  state.activeForkSessionId = "";
   $("fork-modal").hidden = false;
   $("fork-question-input").focus();
 }
@@ -1103,25 +1120,75 @@ async function createFork() {
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
   const skillId = $("fork-skill-select").value;
-  setBusy(true, "正在创建探索分支", skillLabel(skillId));
+  closeFork();
+
+  const fork = {
+    id: `fork-${Date.now()}`,
+    sessionId: "",
+    skillId,
+    label: `${skillShort(skillId)} ${state.forks.length + 1}`,
+    feedEl: null,
+  };
+  addForkTab(fork);
+  switchFeed(fork.id);
+
+  const thinking = showThinkingCard(`正在创建 ${fork.label} 分支并分析…`, fork.feedEl);
   try {
     const { payload } = await callPaperReading({
       action: "fork", session_id: state.sessionId, paper_id: state.paperId,
       fork_context: context, fork_question: question, fork_skills: [skillId],
       metadata: { selected_text: context, source_section_id: state.currentSection },
     });
-    state.activeForkSessionId = payload.data?.fork_session_id || "";
-    if (!state.activeForkSessionId) throw new Error("Fork 响应缺少 fork_session_id。");
+    fork.sessionId = payload.data?.fork_session_id || "";
+    if (!fork.sessionId) throw new Error("Fork 响应缺少 fork_session_id。");
     const result = await callPaperReading({
-      action: "start_reading", session_id: state.activeForkSessionId, paper_id: state.paperId,
+      action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
     });
-    const output = $("fork-output");
-    output.replaceChildren(renderMarkdown(result.payload.data?.agent_response || "分支分析完成。"));
-    renderSkillOutputs(result.payload.skill_outputs || [], output);
-    output.hidden = false;
-    $("fork-merge-button").hidden = false;
-    toast("Fork 分支分析已完成。");
+    thinking.remove();
+    appendAnalysis(result.payload.data?.agent_response || "分支分析完成。", {}, fork.feedEl);
+    renderSkillOutputs(result.payload.skill_outputs || [], fork.feedEl);
+    toast("Fork 分支已创建，可在此选项卡继续追问。");
+  } catch (error) {
+    thinking.remove();
+    toast(error.message, true);
+  }
+}
+
+async function runForkTurn(fork, question) {
+  if (!fork.sessionId) return toast("分支会话尚未就绪，请稍候再试。", true);
+  const thinking = showThinkingCard(`正在追问 ${fork.label}…`, fork.feedEl);
+  try {
+    const { payload } = await callPaperReading({
+      action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
+      target_section: state.currentSection, content: question,
+    });
+    thinking.remove();
+    appendAnalysis(payload.data?.agent_response || "分支已完成本次回答。", {}, fork.feedEl);
+    renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+  } catch (error) {
+    thinking.remove();
+    toast(error.message, true);
+  }
+}
+
+async function mergeFork(fork) {
+  if (!fork?.sessionId) return;
+  setBusy(true, "正在合并探索结论", "把分支成果带回主阅读流…");
+  try {
+    const { payload } = await callPaperReading({
+      action: "merge", session_id: state.sessionId, merge_session_id: fork.sessionId,
+    });
+    const data = payload.data || {};
+    state.activeSkills = [...new Set([...state.activeSkills, ...(data.merged_skills || [])])];
+    const card = create("article", "fork-summary");
+    card.append(create("strong", "", `Fork 结论已合并 · ${fork.label}`));
+    (data.key_findings || []).forEach((finding) => card.append(create("p", "", finding)));
+    $("analysis-feed").append(card);
+    syncSkillControls();
+    removeForkTab(fork.id);
+    switchFeed("main");
+    toast(data.message || "分支已合并。");
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -1129,27 +1196,78 @@ async function createFork() {
   }
 }
 
-async function mergeFork() {
-  if (!state.activeForkSessionId) return;
-  setBusy(true, "正在合并探索结论", "把分支成果带回主阅读流…");
-  try {
-    const { payload } = await callPaperReading({
-      action: "merge", session_id: state.sessionId, merge_session_id: state.activeForkSessionId,
+function addForkTab(fork) {
+  const feed = create("div", "analysis-feed copilot-feed fork-feed");
+  feed.dataset.feedId = fork.id;
+  const toolbar = create("div", "fork-feed-toolbar");
+  toolbar.append(create("span", "fork-feed-label", `⑂ ${fork.label}`));
+  const mergeButton = create("button", "mini-button is-accent", "合并回主流程");
+  mergeButton.type = "button";
+  mergeButton.addEventListener("click", () => mergeFork(fork));
+  const closeButton = create("button", "mini-button", "关闭分支");
+  closeButton.type = "button";
+  closeButton.addEventListener("click", () => closeForkTab(fork.id));
+  toolbar.append(mergeButton, closeButton);
+  feed.append(toolbar);
+  $("copilot-feeds").append(feed);
+  fork.feedEl = feed;
+  state.forks.push(fork);
+  renderCopilotTabs();
+}
+
+function closeForkTab(forkId) {
+  const wasActive = state.activeFeedId === forkId;
+  removeForkTab(forkId);
+  if (wasActive) switchFeed("main");
+}
+
+function removeForkTab(forkId) {
+  const index = state.forks.findIndex((item) => item.id === forkId);
+  if (index === -1) return;
+  state.forks[index].feedEl?.remove();
+  state.forks.splice(index, 1);
+  renderCopilotTabs();
+}
+
+function renderCopilotTabs() {
+  const bar = $("copilot-tabs");
+  bar.replaceChildren();
+  const mainTab = create("button", `copilot-tab${state.activeFeedId === "main" ? " is-active" : ""}`, "主流程");
+  mainTab.type = "button";
+  mainTab.addEventListener("click", () => switchFeed("main"));
+  bar.append(mainTab);
+  state.forks.forEach((fork) => {
+    const tab = create("button", `copilot-tab${state.activeFeedId === fork.id ? " is-active" : ""}`);
+    tab.type = "button";
+    tab.append(document.createTextNode(`⑂ ${fork.label}`));
+    const close = create("span", "copilot-tab-close", "×");
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeForkTab(fork.id);
     });
-    const data = payload.data || {};
-    state.activeSkills = [...new Set([...state.activeSkills, ...(data.merged_skills || [])])];
-    const card = create("article", "fork-summary");
-    card.append(create("strong", "", "Fork 结论已合并"));
-    (data.key_findings || []).forEach((finding) => card.append(create("p", "", finding)));
-    $("analysis-feed").append(card);
-    syncSkillControls();
-    closeFork();
-    toast(data.message || "分支已合并。");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
+    tab.append(close);
+    tab.addEventListener("click", () => switchFeed(fork.id));
+    bar.append(tab);
+  });
+}
+
+function switchFeed(feedId) {
+  state.activeFeedId = feedId;
+  document.querySelectorAll(".copilot-feed").forEach((feed) => {
+    feed.classList.toggle("is-active", feed.dataset.feedId === feedId);
+  });
+  renderCopilotTabs();
+  syncComposerContext();
+}
+
+function syncComposerContext() {
+  const fork = state.forks.find((item) => item.id === state.activeFeedId);
+  $("composer-context").textContent = fork ? `Fork：${fork.label}` : `当前：${sectionTitle(state.currentSection) || "全文"}`;
+}
+
+function skillShort(id) {
+  const skill = SKILLS.find((item) => item.id === id);
+  return skill ? skill.short : "探索";
 }
 
 async function queryKg(event) {
@@ -1209,6 +1327,111 @@ function renderLegend() {
   });
 }
 
+function computeKgLayout(nodes, edges, layout) {
+  const ids = nodes.map((item) => item.data.id || item.data.node_id);
+  if (layout === "grid") return layoutGrid(ids);
+  if (layout === "grouped") return layoutGrouped(nodes);
+  if (layout === "circle") return layoutCircle(ids);
+  return layoutForce(ids, edges);
+}
+
+function layoutCircle(ids) {
+  const positions = new Map();
+  const centerX = 450, centerY = 175;
+  const radiusX = Math.min(360, 110 + ids.length * 18);
+  const radiusY = Math.min(120, 60 + ids.length * 6);
+  ids.forEach((id, index) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / ids.length;
+    positions.set(id, { x: centerX + Math.cos(angle) * radiusX, y: centerY + Math.sin(angle) * radiusY });
+  });
+  return positions;
+}
+
+function layoutGrid(ids) {
+  const positions = new Map();
+  const cols = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
+  const rows = Math.max(1, Math.ceil(ids.length / cols));
+  const left = 70, right = 830, top = 45, bottom = 290;
+  const stepX = cols > 1 ? (right - left) / (cols - 1) : 0;
+  const stepY = rows > 1 ? (bottom - top) / (rows - 1) : 0;
+  ids.forEach((id, index) => {
+    const col = index % cols, row = Math.floor(index / cols);
+    positions.set(id, { x: cols > 1 ? left + col * stepX : 450, y: rows > 1 ? top + row * stepY : 175 });
+  });
+  return positions;
+}
+
+function layoutGrouped(nodes) {
+  const positions = new Map();
+  const groups = new Map();
+  nodes.forEach((item) => {
+    const type = item.data.node_type || "Concept";
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(item.data.id || item.data.node_id);
+  });
+  const types = Array.from(groups.keys());
+  const left = 70, right = 830, top = 50, bottom = 285;
+  const colW = types.length > 1 ? (right - left) / (types.length - 1) : 0;
+  types.forEach((type, colIndex) => {
+    const members = groups.get(type);
+    const x = types.length > 1 ? left + colIndex * colW : 450;
+    const stepY = members.length > 1 ? (bottom - top) / (members.length - 1) : 0;
+    members.forEach((id, rowIndex) => {
+      positions.set(id, { x, y: members.length > 1 ? top + rowIndex * stepY : 170 });
+    });
+  });
+  return positions;
+}
+
+function layoutForce(ids, edges) {
+  const n = ids.length;
+  const positions = new Map();
+  if (!n) return positions;
+  const width = 820, height = 260, left = 70, top = 50;
+  const index = new Map(ids.map((id, i) => [id, i]));
+  const px = new Array(n), py = new Array(n);
+  ids.forEach((id, i) => {
+    const angle = -Math.PI / 2 + i * Math.PI * 2 / n;
+    px[i] = left + width / 2 + Math.cos(angle) * width * 0.32;
+    py[i] = top + height / 2 + Math.sin(angle) * height * 0.36;
+  });
+  const links = edges
+    .map((edge) => [index.get(edge.data.source), index.get(edge.data.target)])
+    .filter(([a, b]) => a != null && b != null && a !== b);
+  const k = Math.sqrt((width * height) / n) * 0.62;
+  let temperature = width * 0.09;
+  const iterations = 160;
+  for (let iter = 0; iter < iterations; iter += 1) {
+    const dx = new Array(n).fill(0), dy = new Array(n).fill(0);
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) {
+        let vx = px[i] - px[j], vy = py[i] - py[j];
+        let dist = Math.hypot(vx, vy) || 0.01;
+        const repel = (k * k) / dist;
+        vx = vx / dist * repel; vy = vy / dist * repel;
+        dx[i] += vx; dy[i] += vy; dx[j] -= vx; dy[j] -= vy;
+      }
+    }
+    for (const [a, b] of links) {
+      let vx = px[a] - px[b], vy = py[a] - py[b];
+      const dist = Math.hypot(vx, vy) || 0.01;
+      const attract = (dist * dist) / k;
+      vx = vx / dist * attract; vy = vy / dist * attract;
+      dx[a] -= vx; dy[a] -= vy; dx[b] += vx; dy[b] += vy;
+    }
+    for (let i = 0; i < n; i += 1) {
+      const disp = Math.hypot(dx[i], dy[i]) || 0.01;
+      const scale = Math.min(disp, temperature) / disp;
+      px[i] += dx[i] * scale; py[i] += dy[i] * scale;
+      px[i] = Math.max(left, Math.min(left + width, px[i]));
+      py[i] = Math.max(top, Math.min(top + height, py[i]));
+    }
+    temperature *= 0.965;
+  }
+  ids.forEach((id, i) => positions.set(id, { x: px[i], y: py[i] }));
+  return positions;
+}
+
 function renderKg(elements) {
   const svg = $("kg-graph");
   svg.replaceChildren();
@@ -1221,12 +1444,7 @@ function renderKg(elements) {
   marker.append(svgNode("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "rgba(154,194,183,.55)" }));
   defs.append(marker);
   svg.append(defs);
-  const positions = new Map();
-  const centerX = 450, centerY = 190, radiusX = Math.min(350, 110 + nodes.length * 18), radiusY = Math.min(125, 70 + nodes.length * 6);
-  nodes.forEach((item, index) => {
-    const angle = -Math.PI / 2 + index * Math.PI * 2 / nodes.length;
-    positions.set(item.data.id || item.data.node_id, { x: centerX + Math.cos(angle) * radiusX, y: centerY + Math.sin(angle) * radiusY });
-  });
+  const positions = computeKgLayout(nodes, edges, state.kgLayout);
   edges.forEach((item) => {
     const source = positions.get(item.data.source), target = positions.get(item.data.target);
     if (!source || !target) return;
@@ -1296,6 +1514,40 @@ function scrollReaderToSection(sectionId, smooth = true) {
   if (!reader || !target) return;
   const top = target.getBoundingClientRect().top - reader.getBoundingClientRect().top + reader.scrollTop - 12;
   reader.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+}
+
+function bindScrollSpy() {
+  const reader = $("structured-reader");
+  let ticking = false;
+  reader.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      updateCurrentSectionFromScroll();
+    });
+  }, { passive: true });
+}
+
+function updateCurrentSectionFromScroll() {
+  if ($("structured-reader").hidden) return;
+  const reader = $("structured-reader");
+  const sections = Array.from(reader.querySelectorAll(".paper-section"));
+  if (!sections.length) return;
+  const readerTop = reader.getBoundingClientRect().top;
+  let current = sections[0].dataset.sectionId;
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top - readerTop <= 110) current = section.dataset.sectionId;
+    else break;
+  }
+  if (current === state.currentSection) return;
+  state.currentSection = current;
+  persistState();
+  document.querySelectorAll(".outline-item").forEach((item, index) => {
+    item.classList.toggle("is-active", (state.paper?.sections?.[index]?.section_id) === current);
+  });
+  document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === current));
+  syncComposerContext();
 }
 
 function jumpToSection(sectionId) {
