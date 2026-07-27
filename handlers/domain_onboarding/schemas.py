@@ -54,6 +54,18 @@ RetryStatus = Literal[
     "llm_failed",
     "retrieval_failed",
 ]
+KnowledgeNodeType = Literal[
+    "domain", "prerequisite", "development_stage", "subdirection", "paper", "claim"
+]
+KnowledgeEdgeType = Literal[
+    "has_prerequisite",
+    "has_stage",
+    "has_subdirection",
+    "precedes",
+    "requires",
+    "references",
+    "supported_by",
+]
 
 _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "structure_error": "structure",
@@ -452,6 +464,51 @@ class RepairPlan(OnboardingModel):
     actions: list[RepairActionRecord] = Field(default_factory=list)
 
 
+class KnowledgeGraphNode(OnboardingModel):
+    node_id: str
+    node_type: KnowledgeNodeType
+    label: str
+    source_path: str
+    paper_id: str | None = None
+
+
+class KnowledgeGraphEdge(OnboardingModel):
+    source_id: str
+    target_id: str
+    edge_type: KnowledgeEdgeType
+    source_path: str
+
+
+class GraphValidationIssue(OnboardingModel):
+    issue_type: Literal[
+        "duplicate_node", "dangling_edge", "unknown_paper", "dependency_cycle"
+    ]
+    message: str
+    target_id: str | None = None
+
+
+class GraphValidationReport(OnboardingModel):
+    valid: bool
+    issues: list[GraphValidationIssue] = Field(default_factory=list)
+
+
+class GraphPathPlan(OnboardingModel):
+    ordered_node_ids: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    reason: str | None = None
+
+
+class KnowledgeGraphSnapshot(OnboardingModel):
+    graph_schema_version: str = "1.0"
+    request_id: str
+    quality_policy_version: str
+    selected_paper_ids: list[str] = Field(default_factory=list)
+    nodes: list[KnowledgeGraphNode] = Field(default_factory=list)
+    edges: list[KnowledgeGraphEdge] = Field(default_factory=list)
+    validation: GraphValidationReport
+    path_plan: GraphPathPlan | None = None
+
+
 class PipelineResult(OnboardingModel):
     policy_version: str = "domain-quality-v1.0.0"
     policy_fingerprint: str | None = None
@@ -473,6 +530,7 @@ class PipelineResult(OnboardingModel):
     quality: ContentQuality | None = None
     quality_attempts: list[QualityAttempt] = Field(default_factory=list)
     repair_record: RepairRecord | None = None
+    knowledge_graph: KnowledgeGraphSnapshot | None = None
     error: str | None = None
 
     def to_response(self) -> dict[str, Any]:
@@ -495,6 +553,8 @@ class PipelineResult(OnboardingModel):
                 else None
             ),
         )
+        if self.knowledge_graph:
+            payload["knowledge_graph"] = self.knowledge_graph.model_dump(mode="json")
         if self.error:
             payload["error"] = self.error
         return payload

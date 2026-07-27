@@ -84,6 +84,12 @@ class DomainOnboardingRequestTrace:
     audit_write_failed: bool = False
     adaptive_policy_version: str | None = None
     adaptive_recommendations: dict[str, str] = field(default_factory=dict)
+    knowledge_graph_duration_ms: float = 0.0
+    knowledge_graph_node_count: int = 0
+    knowledge_graph_edge_count: int = 0
+    knowledge_graph_valid: bool = False
+    knowledge_graph_fallback_used: bool = False
+    knowledge_graph_build_failed: bool = False
 
     @property
     def retry_attempted(self) -> bool:
@@ -162,6 +168,13 @@ class DomainOnboardingMetrics:
         self._audit_write_failures = 0
         self._adaptive_policy_versions: Counter[str] = Counter()
         self._adaptive_recommendations: Counter[str] = Counter()
+        self._graph_builds = 0
+        self._graph_valid = 0
+        self._graph_fallbacks = 0
+        self._graph_failures = 0
+        self._graph_nodes = 0
+        self._graph_edges = 0
+        self._graph_durations: deque[float] = deque(maxlen=window_size)
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -176,6 +189,14 @@ class DomainOnboardingMetrics:
                 self._adaptive_policy_versions[trace.adaptive_policy_version] += 1
             for issue_type, action_type in trace.adaptive_recommendations.items():
                 self._adaptive_recommendations[f"{issue_type}:{action_type}"] += 1
+            if trace.knowledge_graph_node_count or trace.knowledge_graph_build_failed:
+                self._graph_builds += 1
+                self._graph_valid += int(trace.knowledge_graph_valid)
+                self._graph_fallbacks += int(trace.knowledge_graph_fallback_used)
+                self._graph_failures += int(trace.knowledge_graph_build_failed)
+                self._graph_nodes += trace.knowledge_graph_node_count
+                self._graph_edges += trace.knowledge_graph_edge_count
+                self._graph_durations.append(trace.knowledge_graph_duration_ms)
             self._statuses[trace.status] += 1
             if trace.interrupted_stage:
                 self._interrupted_stages[trace.interrupted_stage] += 1
@@ -273,6 +294,16 @@ class DomainOnboardingMetrics:
                     "mode": "shadow",
                     "policy_versions": dict(self._adaptive_policy_versions),
                     "recommendations": dict(self._adaptive_recommendations),
+                },
+                "knowledge_graph": {
+                    "mode": "shadow",
+                    "builds": self._graph_builds,
+                    "valid": self._graph_valid,
+                    "fallbacks": self._graph_fallbacks,
+                    "failures": self._graph_failures,
+                    "nodes": self._graph_nodes,
+                    "edges": self._graph_edges,
+                    "latency": _duration_summary(list(self._graph_durations)),
                 },
                 "statuses": dict(self._statuses),
                 "interruptions": {

@@ -39,6 +39,7 @@ class DomainOnboardingAuditRecord(BaseModel):
     interrupted_stage: str | None = None
     deadline_exceeded: bool = False
     cancelled: bool = False
+    knowledge_graph: dict[str, Any] = Field(default_factory=dict)
 
 
 class AuditSink(Protocol):
@@ -160,6 +161,15 @@ def build_audit_record(
         interrupted_stage=trace.interrupted_stage,
         deadline_exceeded=trace.deadline_exceeded,
         cancelled=trace.cancelled,
+        knowledge_graph={
+            "enabled": bool(result and result.knowledge_graph),
+            "valid": trace.knowledge_graph_valid,
+            "node_count": trace.knowledge_graph_node_count,
+            "edge_count": trace.knowledge_graph_edge_count,
+            "fallback_used": trace.knowledge_graph_fallback_used,
+            "build_failed": trace.knowledge_graph_build_failed,
+            "duration_ms": trace.knowledge_graph_duration_ms,
+        },
     )
 
 
