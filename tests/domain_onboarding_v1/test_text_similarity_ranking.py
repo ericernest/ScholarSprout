@@ -54,6 +54,7 @@ class MMRRankingTests(unittest.TestCase):
                 paper_id=paper_id,
                 title=title,
                 abstract=abstract,
+                year=2024,
                 url=f"https://example.org/{paper_id}",
                 source="test",
             )
@@ -78,6 +79,7 @@ class MMRRankingTests(unittest.TestCase):
                 paper_id=f"paper-{index}",
                 title=title,
                 abstract=abstract,
+                year=2024,
                 url=f"https://example.org/{index}",
                 source="test",
             )

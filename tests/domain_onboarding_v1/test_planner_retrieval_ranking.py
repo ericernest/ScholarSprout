@@ -311,6 +311,7 @@ class RankingTests(unittest.TestCase):
             PaperCandidate(
                 paper_id="valid",
                 title="Valid Semantic Scholar Paper",
+                year=2024,
                 url="https://example.org/valid",
                 source="semantic_scholar",
                 publication_types=["JournalArticle"],
@@ -334,6 +335,35 @@ class RankingTests(unittest.TestCase):
         result = self.ranker.rank([paper], make_plan(), limit=1)
         self.assertEqual(result.papers, [])
         self.assertEqual(result.stats.invalid_count, 1)
+
+    def test_missing_publication_year_is_filtered_by_default(self) -> None:
+        paper = PaperCandidate(
+            paper_id="doi:10.1000/missing-year",
+            title="A relevant RAG paper without a publication year",
+            url="https://doi.org/10.1000/missing-year",
+            source="crossref",
+            doi="10.1000/missing-year",
+        )
+
+        result = self.ranker.rank([paper], make_plan(), limit=1)
+
+        self.assertEqual(result.papers, [])
+        self.assertEqual(result.stats.invalid_count, 1)
+
+    def test_missing_year_filter_can_be_disabled_for_legacy_sources(self) -> None:
+        ranker = WeightedPaperRanker(
+            DomainOnboardingConfig(require_verified_paper_year=False)
+        )
+        paper = PaperCandidate(
+            paper_id="legacy-paper",
+            title="Legacy retrieval augmented generation paper",
+            url="https://example.org/legacy-paper",
+            source="legacy",
+        )
+
+        result = ranker.rank([paper], make_plan(), limit=1)
+
+        self.assertEqual([item.paper_id for item in result.papers], ["legacy-paper"])
 
 
 if __name__ == "__main__":

@@ -80,6 +80,9 @@ Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅�
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
+默认验证策略还要求候选论文具有年份。2026-07-27 的三领域真实评测中，
+36 篇入选论文有 2 篇缺少年份，因此 `require_verified_paper_year`
+默认为 `true`。只有显式兼容无年份的历史数据源时才应关闭该规则。
 
 首次排序后，`PaperCoverageAnalyzer` 会检查每个预期子方向是否有足够相关的论文，
 并检查综述、奠基工作、评测和前沿论文角色是否齐全。缺口被表示为带稳定

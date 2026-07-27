@@ -49,6 +49,7 @@ class EmbeddingVectorizerTests(unittest.TestCase):
                 paper_id="rag",
                 title="Retrieval Augmented Generation Method",
                 abstract="retrieval augmented generation",
+                year=2024,
                 url="https://example.org/rag",
                 source="test",
             )

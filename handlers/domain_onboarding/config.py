@@ -24,6 +24,7 @@ class DomainOnboardingConfig(BaseModel):
     papers_per_query: int = Field(default=10, ge=1, le=50)
     candidate_paper_limit: int = Field(default=40, ge=1, le=200)
     selected_paper_limit: int = Field(default=12, ge=1, le=40)
+    require_verified_paper_year: bool = True
     min_development_stages: int = Field(default=3, ge=1, le=8)
     min_subdirections: int = Field(default=3, ge=1, le=12)
     min_learning_steps: int = Field(default=4, ge=1, le=8)

@@ -243,6 +243,7 @@ class WeightedPaperRanker:
             paper.paper_id.strip()
             and paper.title.strip()
             and paper.url.startswith(("http://", "https://"))
+            and (paper.year is not None or not self.config.require_verified_paper_year)
         ):
             return False
         if paper.source == "crossref":
