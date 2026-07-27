@@ -543,6 +543,35 @@ class HandlerAndMetricsTests(unittest.TestCase):
             snapshot["repair"]["selection_reasons"]["quality_threshold_met"],
             1,
         )
+        self.assertEqual(
+            snapshot["policies"]["versions"],
+            {"domain-quality-v1.0.0": 1},
+        )
+        self.assertEqual(response["policy_version"], "domain-quality-v1.0.0")
+        self.assertEqual(
+            response["quality"]["policy_fingerprint"],
+            response["policy_fingerprint"],
+        )
+        self.assertEqual(
+            response["repair_record"]["policy_version"],
+            response["policy_version"],
+        )
+
+    def test_custom_policy_version_propagates_through_result_and_trace(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        config = DomainOnboardingConfig(policy_version="domain-quality-v1.1.0")
+        trace = DomainOnboardingRequestTrace()
+
+        result = make_pipeline(
+            [make_generation_payload(paper_ids)],
+            config=config,
+        ).run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertEqual(result.policy_version, "domain-quality-v1.1.0")
+        self.assertEqual(result.quality.policy_version, result.policy_version)
+        self.assertEqual(result.repair_record.policy_version, result.policy_version)
+        self.assertEqual(trace.policy_version, result.policy_version)
+        self.assertEqual(trace.policy_fingerprint, result.policy_fingerprint)
 
     def test_handler_preserves_quality_warning_and_records_status(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]

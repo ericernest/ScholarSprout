@@ -61,9 +61,11 @@ class DomainOnboardingPipeline:
         self.evaluator = evaluator
         self.repairer = repairer
         self.config = config
+        self.policy = config.to_policy()
         self.coverage_analyzer = coverage_analyzer or PaperCoverageAnalyzer(config)
         self.selection_policy = selection_policy or RepairSelectionPolicy(
-            config.min_improvement_delta
+            self.policy.min_improvement_delta,
+            self.policy.critical_dimensions,
         )
 
     def run(
@@ -72,6 +74,8 @@ class DomainOnboardingPipeline:
         trace: DomainOnboardingRequestTrace,
         execution_context: PipelineExecutionContext | None = None,
     ) -> PipelineResult:
+        trace.policy_version = self.policy.policy_version
+        trace.policy_fingerprint = self.policy.fingerprint
         context = execution_context or PipelineExecutionContext(
             timeout_seconds=self.config.request_timeout_seconds
         )
@@ -98,7 +102,7 @@ class DomainOnboardingPipeline:
                 if isinstance(error, PipelineExecutionHalted):
                     raise
                 trace.planning_duration_ms = context.stage_durations_ms.get("planning", 0.0)
-                return PipelineResult(status="planning_failed", query=request.query, error=str(error))
+                return self._result(status="planning_failed", query=request.query, error=str(error))
             plan = planning_result.plan
             self._record_planning_model_stats(trace, planning_result.stats)
             trace.search_query_count = len(plan.search_queries)
@@ -114,7 +118,7 @@ class DomainOnboardingPipeline:
             except PaperRetrievalError as error:
                 trace.retrieval_duration_ms = context.stage_durations_ms.get("retrieval", 0.0)
                 self._record_retrieval_stats(trace, error.stats)
-                return PipelineResult(status="retrieval_failed", query=request.query, error=str(error))
+                return self._result(status="retrieval_failed", query=request.query, error=str(error))
 
             candidates = retrieval_result.papers
             trace.retrieved_paper_count = len(candidates)
@@ -147,7 +151,7 @@ class DomainOnboardingPipeline:
             final_coverage = self.coverage_analyzer.analyze(plan, ranked)
             trace.final_coverage_gap_count = len(final_coverage.gaps)
             if not ranked:
-                return PipelineResult(
+                return self._result(
                     status="retrieval_failed",
                     query=request.query,
                     error="No verified papers were returned by the configured data source.",
@@ -167,7 +171,7 @@ class DomainOnboardingPipeline:
             except GenerationError as error:
                 trace.generation_duration_ms = context.stage_durations_ms.get("generation", 0.0)
                 self._record_generation_model_stats(trace, error.stats)
-                return PipelineResult(status="generation_failed", query=request.query, error=str(error))
+                return self._result(status="generation_failed", query=request.query, error=str(error))
             self._record_generation_model_stats(trace, generation_result.stats)
             partial_output = output
             trace.evidence_claim_count = len(output.evidence_claims)
@@ -179,6 +183,7 @@ class DomainOnboardingPipeline:
                 output,
                 ranked,
             )
+            self._bind_quality_policy(first_quality)
             partial_quality = first_quality
             quality_attempts.append(
                 QualityAttempt(
@@ -193,9 +198,11 @@ class DomainOnboardingPipeline:
                 initial_record = RepairRecord(
                     triggered=False,
                     decision=self.selection_policy.initial(first_quality),
+                    policy_version=self.policy.policy_version,
+                    policy_fingerprint=self.policy.fingerprint,
                 )
                 self._record_final(trace, first_quality, initial_record)
-                return PipelineResult(
+                return self._result(
                     status="ok",
                     query=request.query,
                     output=output,
@@ -204,7 +211,11 @@ class DomainOnboardingPipeline:
                     repair_record=initial_record,
                 )
 
-            partial_repair_record = RepairRecord(triggered=True)
+            partial_repair_record = RepairRecord(
+                triggered=True,
+                policy_version=self.policy.policy_version,
+                policy_fingerprint=self.policy.fingerprint,
+            )
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
                 self.config.repair_timeout_seconds,
@@ -218,6 +229,8 @@ class DomainOnboardingPipeline:
             )
             repaired = repair_result.output
             partial_repair_record = repair_result.record
+            partial_repair_record.policy_version = self.policy.policy_version
+            partial_repair_record.policy_fingerprint = self.policy.fingerprint
             trace.repair_reason = repair_result.action
             self._record_retry_model_stats(trace, repair_result.stats)
             retry_quality, extra_eval_ms = context.call(
@@ -227,6 +240,7 @@ class DomainOnboardingPipeline:
                 repaired,
                 ranked,
             )
+            self._bind_quality_policy(retry_quality)
             trace.evaluation_duration_ms += extra_eval_ms
             quality_attempts.append(
                 QualityAttempt(
@@ -260,7 +274,7 @@ class DomainOnboardingPipeline:
                 selected_quality = first_quality
             self._record_final(trace, selected_quality, repair_result.record)
             trace.quality_delta = round(selected_quality.score - float(trace.first_score or 0.0), 6)
-            return PipelineResult(
+            return self._result(
                 status=self._quality_status(selected_quality),
                 query=request.query,
                 output=selected_output,
@@ -279,7 +293,7 @@ class DomainOnboardingPipeline:
                     duration_field,
                     float(getattr(trace, duration_field)) + error.duration_ms,
                 )
-            return PipelineResult(
+            return self._result(
                 status=error.status,
                 query=request.query,
                 output=partial_output,
@@ -289,12 +303,23 @@ class DomainOnboardingPipeline:
                 error=str(error),
             )
         except Exception as error:
-            return PipelineResult(status="internal_error", query=request.query, error=str(error))
+            return self._result(status="internal_error", query=request.query, error=str(error))
 
     def close(self) -> None:
         close = getattr(self.retriever, "close", None)
         if callable(close):
             close()
+
+    def _result(self, **values: Any) -> PipelineResult:
+        return PipelineResult(
+            policy_version=self.policy.policy_version,
+            policy_fingerprint=self.policy.fingerprint,
+            **values,
+        )
+
+    def _bind_quality_policy(self, quality: ContentQuality) -> None:
+        quality.policy_version = self.policy.policy_version
+        quality.policy_fingerprint = self.policy.fingerprint
 
     def _supplement_papers(
         self,

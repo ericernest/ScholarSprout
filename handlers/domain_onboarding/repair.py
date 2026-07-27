@@ -45,7 +45,8 @@ class TargetedRepairer:
     ):
         self.generator = generator
         self.config = config
-        self.planner = planner or RepairPlanner()
+        self.policy = config.to_policy()
+        self.planner = planner or RepairPlanner(self.policy.llm_repair_issue_types)
         self.code_executor = code_executor or CodeRepairExecutor()
         self.llm_executor = llm_executor or LLMRepairExecutor(generator)
 
@@ -81,7 +82,12 @@ class TargetedRepairer:
         selected_issues = [
             issue for issue in quality.issues if str(issue.issue_id) in selected_ids
         ]
-        record = RepairRecord(triggered=True, actions=actions)
+        record = RepairRecord(
+            triggered=True,
+            actions=actions,
+            policy_version=self.policy.policy_version,
+            policy_fingerprint=self.policy.fingerprint,
+        )
         if not selected_issues or self.config.max_content_repairs == 0:
             return RepairResult(
                 output=normalized,

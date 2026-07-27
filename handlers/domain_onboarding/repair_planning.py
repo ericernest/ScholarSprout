@@ -6,7 +6,7 @@ from .schemas import ContentQuality, QualityIssue, RepairActionRecord, RepairPla
 
 
 class RepairPlanner:
-    llm_issue_types = {
+    default_llm_issue_types = {
         "missing_coverage",
         "weak_development_stage",
         "beginner_mismatch",
@@ -14,6 +14,9 @@ class RepairPlanner:
         "missing_evidence",
         "unsupported_claim",
     }
+
+    def __init__(self, llm_issue_types: list[str] | set[str] | None = None) -> None:
+        self.llm_issue_types = set(llm_issue_types or self.default_llm_issue_types)
 
     def plan(self, quality: ContentQuality, *, max_content_repairs: int) -> RepairPlan:
         if not quality.issues:

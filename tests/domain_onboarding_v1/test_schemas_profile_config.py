@@ -5,6 +5,7 @@ import unittest
 from pydantic import ValidationError
 
 from handlers.domain_onboarding.config import DomainOnboardingConfig
+from handlers.domain_onboarding.policy import DomainOnboardingPolicy, PolicyRegistry
 from handlers.domain_onboarding.profile import RuleBasedProfileBuilder
 from handlers.domain_onboarding.schemas import (
     ContentQuality,
@@ -22,6 +23,33 @@ from handlers.domain_onboarding.schemas import (
 
 
 class ConfigAndSchemaTests(unittest.TestCase):
+    def test_quality_policy_snapshot_has_stable_version_and_fingerprint(self) -> None:
+        config = DomainOnboardingConfig()
+
+        first = config.to_policy()
+        second = config.to_policy()
+
+        self.assertEqual(first.policy_version, "domain-quality-v1.0.0")
+        self.assertEqual(first.fingerprint, second.fingerprint)
+        self.assertEqual(sum(first.dimension_weights.values()), 1.0)
+
+    def test_quality_policy_requires_complete_normalized_weights(self) -> None:
+        with self.assertRaises(ValidationError):
+            DomainOnboardingPolicy(dimension_weights={"structure": 1.0})
+
+        weights = DomainOnboardingPolicy().dimension_weights.copy()
+        weights["structure"] += 0.1
+        with self.assertRaises(ValidationError):
+            DomainOnboardingPolicy(dimension_weights=weights)
+
+    def test_policy_registry_rejects_reusing_version_for_different_content(self) -> None:
+        registry = PolicyRegistry([DomainOnboardingPolicy()])
+
+        with self.assertRaises(ValueError):
+            registry.register(DomainOnboardingPolicy(quality_threshold=0.8))
+
+        self.assertEqual(registry.versions(), ["domain-quality-v1.0.0"])
+
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
             DomainOnboardingConfig(relevance_weight=0.9)
@@ -133,6 +161,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
 
     def test_quality_and_repair_audit_contract_round_trip(self) -> None:
         quality = ContentQuality(
+            policy_version="domain-quality-v1.2.0",
+            policy_fingerprint="0123456789abcdef",
             score=0.7,
             threshold=0.75,
             passed_hard_gates=True,
@@ -153,6 +183,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
             changed_paths=["learning_path[0].step"],
         )
         record = RepairRecord(
+            policy_version="domain-quality-v1.2.0",
+            policy_fingerprint="0123456789abcdef",
             triggered=True,
             actions=[action],
             decision=RepairDecision(
@@ -171,6 +203,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
             RepairRecord.model_validate_json(record.model_dump_json()),
             record,
         )
+        self.assertEqual(attempt.quality.policy_version, record.policy_version)
 
 
 class ProfileTests(unittest.TestCase):
