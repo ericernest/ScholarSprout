@@ -439,6 +439,10 @@ class RepairDecision(OnboardingModel):
 class RepairRecord(OnboardingModel):
     policy_version: str = "domain-quality-v1.0.0"
     policy_fingerprint: str | None = None
+    adaptive_policy_version: str | None = None
+    shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
+        default_factory=dict
+    )
     triggered: bool = False
     actions: list[RepairActionRecord] = Field(default_factory=list)
     decision: RepairDecision | None = None

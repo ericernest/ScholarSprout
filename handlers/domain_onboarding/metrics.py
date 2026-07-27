@@ -82,6 +82,8 @@ class DomainOnboardingRequestTrace:
     deadline_exceeded: bool = False
     cancelled: bool = False
     audit_write_failed: bool = False
+    adaptive_policy_version: str | None = None
+    adaptive_recommendations: dict[str, str] = field(default_factory=dict)
 
     @property
     def retry_attempted(self) -> bool:
@@ -158,6 +160,8 @@ class DomainOnboardingMetrics:
         self._policy_versions: Counter[str] = Counter()
         self._policy_fingerprints: Counter[str] = Counter()
         self._audit_write_failures = 0
+        self._adaptive_policy_versions: Counter[str] = Counter()
+        self._adaptive_recommendations: Counter[str] = Counter()
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -168,6 +172,10 @@ class DomainOnboardingMetrics:
                     f"{trace.policy_version}:{trace.policy_fingerprint}"
                 ] += 1
             self._audit_write_failures += int(trace.audit_write_failed)
+            if trace.adaptive_policy_version:
+                self._adaptive_policy_versions[trace.adaptive_policy_version] += 1
+            for issue_type, action_type in trace.adaptive_recommendations.items():
+                self._adaptive_recommendations[f"{issue_type}:{action_type}"] += 1
             self._statuses[trace.status] += 1
             if trace.interrupted_stage:
                 self._interrupted_stages[trace.interrupted_stage] += 1
@@ -261,6 +269,11 @@ class DomainOnboardingMetrics:
                     "fingerprints": dict(self._policy_fingerprints),
                 },
                 "audit": {"write_failures": self._audit_write_failures},
+                "adaptive_repair": {
+                    "mode": "shadow",
+                    "policy_versions": dict(self._adaptive_policy_versions),
+                    "recommendations": dict(self._adaptive_recommendations),
+                },
                 "statuses": dict(self._statuses),
                 "interruptions": {
                     "stages": dict(self._interrupted_stages),

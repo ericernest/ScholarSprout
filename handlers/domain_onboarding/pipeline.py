@@ -7,6 +7,7 @@ from typing import Any
 
 from runtime.agent_runner import TokenUsage
 
+from .adaptive_repair import AdaptiveRepairAdvisor, load_advisor
 from .config import DomainOnboardingConfig
 from .coverage import PaperCoverageAnalyzer
 from .execution import PipelineExecutionContext, PipelineExecutionHalted
@@ -52,6 +53,7 @@ class DomainOnboardingPipeline:
         config: DomainOnboardingConfig,
         coverage_analyzer: Any | None = None,
         selection_policy: RepairSelectionPolicy | None = None,
+        repair_advisor: AdaptiveRepairAdvisor | None = None,
     ) -> None:
         self.profile_builder = profile_builder
         self.planner = planner
@@ -67,6 +69,7 @@ class DomainOnboardingPipeline:
             self.policy.min_improvement_delta,
             self.policy.critical_dimensions,
         )
+        self.repair_advisor = repair_advisor
 
     def run(
         self,
@@ -216,6 +219,7 @@ class DomainOnboardingPipeline:
                 policy_version=self.policy.policy_version,
                 policy_fingerprint=self.policy.fingerprint,
             )
+            self._attach_shadow_recommendations(partial_repair_record, first_quality, trace)
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
                 self.config.repair_timeout_seconds,
@@ -231,6 +235,7 @@ class DomainOnboardingPipeline:
             partial_repair_record = repair_result.record
             partial_repair_record.policy_version = self.policy.policy_version
             partial_repair_record.policy_fingerprint = self.policy.fingerprint
+            self._attach_shadow_recommendations(partial_repair_record, first_quality, trace)
             trace.repair_reason = repair_result.action
             self._record_retry_model_stats(trace, repair_result.stats)
             retry_quality, extra_eval_ms = context.call(
@@ -320,6 +325,19 @@ class DomainOnboardingPipeline:
     def _bind_quality_policy(self, quality: ContentQuality) -> None:
         quality.policy_version = self.policy.policy_version
         quality.policy_fingerprint = self.policy.fingerprint
+
+    def _attach_shadow_recommendations(
+        self,
+        record: RepairRecord,
+        quality: ContentQuality,
+        trace: DomainOnboardingRequestTrace,
+    ) -> None:
+        if self.repair_advisor is None:
+            return
+        record.adaptive_policy_version = self.repair_advisor.policy.policy_version
+        record.shadow_recommendations = self.repair_advisor.recommend(quality)
+        trace.adaptive_policy_version = record.adaptive_policy_version
+        trace.adaptive_recommendations = dict(record.shadow_recommendations)
 
     def _supplement_papers(
         self,
@@ -578,4 +596,7 @@ def create_default_pipeline(
         evaluator=CompositeQualityEvaluator(settings),
         repairer=TargetedRepairer(generator, settings),
         config=settings,
+        repair_advisor=load_advisor(
+            os.getenv("DOMAIN_ONBOARDING_ADAPTIVE_POLICY_FILE")
+        ),
     )
