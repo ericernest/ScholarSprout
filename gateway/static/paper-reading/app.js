@@ -120,6 +120,7 @@ function bindReader() {
     button.addEventListener("click", () => setReaderMode(button.dataset.readerMode));
   });
   $("analyze-section-button").addEventListener("click", () => startReading("请深入分析当前章节的核心问题、方法、证据和潜在局限。"));
+  $("fork-explore-button").addEventListener("click", () => openFork("reading.math_verifier", ""));
   $("previous-section-button").addEventListener("click", () => moveSection(-1));
   $("next-section-button").addEventListener("click", () => moveSection(1));
   $("pdf-fit-select").addEventListener("change", renderPdf);
@@ -496,9 +497,8 @@ function renderSections() {
   });
   requestAnimationFrame(() => {
     if (!state.restored) return;
-    const target = state.currentSection && document.getElementById(domSectionId(state.currentSection));
-    if (target) {
-      target.scrollIntoView({ block: "start" });
+    if (state.currentSection && document.getElementById(domSectionId(state.currentSection))) {
+      scrollReaderToSection(state.currentSection, false);
     } else {
       const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
       if (savedScroll) reader.scrollTop = savedScroll;
@@ -581,6 +581,7 @@ function setReaderMode(mode) {
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
   $("previous-section-button").hidden = isPdf;
   $("analyze-section-button").hidden = isPdf;
+  $("fork-explore-button").hidden = isPdf;
   $("next-section-button").hidden = isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
 }
@@ -590,7 +591,7 @@ async function selectSection(sectionId, analyze) {
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
-  document.getElementById(domSectionId(sectionId))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollReaderToSection(sectionId);
   $("composer-context").textContent = `当前：${sectionTitle(sectionId)}`;
   if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
 }
@@ -1289,12 +1290,20 @@ function highlightPath(path) {
   toast(`${path.source_label || "起点"} → ${path.target_label || "终点"}`);
 }
 
+function scrollReaderToSection(sectionId, smooth = true) {
+  const reader = $("structured-reader");
+  const target = document.getElementById(domSectionId(sectionId));
+  if (!reader || !target) return;
+  const top = target.getBoundingClientRect().top - reader.getBoundingClientRect().top + reader.scrollTop - 12;
+  reader.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+}
+
 function jumpToSection(sectionId) {
   if (!sectionId) return;
   setReaderMode("structured");
   state.currentSection = sectionId;
   renderOutline();
-  document.getElementById(domSectionId(sectionId))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollReaderToSection(sectionId);
 }
 
 async function restoreLocalState() {
