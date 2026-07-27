@@ -1560,7 +1560,7 @@ function tickKgSim() {
 function stepKgSim(sim) {
   const { nodes, links } = sim;
   const n = nodes.length;
-  const alpha = sim.dragging ? Math.max(sim.alpha, 0.45) : sim.alpha;
+  const alpha = sim.dragging ? Math.max(sim.alpha, 0.35) : sim.alpha;
   if (alpha <= 0.001) return;
   const k = Math.sqrt((820 * 260) / Math.max(n, 1)) * 0.62;
   for (let i = 0; i < n; i += 1) {
@@ -1578,13 +1578,13 @@ function stepKgSim(sim) {
   links.forEach(({ s, t }) => {
     const dx = s.x - t.x, dy = s.y - t.y;
     const d = Math.hypot(dx, dy) || 0.01;
-    const f = (d * d) / k * alpha * 0.5;
+    const f = (d * d) / k * alpha * 0.1;
     const fx = dx / d * f, fy = dy / d * f;
     s.vx -= fx; s.vy -= fy; t.vx += fx; t.vy += fy;
   });
   nodes.forEach((node) => {
     if (node.fixed) { node.vx = 0; node.vy = 0; return; }
-    node.vx *= 0.72; node.vy *= 0.72;
+    node.vx *= 0.32; node.vy *= 0.32;
     node.x += node.vx; node.y += node.vy;
     node.x = Math.max(70, Math.min(830, node.x));
     node.y = Math.max(50, Math.min(310, node.y));
@@ -1598,19 +1598,19 @@ function startNodeDrag(event, node) {
   const svg = $("kg-graph");
   node.fixed = true;
   sim.dragging = node;
-  sim.alpha = Math.max(sim.alpha, 0.12);
+  sim.alpha = Math.max(sim.alpha, 0.2);
   if (!sim.rafId) sim.rafId = requestAnimationFrame(tickKgSim);
   const onMove = (e) => {
     const p = svgPoint(svg, e.clientX, e.clientY);
     node.x = Math.max(70, Math.min(830, p.x));
     node.y = Math.max(50, Math.min(310, p.y));
     node.vx = 0; node.vy = 0;
-    sim.alpha = Math.max(sim.alpha, 0.45);
+    sim.alpha = Math.max(sim.alpha, 0.35);
   };
   const onUp = () => {
     node.fixed = false;
     sim.dragging = null;
-    sim.alpha = Math.max(sim.alpha, 0.3);
+    sim.alpha = Math.min(sim.alpha, 0.04);
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
   };
