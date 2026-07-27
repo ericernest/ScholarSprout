@@ -12,6 +12,7 @@ const modeEndpoints = {
 
 let currentMode = "chat";
 let isGenerating = false;
+let selectedPaperFile = null;
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -27,6 +28,11 @@ const cursorGlow = document.querySelector("#cursor-glow");
 const selectedModeChip = document.querySelector("#selected-mode-chip");
 const selectedModeLabel = document.querySelector("#selected-mode-label");
 const clearModeButton = document.querySelector("#clear-mode-button");
+const paperModeInput = document.querySelector("#paper-mode-input");
+const paperFileInput = document.querySelector("#paper-file-input");
+const paperFileButton = document.querySelector("#paper-file-button");
+const paperFileLabel = document.querySelector("#paper-file-label");
+const paperUrlInput = document.querySelector("#paper-url-input");
 
 bindChatPage();
 startParticleField();
@@ -50,19 +56,14 @@ function bindChatPage() {
       return;
     }
 
-    if (button.dataset.mode === "paper_reading") {
-      window.location.href = "/paper-reading";
-      return;
-    }
-
     setMode(button.dataset.mode);
-    input.focus();
+    focusCurrentInput();
   });
 
   clearModeButton.addEventListener("click", (event) => {
     event.stopPropagation();
     setMode("chat");
-    input.focus();
+    focusCurrentInput();
   });
 
   document.addEventListener("click", (event) => {
@@ -94,7 +95,22 @@ function bindChatPage() {
     await sendMessage();
   });
 
-  setMode(currentMode);
+  paperFileButton.addEventListener("click", () => paperFileInput.click());
+  paperFileInput.addEventListener("change", () => {
+    const file = paperFileInput.files?.[0] || null;
+    if (file && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      appendMessage("assistant", "请选择 PDF 文件。");
+      paperFileInput.value = "";
+      selectedPaperFile = null;
+      return;
+    }
+    selectedPaperFile = file;
+    paperFileLabel.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : "选择 PDF";
+    paperFileButton.classList.toggle("has-file", Boolean(file));
+  });
+
+  const initialMode = new URLSearchParams(window.location.search).get("mode");
+  setMode(initialMode === "paper_reading" ? "paper_reading" : currentMode);
 }
 
 // Close mode menu and sync accessibility state.
@@ -113,16 +129,26 @@ function toggleModeMenu() {
 function setMode(mode) {
   currentMode = mode in modeLabels ? mode : "chat";
   const label = modeLabels[currentMode] || modeLabels.chat;
+  const isPaperReading = currentMode === "paper_reading";
 
   modePill.textContent = `当前模式：${label}`;
   selectedModeLabel.textContent = label;
   selectedModeChip.hidden = currentMode === "chat";
+  input.hidden = isPaperReading;
+  input.required = !isPaperReading;
+  paperModeInput.hidden = !isPaperReading;
+  sendButton.textContent = isPaperReading ? "解析论文" : "发送";
   closeModeMenu();
 }
 
 // Send user message to current backend endpoint.
 async function sendMessage() {
   if (isGenerating) {
+    return;
+  }
+
+  if (currentMode === "paper_reading") {
+    await submitPaper();
     return;
   }
 
@@ -169,6 +195,203 @@ async function sendMessage() {
   }
 }
 
+// Upload a local PDF or import a PDF/arXiv link from the chat composer.
+async function submitPaper() {
+  const rawUrl = paperUrlInput.value.trim();
+  if (!selectedPaperFile && !rawUrl) {
+    appendMessage("assistant", "请选择本地 PDF，或粘贴 PDF / arXiv 链接。");
+    return;
+  }
+
+  if (selectedPaperFile && rawUrl) {
+    appendMessage("assistant", "一次请选择一种导入方式：本地 PDF 或在线链接。");
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const request = {
+      action: "upload_paper",
+      session_id: "",
+      paper_id: "",
+      content: "",
+      metadata: {},
+    };
+    let sourceLabel = "在线 PDF";
+
+    if (selectedPaperFile) {
+      appendMessage("user", `上传论文：${selectedPaperFile.name}`);
+      request.pdf_data = await fileToBase64(selectedPaperFile);
+      request.metadata = {
+        original_filename: selectedPaperFile.name,
+        size_bytes: selectedPaperFile.size,
+      };
+      sourceLabel = "本地 PDF";
+    } else {
+      const pdfUrl = normalizePdfUrl(rawUrl);
+      if (!pdfUrl) {
+        throw new Error("请输入有效的 PDF、arXiv 链接或 arXiv ID。");
+      }
+      appendMessage("user", `导入论文：${rawUrl}`);
+      request.pdf_url = pdfUrl;
+    }
+
+    const upload = await callPaperReading(request);
+    const paperId = upload.data?.paper_id || "";
+    if (!paperId) {
+      throw new Error("上传成功响应中缺少 paper_id。");
+    }
+
+    clearPreviousPaperSession();
+    localStorage.setItem("paper_reading_paper_id", paperId);
+    const detail = await callPaperReading({
+      action: "get_paper_detail",
+      session_id: "",
+      paper_id: paperId,
+      content: "",
+      metadata: {},
+    });
+    appendPaperCard(detail.data?.paper, {
+      paperId,
+      sourceLabel,
+      kgBuild: upload.data?.kg_build || {},
+    });
+    resetPaperComposer();
+  } catch (error) {
+    appendMessage("assistant", `论文解析失败：${error.message}`);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// Call the unified paper-reading endpoint and unwrap ChannelMessage content.
+async function callPaperReading(body) {
+  const response = await fetch("/paper_reading", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let envelope;
+  try {
+    envelope = await response.json();
+  } catch {
+    throw new Error(`后端返回了无法解析的响应（HTTP ${response.status}）`);
+  }
+  if (!response.ok) {
+    throw new Error(envelope?.detail || `请求失败（HTTP ${response.status}）`);
+  }
+  let payload = envelope?.content ?? envelope;
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      throw new Error(payload);
+    }
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error("后端没有返回论文数据。");
+  }
+  if (payload.status === "error") {
+    throw new Error(payload.message || payload.error || `${body.action} 执行失败`);
+  }
+  return payload;
+}
+
+// Append an interactive paper card; navigation only happens after a user click.
+function appendPaperCard(paper, context) {
+  const item = document.createElement("article");
+  item.className = "message assistant paper-card-message";
+
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "paper-chat-card";
+  card.innerHTML = `
+    <span class="paper-card-kicker">${escapeHtml(context.sourceLabel)} · 解析完成</span>
+    <strong>${escapeHtml(paper?.title || "未命名论文")}</strong>
+    <span class="paper-card-authors">${escapeHtml((paper?.authors || []).join("、") || "作者信息暂无")}</span>
+    <span class="paper-card-abstract">${escapeHtml(paper?.abstract || "论文已经完成结构化解析，点击进入精读工作台。")}</span>
+    <span class="paper-card-stats">
+      <span>${paper?.sections?.length || 0} 章节</span>
+      <span>${context.kgBuild?.new_nodes ?? "—"} 节点</span>
+      <span>${context.kgBuild?.new_edges ?? "—"} 关系</span>
+    </span>
+    <span class="paper-card-enter">进入论文精读 <b>↗</b></span>
+  `;
+  card.addEventListener("click", () => {
+    localStorage.setItem("paper_reading_paper_id", context.paperId);
+    window.location.href = "/app/paper-reading";
+  });
+  item.appendChild(card);
+  messages.appendChild(item);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function clearPreviousPaperSession() {
+  localStorage.removeItem("paper_reading_session_id");
+  localStorage.removeItem("paper_reading_current_section");
+  localStorage.removeItem("paper_reading_scroll_top");
+}
+
+function resetPaperComposer() {
+  selectedPaperFile = null;
+  paperFileInput.value = "";
+  paperFileLabel.textContent = "选择 PDF";
+  paperFileButton.classList.remove("has-file");
+  paperUrlInput.value = "";
+}
+
+function focusCurrentInput() {
+  if (currentMode === "paper_reading") {
+    paperUrlInput.focus();
+  } else {
+    input.focus();
+  }
+}
+
+function normalizePdfUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  const id = value.match(/^(?:arxiv:\s*)?(\d{4}\.\d{4,5})(?:v\d+)?$/i)?.[1];
+  if (id) return `https://arxiv.org/pdf/${id}.pdf`;
+  try {
+    const url = new URL(value);
+    if (/(^|\.)arxiv\.org$/i.test(url.hostname)) {
+      url.hostname = "arxiv.org";
+      url.pathname = url.pathname.replace(/^\/abs\//, "/pdf/");
+      if (url.pathname.startsWith("/pdf/") && !url.pathname.toLowerCase().endsWith(".pdf")) {
+        url.pathname += ".pdf";
+      }
+      url.search = "";
+      url.hash = "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(new Error("读取 PDF 文件失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / (1024 ** index)).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function escapeHtml(value) {
+  const span = document.createElement("span");
+  span.textContent = String(value ?? "");
+  return span.innerHTML;
+}
+
 // Extract assistant text from common response shapes.
 function extractReply(response) {
   const value =
@@ -207,7 +430,7 @@ function appendMessage(role, content) {
 function setLoading(isLoading) {
   isGenerating = isLoading;
   sendButton.disabled = isLoading;
-  sendButton.textContent = isLoading ? "生成中" : "发送";
+  sendButton.textContent = isLoading ? (currentMode === "paper_reading" ? "解析中" : "生成中") : (currentMode === "paper_reading" ? "解析论文" : "发送");
 }
 
 // Get persistent local session id.

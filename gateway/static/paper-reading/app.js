@@ -1,4 +1,6 @@
 const API_ENDPOINT = "/paper_reading";
+const WORKSPACE_PATH = "/app/paper-reading";
+const isDedicatedWorkspace = window.location.pathname === WORKSPACE_PATH;
 const STORAGE = {
   session: "paper_reading_session_id",
   paper: "paper_reading_paper_id",
@@ -42,6 +44,12 @@ const create = (tag, className = "", text = "") => {
 boot();
 
 function boot() {
+  if (isDedicatedWorkspace) {
+    $("paper-intake").hidden = true;
+    $("paper-workbench").hidden = true;
+    $("new-paper-button").hidden = false;
+    $("workspace-status").textContent = "正在恢复论文…";
+  }
   renderSkillControls();
   renderQuickActions();
   renderLegend();
@@ -314,15 +322,17 @@ function renderReadyCard(sourceLabel = "已保存论文") {
 
 async function enterWorkbench() {
   if (!state.paper) return;
-  $("paper-ready-card").classList.add("is-entering");
-  await delay(320);
+  if (!$("paper-intake").hidden) {
+    $("paper-ready-card").classList.add("is-entering");
+    await delay(320);
+  }
   $("paper-intake").hidden = true;
   $("paper-workbench").hidden = false;
   $("new-paper-button").hidden = false;
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
-  window.scrollTo({ top: 0, behavior: "instant" });
+  window.scrollTo({ top: 0, behavior: "auto" });
   if (state.restored && state.sessionId) {
     if (state.sessionState === "paused") await resumeReading(false);
     await startReading("请继续上次的阅读，并概括当前章节接下来的理解重点。");
@@ -332,13 +342,7 @@ async function enterWorkbench() {
 }
 
 function showIntake() {
-  $("paper-workbench").hidden = true;
-  $("paper-intake").hidden = false;
-  $("new-paper-button").hidden = true;
-  $("workspace-status").textContent = "论文精读工作台";
-  $("paper-ready-section").hidden = !state.paper;
-  renderReadyCard("继续当前论文");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  window.location.href = "/app?mode=paper_reading";
 }
 
 function renderPaperWorkspace() {
@@ -938,7 +942,10 @@ async function restoreLocalState() {
   state.sessionId = localStorage.getItem(STORAGE.session) || "";
   state.paperId = localStorage.getItem(STORAGE.paper) || "";
   state.currentSection = localStorage.getItem(STORAGE.section) || "";
-  if (!state.paperId && !state.sessionId) return;
+  if (!state.paperId && !state.sessionId) {
+    if (isDedicatedWorkspace) window.location.replace("/app?mode=paper_reading");
+    return;
+  }
   setBusy(true, "正在检查上次阅读", "恢复论文与会话索引…");
   try {
     if (state.sessionId) await refreshSessionState(false);
@@ -954,6 +961,9 @@ async function restoreLocalState() {
     if (!state.paperId) localStorage.removeItem(STORAGE.paper);
   } finally {
     setBusy(false);
+  }
+  if (isDedicatedWorkspace && state.paper) {
+    await enterWorkbench();
   }
 }
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agents.agent import create_agent
@@ -58,11 +58,17 @@ def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
 
 
-# 返回独立论文精读工作台。
-@app.get("/paper-reading")
-@app.get("/paper_reading/app")
+# 返回嵌入应用层级的论文精读工作台。
+@app.get("/app/paper-reading")
 def paper_reading_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "paper-reading" / "index.html")
+
+
+# 旧入口回到聊天页的论文精读模式。
+@app.get("/paper-reading", include_in_schema=False)
+@app.get("/paper_reading/app", include_in_schema=False)
+def legacy_paper_reading_page() -> RedirectResponse:
+    return RedirectResponse(url="/app?mode=paper_reading")
 
 
 # 返回浏览器标签页图标。

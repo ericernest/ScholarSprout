@@ -168,21 +168,32 @@ select option { color: #07120f; }
 .session-actions button:last-child { grid-column: 1/-1; }
 .soft-button, .mini-button { padding: .58rem .7rem; }
 
-.reader-panel { position: relative; display: grid; grid-template-rows: auto 1fr; background: rgba(7,18,16,.92); }
-.reader-toolbar { padding: .65rem .8rem; border-bottom: 1px solid var(--line); }
+.reader-panel {
+  position: relative; display: grid; grid-template-rows: auto 1fr; color: #1c2724;
+  border-color: rgba(205,213,207,.9);
+  background: linear-gradient(180deg,#fbfaf6 0%,#f5f2e9 100%);
+  box-shadow: 0 24px 80px rgba(0,0,0,.2), inset 0 1px 0 white;
+}
+.reader-toolbar { padding: .65rem .8rem; border-bottom: 1px solid rgba(30,70,60,.14); background: rgba(242,241,234,.92); }
 .reader-tabs, .reader-actions { display: flex; gap: .35rem; }
-.reader-tab { padding: .55rem .7rem; border: 0; border-radius: 10px; color: var(--muted); background: transparent; }
+.reader-tab { padding: .55rem .7rem; border: 0; border-radius: 10px; color: #66736f; background: transparent; }
 .reader-tab.is-active { color: #04110e; background: var(--accent); }
+.reader-panel .mini-button { border-color: rgba(30,70,60,.16); color: #42514d; background: rgba(255,255,255,.72); }
+.reader-panel .mini-button.is-accent { border-color: rgba(38,170,143,.35); color: #075746; background: rgba(72,219,186,.16); }
 .mini-button { font-size: .72rem; }
 .mini-button.is-accent { border-color: var(--line-strong); color: #d6fff6; background: rgba(102,245,214,.12); }
-.structured-reader { padding: clamp(1.25rem,3vw,3.2rem); overflow-y: auto; scroll-behavior: smooth; }
+.structured-reader {
+  padding: clamp(1.25rem,3vw,3.2rem); overflow-y: auto; scroll-behavior: smooth;
+  background-image: linear-gradient(90deg,transparent 0%,rgba(25,75,62,.025) 50%,transparent 100%);
+}
 .paper-section { max-width: 820px; margin: 0 auto 3rem; scroll-margin-top: 90px; opacity: .72; transition: opacity .2s; }
 .paper-section.is-current { opacity: 1; }
-.paper-section h2 { margin: 0 0 1.2rem; font: 700 clamp(1.5rem,2.5vw,2.4rem)/1.2 Georgia,"Noto Serif CJK SC",serif; }
-.paper-section p { color: #cfe6df; font: 400 1rem/1.95 Georgia,"Noto Serif CJK SC",serif; text-align: justify; }
-.section-meta { display: flex; gap: .5rem; margin-bottom: .65rem; color: var(--accent); font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; }
+.paper-section h2 { margin: 0 0 1.2rem; color: #17211f; font: 700 clamp(1.5rem,2.5vw,2.4rem)/1.2 Georgia,"Noto Serif CJK SC",serif; }
+.paper-section p { color: #37443f; font: 400 1rem/1.95 Georgia,"Noto Serif CJK SC",serif; text-align: justify; }
+.section-meta { display: flex; gap: .5rem; margin-bottom: .65rem; color: #13856d; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
 .pdf-reader { position: relative; min-height: 0; }
 .pdf-reader iframe { width: 100%; height: 100%; border: 0; background: #d8dedc; }
+.reader-panel .empty-state { color: #68736f; }
 .empty-state, .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
 .selection-toolbar {
   position: fixed; z-index: 80; display: flex; gap: .25rem; padding: .35rem; border: 1px solid var(--line-strong);

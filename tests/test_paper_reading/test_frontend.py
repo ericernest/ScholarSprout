@@ -6,7 +6,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from gateway.app import paper_reading_page
+from gateway.app import legacy_paper_reading_page, paper_reading_page
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +19,12 @@ class PaperReadingFrontendTests(unittest.TestCase):
         response = paper_reading_page()
 
         self.assertEqual(Path(response.path), FRONTEND / "index.html")
+
+    def test_legacy_page_route_returns_to_chat_paper_mode(self) -> None:
+        response = legacy_paper_reading_page()
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/app?mode=paper_reading")
 
     def test_frontend_assets_are_packaged(self) -> None:
         config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -69,10 +75,22 @@ class PaperReadingFrontendTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
 
-    def test_chat_mode_redirects_to_dedicated_workspace(self) -> None:
+    def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:
+        html = (STATIC / "chat.html").read_text(encoding="utf-8")
         javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('window.location.href = "/paper-reading"', javascript)
+        for element_id in (
+            "paper-mode-input",
+            "paper-file-input",
+            "paper-file-button",
+            "paper-url-input",
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertIn(f'id="{element_id}"', html)
+        self.assertIn('action: "upload_paper"', javascript)
+        self.assertIn('action: "get_paper_detail"', javascript)
+        self.assertIn('window.location.href = "/app/paper-reading"', javascript)
+        self.assertNotIn('window.location.href = "/paper-reading"', javascript)
 
 
 if __name__ == "__main__":
