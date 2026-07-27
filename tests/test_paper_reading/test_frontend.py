@@ -5,8 +5,15 @@ from __future__ import annotations
 import tomllib
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
-from gateway.app import legacy_paper_reading_page, paper_reading_page
+from gateway.app import (
+    legacy_paper_reading_page,
+    paper_reading_page,
+    paper_reading_upload_pdf,
+)
+from handlers.paper_reading.harness.storage import PaperReadingStorage
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +98,24 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('action: "get_paper_detail"', javascript)
         self.assertIn('window.location.href = "/app/paper-reading"', javascript)
         self.assertNotIn('window.location.href = "/paper-reading"', javascript)
+        self.assertIn('paperModeInput.addEventListener("drop"', javascript)
+
+    def test_uploaded_pdf_is_served_inline_for_embedded_reader(self) -> None:
+        with TemporaryDirectory() as directory:
+            storage = PaperReadingStorage(Path(directory))
+            storage.save_upload("paper-1", b"%PDF-1.4\n%%EOF")
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper_storage=storage)))
+
+            response = paper_reading_upload_pdf("paper-1", request)
+
+        self.assertEqual(response.media_type, "application/pdf")
+        self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+
+    def test_agent_answers_use_markdown_renderer(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function renderMarkdown(source)", javascript)
+        self.assertIn("card.append(header, renderMarkdown(text))", javascript)
 
 
 if __name__ == "__main__":

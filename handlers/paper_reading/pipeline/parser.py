@@ -151,65 +151,191 @@ class PDFParser:
     # ── 章节提取 ──
 
     def extract_sections(self, text: str) -> list[PaperSection]:
-        """通过章节编号模式识别章节结构。
+        """识别章节结构，同时排除页码、公式编号、年份和图表坐标。
 
-        支持的编号格式:
-        - "1. Introduction"
-        - "2.1. Background"
-        - "3.2.1. Detailed Analysis"
-        - "I. Introduction" (罗马数字，后续扩展)
+        PDF 文本经常把章节编号与标题拆成两行，例如 ``4.1`` 下一行才是
+        ``Coarse-grained Memory Retrieval``。旧实现会把任何数字开头的行都
+        当作标题，导致公式和参考文献被误切成章节。这里同时校验标题形态与
+        顶层章节的连续性。
         """
-        sections: list[PaperSection] = []
-        lines = text.split("\n")
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        headings: list[tuple[int, int, str, str, int]] = []
+        seen_ids: set[str] = set()
+        current_top = 0
 
-        # 匹配章节标题行
-        heading_matches: list[tuple[int, str, str, int]] = []
-        for idx, line in enumerate(lines):
-            line_stripped = line.strip()
-            match = re.match(
-                r"^(\d+(?:\.\d+)*)\s+(.+)$",
-                line_stripped,
+        for idx, raw_line in enumerate(lines):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            special = re.fullmatch(
+                r"(Abstract|摘要|References|Bibliography|参考文献)",
+                line,
+                re.IGNORECASE,
             )
-            if match:
-                number = match.group(1)
-                title = match.group(2).strip()
-                level = number.count(".") + 1
-                heading_matches.append((idx, number, title, level))
+            if special:
+                name = special.group(1)
+                normalized = name.lower()
+                section_id = "sec:abstract" if normalized in {"abstract", "摘要"} else "sec:references"
+                if section_id not in seen_ids:
+                    title = "Abstract" if section_id == "sec:abstract" else "References"
+                    headings.append((idx, idx + 1, section_id, title, 1))
+                    seen_ids.add(section_id)
+                continue
 
-        if not heading_matches:
-            # 没有章节编号时，回退为全文作为一个章节
-            sections.append(PaperSection(
+            number = ""
+            title = ""
+            content_start = idx + 1
+            inline = re.fullmatch(r"(\d+(?:\.\d+)*)\.?\s+(.+)", line)
+            if inline:
+                number, title = inline.group(1), inline.group(2).strip()
+            else:
+                number_only = re.fullmatch(r"(\d+(?:\.\d+)*)\.?", line)
+                if not number_only:
+                    continue
+                number = number_only.group(1)
+                next_index = self._next_nonempty_line(lines, idx + 1)
+                if next_index is None:
+                    continue
+                title = lines[next_index].strip()
+                content_start = next_index + 1
+
+            if not self._looks_like_heading_title(title):
+                continue
+
+            parts = [int(part) for part in number.split(".")]
+            top = parts[0]
+            section_id = f"sec:{number}"
+            if section_id in seen_ids:
+                continue
+            if len(parts) == 1:
+                if current_top == 0 and top != 1:
+                    continue
+                if current_top and top != current_top + 1:
+                    continue
+                current_top = top
+            elif current_top == 0 or top != current_top:
+                continue
+
+            headings.append((
+                idx,
+                content_start,
+                section_id,
+                f"{number}. {title}",
+                min(len(parts), 6),
+            ))
+            seen_ids.add(section_id)
+
+        if not headings:
+            paragraphs = self._lines_to_paragraphs(lines)
+            return [PaperSection(
                 section_id="sec:full",
                 title="Full Text",
                 level=1,
-                content=text[:10000],
-                paragraphs=[p for p in text.split("\n\n") if p.strip()],
-            ))
-            return sections
+                content="\n\n".join(paragraphs)[:10000],
+                paragraphs=paragraphs,
+            )]
 
-        # 构建章节
-        for i, (line_idx, number, title, level) in enumerate(heading_matches):
-            start_line = line_idx + 1  # 内容从下一行开始
-            if i + 1 < len(heading_matches):
-                end_line = heading_matches[i + 1][0]
-            else:
-                end_line = len(lines)
-
-            content_lines = lines[start_line:end_line]
-            content = "\n".join(content_lines).strip()
-            paragraphs = [
-                p.strip() for p in content.split("\n\n") if p.strip()
-            ]
-
+        sections: list[PaperSection] = []
+        for index, (heading_line, content_start, section_id, title, level) in enumerate(headings):
+            end_line = headings[index + 1][0] if index + 1 < len(headings) else len(lines)
+            paragraphs = self._lines_to_paragraphs(lines[content_start:end_line])
+            content = "\n\n".join(paragraphs)
             sections.append(PaperSection(
-                section_id=f"sec:{number}",
-                title=f"{number}. {title}",
-                level=min(level, 6),
+                section_id=section_id,
+                title=title,
+                level=level,
                 content=content,
                 paragraphs=paragraphs,
             ))
-
         return sections
+
+    @staticmethod
+    def _next_nonempty_line(lines: list[str], start: int) -> int | None:
+        for index in range(start, min(start + 4, len(lines))):
+            if lines[index].strip():
+                return index
+        return None
+
+    @staticmethod
+    def _looks_like_heading_title(title: str) -> bool:
+        value = re.sub(r"\s+", " ", title).strip()
+        if not 2 <= len(value) <= 100:
+            return False
+        if value.lower() in {
+            "query",
+            "status",
+            "insight",
+            "token cost",
+            "performance",
+            "insights graph",
+            "tasks graph",
+        }:
+            return False
+        if not re.match(r"^[A-Za-z一-鿿]", value):
+            return False
+        if value.endswith((".", ",", ";", ":", "?", "!")):
+            return False
+        if any(symbol in value for symbol in ("=", "×", "%", "[", "]", "{", "}")):
+            return False
+        words = value.split()
+        if len(words) > 12:
+            return False
+        alpha_ratio = sum(character.isalpha() for character in value) / max(len(value), 1)
+        return alpha_ratio >= 0.58
+
+    @staticmethod
+    def _lines_to_paragraphs(lines: list[str]) -> list[str]:
+        paragraphs: list[str] = []
+        buffer = ""
+
+        def flush() -> None:
+            nonlocal buffer
+            cleaned = re.sub(r"\s+", " ", buffer).strip()
+            if cleaned:
+                paragraphs.append(cleaned)
+            buffer = ""
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                flush()
+                continue
+            if re.fullmatch(r"\d{1,3}", line):
+                continue
+            if re.match(r"^arXiv:\S+\s+\[", line) or line == "Preprint.":
+                continue
+
+            starts_list = bool(re.match(r"^(?:[•✱❶❷❸❹❺]|\(\d+\)|\d+[.)]\s)", line))
+            starts_labeled_paragraph = bool(re.match(r"^[A-Z][A-Za-z -]{2,45}\.\s", line))
+            if buffer and (starts_list or starts_labeled_paragraph or (len(buffer) > 650 and buffer.endswith((".", "?", "!")))):
+                flush()
+
+            if buffer.endswith("-") and line[:1].islower():
+                buffer = buffer[:-1] + line
+            elif buffer:
+                buffer += " " + line
+            else:
+                buffer = line
+
+        flush()
+        return paragraphs
+
+    @classmethod
+    def sections_need_repair(cls, sections: list[dict[str, Any]] | None) -> bool:
+        """判断旧存储中的章节是否来自过宽的数字标题规则。"""
+        if not sections:
+            return True
+        titles = [str(section.get("title", "")).strip() for section in sections]
+        suspicious = sum(
+            not cls._looks_like_heading_title(re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", title))
+            for title in titles
+        )
+        has_expected_section = any(
+            re.search(r"\b(?:abstract|introduction|method|experiment|conclusion|reference)\b", title, re.IGNORECASE)
+            for title in titles
+        )
+        return suspicious > 0 or not has_expected_section
 
     # ── 标题提取 ──
 
@@ -219,11 +345,24 @@ class PDFParser:
         启发式: 通常在前 500 字符内，且是第一个较长的非空行。
         对于通过 arXiv API 获取的论文，优先使用 API 返回的标题。
         """
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        candidates: list[str] = []
         for line in lines[:20]:
-            if 10 < len(line) < 300 and not line.startswith(("arXiv", "http", "DOI")):
-                return line
-        return lines[0][:200] if lines else "Untitled"
+            if line.lower() in {"abstract", "摘要"}:
+                break
+            if line.startswith(("arXiv", "http", "DOI")):
+                continue
+            if candidates and (
+                "," in line
+                or re.search(r"[∗†]|\b(?:University|Institute|Equal Contribution|Corresponding author)\b", line)
+            ):
+                break
+            if 5 < len(line) < 220:
+                candidates.append(line)
+            if len(" ".join(candidates)) >= 20 and candidates[-1].endswith((".", "?", "!")):
+                break
+        title = " ".join(candidates[:3]).strip()
+        return title[:300] if title else (lines[0][:200] if lines else "Untitled")
 
     # ── 作者提取 ──
 
@@ -232,17 +371,20 @@ class PDFParser:
 
         启发式: 标题后的几行中，寻找包含逗号分隔或 "and" 连接的作者行。
         """
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        # 跳过标题行，在后续 15 行中寻找
-        author_pattern = re.compile(
-            r"([一-鿿A-Z][一-鿿A-Za-z\s.\-]+(?:[，,]\s*[一-鿿A-Z]))"
-        )
-        for line in lines[1:15]:
-            # 常见的作者行特征：包含多个大写字母开头的词，或逗号/and
-            if re.match(r"^[A-Za-z一-鿿\s,.\-']{10,200}$", line):
-                # 按逗号或 "and" 分割
-                names = re.split(r"\s*[,，;；]|\s+and\s+|\s+&\s+", line)
-                return [Author(name=n.strip()) for n in names if len(n.strip()) > 2]
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        for line in lines[1:18]:
+            if not ("," in line or re.search(r"\s+and\s+|\s+&\s+", line)):
+                continue
+            if "@" in line or re.search(r"\b(?:University|Institute|Contribution|author)\b", line, re.IGNORECASE):
+                continue
+            cleaned = re.sub(r"[∗†*]?\d+[∗†*]?", "", line)
+            cleaned = re.sub(r"[∗†*]", "", cleaned)
+            if not re.fullmatch(r"[A-Za-z一-鿿\s,，;；.\-']{10,300}", cleaned):
+                continue
+            names = re.split(r"\s*[,，;；]\s*|\s+and\s+|\s+&\s+", cleaned)
+            authors = [Author(name=name.strip()) for name in names if 2 < len(name.strip()) < 80]
+            if len(authors) >= 2:
+                return authors
         return []
 
     # ── 摘要提取 ──

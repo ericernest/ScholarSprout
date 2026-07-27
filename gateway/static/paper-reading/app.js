@@ -373,7 +373,7 @@ function renderOutline() {
     button.type = "button";
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", statuses[section.section_id] === "completed" ? "●" : String(index + 1).padStart(2, "0"));
-    button.append(icon, create("span", "", section.title || `Section ${index + 1}`));
+    button.append(icon, create("span", "outline-title", section.title || `Section ${index + 1}`));
     button.addEventListener("click", () => selectSection(section.section_id, true));
     container.append(button);
   });
@@ -484,7 +484,7 @@ function appendAnalysis(text, metadata = {}) {
   const card = create("article", "analysis-card");
   const header = create("header");
   header.append(create("strong", "", "Synapse Copilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
-  card.append(header, create("pre", "analysis-text", text));
+  card.append(header, renderMarkdown(text));
   $("analysis-feed").append(card);
   $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
 }
@@ -496,7 +496,7 @@ function renderSkillOutputs(outputs, target) {
     header.append(create("strong", "", output.skill_name || skillLabel(output.skill_id)), create("span", "", output.output_type || output.parse_status || "Skill"));
     card.append(header);
     if (output.content && Object.keys(output.content).length) card.append(renderStructuredValue(output.content));
-    else card.append(create("pre", "analysis-text", output.rendered || "Skill 已执行，但没有返回可展示内容。"));
+    else card.append(renderMarkdown(output.rendered || "Skill 已执行，但没有返回可展示内容。"));
     const candidates = output.kg_candidates;
     if (candidates?.nodes?.length || candidates?.edges?.length) {
       card.append(create("span", "count-pill", `${candidates.nodes?.length || 0} 个 KG 候选`));
@@ -534,6 +534,115 @@ function renderStructuredValue(value, depth = 0) {
     container.append(block);
   });
   return container;
+}
+
+// Render the Markdown subset used by model answers without injecting raw HTML.
+function renderMarkdown(source) {
+  const root = create("div", "markdown-content");
+  const lines = String(source || "").replace(/\r\n?/g, "\n").split("\n");
+  let paragraph = [];
+  let list = null;
+  let listType = "";
+  let code = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const node = create("p");
+    appendInlineMarkdown(node, paragraph.join(" ").trim());
+    root.append(node);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list) root.append(list);
+    list = null;
+    listType = "";
+  };
+  const flushCode = () => {
+    if (!code) return;
+    const pre = create("pre", "markdown-code");
+    pre.append(create("code", "", code.lines.join("\n")));
+    root.append(pre);
+    code = null;
+  };
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (code) flushCode();
+      else code = { lines: [] };
+      return;
+    }
+    if (code) {
+      code.lines.push(rawLine);
+      return;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+    if (/^\s*(?:\*{3,}|-{3,}|_{3,})\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      root.append(create("hr"));
+      return;
+    }
+    const heading = line.match(/^\s*(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const node = create(`h${Math.min(heading[1].length + 2, 6)}`);
+      appendInlineMarkdown(node, heading[2]);
+      root.append(node);
+      return;
+    }
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      const node = create("blockquote");
+      appendInlineMarkdown(node, quote[1]);
+      root.append(node);
+      return;
+    }
+    const bullet = line.match(/^\s*[-+*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (bullet || ordered) {
+      flushParagraph();
+      const nextType = ordered ? "ol" : "ul";
+      if (!list || listType !== nextType) {
+        flushList();
+        list = create(nextType);
+        listType = nextType;
+      }
+      const item = create("li");
+      appendInlineMarkdown(item, (bullet || ordered)[1]);
+      list.append(item);
+      return;
+    }
+    paragraph.push(line.trim());
+  });
+  flushParagraph();
+  flushList();
+  flushCode();
+  if (!root.childNodes.length) root.append(create("p", "", "暂无内容。"));
+  return root;
+}
+
+function appendInlineMarkdown(target, text) {
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+  let cursor = 0;
+  for (const match of String(text || "").matchAll(pattern)) {
+    if (match.index > cursor) target.append(document.createTextNode(text.slice(cursor, match.index)));
+    const token = match[0];
+    if (token.startsWith("`")) target.append(create("code", "", token.slice(1, -1)));
+    else if (token.startsWith("**") || token.startsWith("__")) target.append(create("strong", "", token.slice(2, -2)));
+    else target.append(create("em", "", token.slice(1, -1)));
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) target.append(document.createTextNode(text.slice(cursor)));
 }
 
 function renderSkillControls() {
@@ -757,7 +866,7 @@ async function createFork() {
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
     });
     const output = $("fork-output");
-    output.replaceChildren(create("pre", "analysis-text", result.payload.data?.agent_response || "分支分析完成。"));
+    output.replaceChildren(renderMarkdown(result.payload.data?.agent_response || "分支分析完成。"));
     renderSkillOutputs(result.payload.skill_outputs || [], output);
     output.hidden = false;
     $("fork-merge-button").hidden = false;
@@ -820,7 +929,7 @@ function renderKgQueryResult(data) {
   state.queryKgElements = data.cytoscape_elements || [];
   if (state.queryKgElements.length) renderKg(state.queryKgElements);
   const answer = $("kg-answer");
-  answer.replaceChildren(create("h3", "", "KG 回答"), create("p", "", data.answer || "当前图谱没有足够证据。"));
+  answer.replaceChildren(create("h3", "", "KG 回答"), renderMarkdown(data.answer || "当前图谱没有足够证据。"));
   answer.hidden = false;
   const reasoning = $("kg-reasoning");
   reasoning.replaceChildren();

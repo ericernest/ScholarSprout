@@ -113,6 +113,7 @@ def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
         upload_path,
         media_type="application/pdf",
         filename=f"{paper_id}.pdf",
+        content_disposition_type="inline",
     )
 
 

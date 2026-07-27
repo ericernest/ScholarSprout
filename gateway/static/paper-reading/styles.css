@@ -215,6 +215,22 @@ select option { color: #07120f; }
 .welcome-card p, .analysis-card p { margin: .3rem 0 0; color: var(--muted); font-size: .78rem; line-height: 1.58; }
 .analysis-card header, .skill-output-card header { display: flex; justify-content: space-between; gap: .5rem; color: var(--accent); font-size: .7rem; }
 .analysis-text { margin: 0; color: #d8eee8; font-family: inherit; font-size: .82rem; line-height: 1.65; white-space: pre-wrap; }
+.markdown-content { color: #d8eee8; font-size: .82rem; line-height: 1.68; overflow-wrap: anywhere; }
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content p { margin: .5rem 0; }
+.markdown-content h3, .markdown-content h4, .markdown-content h5, .markdown-content h6 {
+  margin: .85rem 0 .35rem; color: #f1fffB; font-family: inherit; line-height: 1.35;
+}
+.markdown-content ul, .markdown-content ol { margin: .45rem 0; padding-left: 1.25rem; }
+.markdown-content li { margin: .28rem 0; }
+.markdown-content strong { color: #f3fffc; }
+.markdown-content em { color: #bce9de; }
+.markdown-content code { padding: .1rem .28rem; border-radius: 5px; color: #c9fff3; background: rgba(102,245,214,.1); font-family: Consolas,monospace; }
+.markdown-code { margin: .6rem 0; padding: .7rem; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; background: rgba(0,0,0,.28); }
+.markdown-code code { padding: 0; color: #d9eee9; background: transparent; white-space: pre; }
+.markdown-content blockquote { margin: .55rem 0; padding: .4rem .7rem; border-left: 3px solid var(--accent); color: var(--muted); background: rgba(102,245,214,.055); }
+.markdown-content hr { height: 1px; margin: .7rem 0; border: 0; background: var(--line); }
 .structured-output { display: grid; gap: .45rem; }
 .value-block { padding: .55rem; border-radius: 10px; background: rgba(2,12,10,.4); }
 .value-block strong { display: block; margin-bottom: .25rem; color: #dffdf6; font-size: .72rem; }

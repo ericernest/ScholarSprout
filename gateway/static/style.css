@@ -453,6 +453,13 @@ textarea::placeholder {
   gap: 0.55rem;
   align-items: center;
   min-height: 44px;
+  border-radius: 15px;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.paper-mode-input.is-dragging {
+  background: rgba(102, 245, 214, 0.12);
+  box-shadow: 0 0 0 2px rgba(102, 245, 214, 0.48), 0 0 30px rgba(102, 245, 214, 0.14);
 }
 
 .paper-file-button {

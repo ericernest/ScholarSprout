@@ -24,6 +24,7 @@ from handlers.paper_reading.schemas.response import (
 )
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.kg.query import KGQueryEngine
+from handlers.paper_reading.pipeline.parser import PDFParser
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
@@ -560,7 +561,26 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
     if storage is None or not paper_id:
         return None
     try:
-        return storage.load_paper(paper_id)
+        paper = storage.load_paper(paper_id)
+        if not paper:
+            return paper
+        full_text = str(paper.get("full_text", ""))
+        if full_text and PDFParser.sections_need_repair(paper.get("sections")):
+            parser = PDFParser()
+            repaired = parser.extract_sections(full_text)
+            if repaired:
+                paper = dict(paper)
+                paper["sections"] = [section.model_dump(mode="json") for section in repaired]
+                repaired_title = parser.extract_title(full_text)
+                if repaired_title:
+                    paper["title"] = repaired_title
+                repaired_authors = parser.extract_authors(full_text)
+                if len(repaired_authors) >= 2:
+                    paper["authors"] = [
+                        author.model_dump(mode="json")
+                        for author in repaired_authors
+                    ]
+        return paper
     except Exception as error:
         logger.warning("Failed to load paper %s: %s", paper_id, error)
         return None

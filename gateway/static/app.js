@@ -97,16 +97,24 @@ function bindChatPage() {
 
   paperFileButton.addEventListener("click", () => paperFileInput.click());
   paperFileInput.addEventListener("change", () => {
-    const file = paperFileInput.files?.[0] || null;
-    if (file && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      appendMessage("assistant", "请选择 PDF 文件。");
-      paperFileInput.value = "";
-      selectedPaperFile = null;
-      return;
-    }
-    selectedPaperFile = file;
-    paperFileLabel.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : "选择 PDF";
-    paperFileButton.classList.toggle("has-file", Boolean(file));
+    setSelectedPaperFile(paperFileInput.files?.[0] || null);
+  });
+  ["dragenter", "dragover"].forEach((eventName) => {
+    paperModeInput.addEventListener(eventName, (event) => {
+      if (currentMode !== "paper_reading") return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      paperModeInput.classList.add("is-dragging");
+    });
+  });
+  ["dragleave", "dragend"].forEach((eventName) => {
+    paperModeInput.addEventListener(eventName, () => paperModeInput.classList.remove("is-dragging"));
+  });
+  paperModeInput.addEventListener("drop", (event) => {
+    if (currentMode !== "paper_reading") return;
+    event.preventDefault();
+    paperModeInput.classList.remove("is-dragging");
+    setSelectedPaperFile(event.dataTransfer.files?.[0] || null);
   });
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
@@ -333,11 +341,23 @@ function clearPreviousPaperSession() {
 }
 
 function resetPaperComposer() {
-  selectedPaperFile = null;
+  setSelectedPaperFile(null);
   paperFileInput.value = "";
-  paperFileLabel.textContent = "选择 PDF";
-  paperFileButton.classList.remove("has-file");
   paperUrlInput.value = "";
+}
+
+function setSelectedPaperFile(file) {
+  if (file && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    appendMessage("assistant", "拖入的文件不是 PDF，请重新选择。");
+    paperFileInput.value = "";
+    selectedPaperFile = null;
+    paperFileLabel.textContent = "选择 PDF";
+    paperFileButton.classList.remove("has-file");
+    return;
+  }
+  selectedPaperFile = file;
+  paperFileLabel.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : "选择 PDF";
+  paperFileButton.classList.toggle("has-file", Boolean(file));
 }
 
 function focusCurrentInput() {
