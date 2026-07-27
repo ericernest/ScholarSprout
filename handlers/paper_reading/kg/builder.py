@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from paper_reading.kg.engine import KnowledgeGraphEngine
-from paper_reading.kg.models import (
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.kg.models import (
     EDGE_TYPE_MAP,
     NODE_TYPE_MAP,
     KGEdge,

@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any
 
-from paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 
 
 class KGQueryEngine:

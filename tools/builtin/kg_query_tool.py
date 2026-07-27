@@ -77,7 +77,7 @@ class KGQueryTool(BaseTool):
                 )
                 return {"neighbors": neighbors}
             elif query_type == "search":
-                from paper_reading.kg.query import KGQueryEngine
+                from handlers.paper_reading.kg.query import KGQueryEngine
 
                 question = str(arguments.get("question") or arguments.get("keyword", ""))
                 answer = KGQueryEngine(engine).answer(

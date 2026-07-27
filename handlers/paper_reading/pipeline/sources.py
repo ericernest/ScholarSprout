@@ -18,8 +18,8 @@ from pathlib import Path
 import feedparser
 import httpx
 
-from paper_reading.pipeline.metadata import Author, PaperMetadata
-from paper_reading.pipeline.parser import PDFParser
+from handlers.paper_reading.pipeline.metadata import Author, PaperMetadata
+from handlers.paper_reading.pipeline.parser import PDFParser
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +66,12 @@ class PaperSource:
 class ArxivSource(PaperSource):
     """arXiv API 检索。
 
-    API: http://export.arxiv.org/api/query?search_query=all:{query}&max_results={n}
+    API: https://export.arxiv.org/api/query?search_query=all:{query}&max_results={n}
     返回: Atom XML，通过 feedparser 解析
     """
 
     SOURCE_NAME = "arxiv"
-    API_URL = "http://export.arxiv.org/api/query"
+    API_URL = "https://export.arxiv.org/api/query"
 
     async def search(self, query: str, max_results: int = 10) -> list[PaperMetadata]:
         """通过 arXiv API 检索论文。"""
@@ -84,7 +84,7 @@ class ArxivSource(PaperSource):
         retries = 2
         for attempt in range(retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                     response = await client.get(self.API_URL, params=params)
                     response.raise_for_status()
 
@@ -141,7 +141,7 @@ class ArxivSource(PaperSource):
             "max_results": 1,
         }
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 response = await client.get(self.API_URL, params=params)
                 response.raise_for_status()
             feed = feedparser.parse(response.text)

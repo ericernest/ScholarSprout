@@ -5,30 +5,30 @@ def test(name):
     print(f"\n{'='*40}\n  {name}\n{'='*40}")
 
 test("1. Schemas")
-from paper_reading.schemas.request import PaperReadingRequest
-from paper_reading.schemas.response import PaperReadingResponse, SessionState
+from handlers.paper_reading.schemas.request import PaperReadingRequest
+from handlers.paper_reading.schemas.response import PaperReadingResponse, SessionState
 print(f"  PaperReadingRequest action default: {PaperReadingRequest.model_fields['action'].default}")
 print(f"  PaperReadingResponse status default: {PaperReadingResponse.model_fields['status'].default}")
 
 test("2. Pipeline Metadata")
-from paper_reading.pipeline.metadata import PaperMetadata, Author
+from handlers.paper_reading.pipeline.metadata import PaperMetadata, Author
 m = PaperMetadata(paper_id='test', title='Test Paper', source='arxiv', abstract='Test abstract')
 print(f"  PaperMetadata created: {m.title}")
 
 test("3. KG Models")
-from paper_reading.kg.models import ALL_NODE_TYPES, ALL_EDGE_TYPES, KGNode
+from handlers.paper_reading.kg.models import ALL_NODE_TYPES, ALL_EDGE_TYPES, KGNode
 print(f"  {len(ALL_NODE_TYPES)} node types")
 print(f"  {len(ALL_EDGE_TYPES)} edge types")
 n = KGNode(node_type='Concept', label='Test', paper_id='p1')
 print(f"  KGNode OK")
 
 test("4. Storage")
-from paper_reading.harness.storage import PaperReadingStorage
+from handlers.paper_reading.harness.storage import PaperReadingStorage
 s = PaperReadingStorage()
 print(f"  Storage OK, base_dir: {s.base_dir}")
 
 test("5. Session Manager")
-from paper_reading.harness.session import SessionManager
+from handlers.paper_reading.harness.session import SessionManager
 sm = SessionManager()
 session = sm.create_session(paper_id='test123', paper_title='Test Paper')
 print(f"  Created: {session.session_id} (state={session.state})")
@@ -39,14 +39,14 @@ sm.resume(session.session_id)
 print(f"  Resumed: state={session.state}")
 
 test("6. Progress")
-from paper_reading.harness.progress import build_initial_progress, update_section_status, format_progress_message
+from handlers.paper_reading.harness.progress import build_initial_progress, update_section_status, format_progress_message
 p = build_initial_progress(8)
 p = update_section_status(p, 'sec:1', 'completed')
 p = update_section_status(p, 'sec:2', 'reading')
 print(f"  {format_progress_message(p)}")
 
 test("7. Fork/Merge")
-from paper_reading.harness.fork_merge import ForkMergeManager
+from handlers.paper_reading.harness.fork_merge import ForkMergeManager
 fm = ForkMergeManager(sm)
 fork = fm.create_fork(session.session_id, fork_context='test_formula', fork_skills=['reading.math_verifier'])
 if fork:
@@ -57,8 +57,8 @@ else:
     print("  Fork: FAILED")
 
 test("8. KG Engine + Builder + Fusion")
-from paper_reading.kg.engine import KnowledgeGraphEngine
-from paper_reading.kg.models import MotivatesEdge
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.kg.models import MotivatesEdge
 engine = KnowledgeGraphEngine()
 n1 = KGNode(node_type='Problem', label='Few-shot Learning', paper_id='p1', properties={'domain': 'meta-learning'})
 n2 = KGNode(node_type='Method', label='ProtoNet', paper_id='p1', properties={'category': 'metric-learning'})
@@ -72,14 +72,14 @@ print(f"  Search Proto: {len(engine.search_nodes('Proto'))} results")
 print(f"  Path query: {len(engine.query_path('Few-shot', 'Proto'))} results")
 
 # Builder
-from paper_reading.kg.builder import ProgressiveKGBuilder
+from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
 builder = ProgressiveKGBuilder(engine)
 for sec_id, exp in [('3.2. Method', 'method'), ('Abstract', 'abstract'), ('1. Intro', 'introduction')]:
     r = builder.classify_section(sec_id)
     print(f"  Classify '{sec_id}' -> {r} {'OK' if r == exp else 'FAIL'}")
 
 # Fusion
-from paper_reading.kg.fusion import CrossPaperFusion
+from handlers.paper_reading.kg.fusion import CrossPaperFusion
 n3 = KGNode(node_type='Dataset', label='miniImageNet', paper_id='p2')
 engine.add_node(n3)
 n4 = KGNode(node_type='Dataset', label='miniImageNet', paper_id='p1')
@@ -112,7 +112,7 @@ names = [t.name for t in reg.list_tools()]
 print(f"  {len(names)} tools: {names}")
 
 test("11. Agent Profile")
-with open('agents/profiles.json') as f:
+with open('agents/profiles.json', encoding='utf-8') as f:
     profiles = json.load(f)
 pp = [p for p in profiles if p['type'] == 'paper_reading']
 if pp:
@@ -139,7 +139,7 @@ for s in skills_with_md:
                 break
 
 test("13. File Inventory")
-py_files = sorted(glob.glob('paper_reading/**/*.py', recursive=True))
+py_files = sorted(glob.glob('handlers/paper_reading/**/*.py', recursive=True))
 total = sum(os.path.getsize(f) for f in py_files)
 print(f"  {len(py_files)} Python files, {total:,} bytes")
 for f in py_files:

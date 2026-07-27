@@ -18,7 +18,7 @@ from uuid import uuid4
 
 import networkx as nx
 
-from paper_reading.kg.models import (
+from handlers.paper_reading.kg.models import (
     ALL_EDGE_TYPES,
     ALL_NODE_TYPES,
     KGEdge,

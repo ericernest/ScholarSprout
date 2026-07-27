@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from paper_reading.skills import (
+from handlers.paper_reading.postprocessors import (
     code_reviewer,
     critique_agent,
     cross_paper_linker,

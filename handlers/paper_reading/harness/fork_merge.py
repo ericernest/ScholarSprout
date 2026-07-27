@@ -19,8 +19,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from paper_reading.harness.session import ReadingSession, SessionManager
-from paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.harness.session import ReadingSession, SessionManager
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 
 logger = logging.getLogger(__name__)
 

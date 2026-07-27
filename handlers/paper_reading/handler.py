@@ -14,17 +14,17 @@ from typing import Any
 from channels.base import ChannelMessage
 from runtime.agent_runner import AgentRunResult, run_agent_detailed
 
-from paper_reading.schemas.request import PaperReadingRequest
-from paper_reading.schemas.response import (
+from handlers.paper_reading.schemas.request import PaperReadingRequest
+from handlers.paper_reading.schemas.response import (
     KnowledgeGraphUpdate,
     PaperReadingResponse,
     ReadingProgress,
     SessionState,
     SkillOutput,
 )
-from paper_reading.harness.progress import format_progress_message
-from paper_reading.kg.query import KGQueryEngine
-from paper_reading.skills.postprocess import postprocess_agent_output
+from handlers.paper_reading.harness.progress import format_progress_message
+from handlers.paper_reading.kg.query import KGQueryEngine
+from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
 

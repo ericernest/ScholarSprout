@@ -35,16 +35,16 @@ if "feedparser" not in sys.modules:
     feedparser_stub.parse = lambda text: SimpleNamespace(entries=[])
     sys.modules["feedparser"] = feedparser_stub
 
-import paper_reading.handler as handler_mod
+import handlers.paper_reading.handler as handler_mod
 from channels.base import ChannelMessage
-from paper_reading.handler import handle_paper_reading_message
-from paper_reading.harness.fork_merge import ForkMergeManager
-from paper_reading.harness.session import SessionManager
-from paper_reading.harness.storage import PaperReadingStorage
-from paper_reading.kg.builder import ProgressiveKGBuilder
-from paper_reading.kg.engine import KnowledgeGraphEngine
-from paper_reading.kg.query import KGQueryEngine
-from paper_reading.skills.postprocess import postprocess_agent_output
+from handlers.paper_reading.handler import handle_paper_reading_message
+from handlers.paper_reading.harness.fork_merge import ForkMergeManager
+from handlers.paper_reading.harness.session import SessionManager
+from handlers.paper_reading.harness.storage import PaperReadingStorage
+from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.kg.query import KGQueryEngine
+from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 from runtime.agent_runner import AgentRunResult, TokenUsage
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
@@ -111,7 +111,7 @@ def main() -> None:
     pdf_runtime_ready = True
     try:
         import fitz  # noqa: F401
-        from paper_reading.pipeline.sources import PaperPipeline
+        from handlers.paper_reading.pipeline.sources import PaperPipeline
 
         pipeline = PaperPipeline()
     except ModuleNotFoundError as error:

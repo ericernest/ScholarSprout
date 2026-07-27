@@ -35,7 +35,7 @@ class PDFParseTool(BaseTool):
 
     def run(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """执行 PDF 章节提取。"""
-        from paper_reading.harness.storage import PaperReadingStorage
+        from handlers.paper_reading.harness.storage import PaperReadingStorage
 
         storage = PaperReadingStorage()
         paper_id = str(arguments.get("paper_id", "")).strip()

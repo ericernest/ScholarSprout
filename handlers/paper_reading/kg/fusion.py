@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from paper_reading.kg.engine import KnowledgeGraphEngine
-from paper_reading.kg.models import KGEdge, KGNode
+from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
+from handlers.paper_reading.kg.models import KGEdge, KGNode
 
 logger = logging.getLogger(__name__)
 

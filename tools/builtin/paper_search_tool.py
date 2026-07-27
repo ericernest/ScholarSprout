@@ -45,7 +45,7 @@ class PaperSearchTool(BaseTool):
 
     def run(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """执行论文搜索。"""
-        from paper_reading.pipeline.sources import PaperPipeline
+        from handlers.paper_reading.pipeline.sources import PaperPipeline
 
         query = str(arguments.get("query", "")).strip()
         if not query:

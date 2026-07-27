@@ -54,7 +54,15 @@ NoviceSynapse/
 |-- handlers/
 |   |-- chat_handler.py
 |   |-- paper_reading_handler.py
-|   `-- domain_onboarding_handler.py
+|   |-- paper_reading/
+|   |   |-- handler.py
+|   |   |-- pipeline/
+|   |   |-- schemas/
+|   |   |-- kg/
+|   |   |-- harness/
+|   |   `-- postprocessors/
+|   |-- domain_onboarding_handler.py
+|   `-- domain_onboarding/
 |-- models/
 |   `-- client.py
 |-- runtime/

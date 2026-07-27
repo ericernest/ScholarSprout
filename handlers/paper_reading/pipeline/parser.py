@@ -18,7 +18,7 @@ from uuid import uuid4
 
 import fitz  # PyMuPDF
 
-from paper_reading.pipeline.metadata import (
+from handlers.paper_reading.pipeline.metadata import (
     Author,
     PaperFigure,
     PaperMetadata,

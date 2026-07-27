@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from paper_reading.skills.common import extract_json_object, make_skill_output
+from handlers.paper_reading.postprocessors.common import extract_json_object, make_skill_output
 
 
 def postprocess(text: str, paper_id: str = "", section_id: str = "", trigger: str = "auto") -> dict[str, Any]:
