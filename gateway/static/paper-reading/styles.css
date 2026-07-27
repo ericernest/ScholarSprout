@@ -252,8 +252,9 @@ select option { color: #07120f; }
 .pdf-reader { position: relative; min-height: 0; }
 .pdf-reader iframe { width: 100%; height: 100%; border: 0; background: #d8dedc; }
 .pdf-mode-hint {
-  padding: .55rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
-  color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .7rem; line-height: 1.55;
+  padding: .28rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
+  color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .66rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .reader-panel .empty-state { color: #68736f; }
 .empty-state, .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
