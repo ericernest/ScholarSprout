@@ -180,6 +180,16 @@ Metrics 同时聚合首次和最终质量状态、问题类型、失败硬门槛
 选择原因、变更路径数量与维度改善值。这些指标只记录结构化摘要，不记录 Prompt、
 API Key 或完整生成内容。
 
+### 请求审计持久化
+
+设置 `DOMAIN_ONBOARDING_AUDIT_DIR` 后，每个 V1 请求会按 UTC 日期追加到
+`domain-onboarding-YYYY-MM-DD.jsonl`。记录包含请求 ID、策略版本、阶段耗时、
+模型用量、论文计数、质量尝试和修复记录，但只保存用户、会话与查询的 SHA-256
+摘要，不保存原始输入、Prompt、API Key 或完整生成内容。设置
+`DOMAIN_ONBOARDING_AUDIT_FSYNC=true` 可在每次追加后强制同步文件。未配置目录时
+使用 No-Op 存储；写入失败不会改变业务响应，但会计入 Metrics 的
+`audit.write_failures`。
+
 ### 质量策略版本
 
 阈值、七个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小

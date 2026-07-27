@@ -8,12 +8,14 @@ from math import ceil
 from statistics import fmean
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 from runtime.agent_runner import TokenUsage
 
 
 @dataclass(slots=True)
 class DomainOnboardingRequestTrace:
+    request_id: str = field(default_factory=lambda: str(uuid4()))
     policy_version: str = "domain-quality-v1.0.0"
     policy_fingerprint: str | None = None
     status: str = "unknown"
@@ -79,6 +81,7 @@ class DomainOnboardingRequestTrace:
     interrupted_stage: str | None = None
     deadline_exceeded: bool = False
     cancelled: bool = False
+    audit_write_failed: bool = False
 
     @property
     def retry_attempted(self) -> bool:
@@ -154,6 +157,7 @@ class DomainOnboardingMetrics:
         self._repair_dimension_deltas: dict[str, list[float]] = defaultdict(list)
         self._policy_versions: Counter[str] = Counter()
         self._policy_fingerprints: Counter[str] = Counter()
+        self._audit_write_failures = 0
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -163,6 +167,7 @@ class DomainOnboardingMetrics:
                 self._policy_fingerprints[
                     f"{trace.policy_version}:{trace.policy_fingerprint}"
                 ] += 1
+            self._audit_write_failures += int(trace.audit_write_failed)
             self._statuses[trace.status] += 1
             if trace.interrupted_stage:
                 self._interrupted_stages[trace.interrupted_stage] += 1
@@ -255,6 +260,7 @@ class DomainOnboardingMetrics:
                     "versions": dict(self._policy_versions),
                     "fingerprints": dict(self._policy_fingerprints),
                 },
+                "audit": {"write_failures": self._audit_write_failures},
                 "statuses": dict(self._statuses),
                 "interruptions": {
                     "stages": dict(self._interrupted_stages),
