@@ -81,6 +81,31 @@ class GeneratorTests(unittest.TestCase):
             [self.ranked[0].paper_id],
         )
 
+    def test_object_subdirections_are_normalized_to_names(self) -> None:
+        payload = make_generation_payload([paper.paper_id for paper in self.ranked])
+        payload["current_landscape"]["subdirections"] = [
+            {"name": "理论机制", "description": "details"},
+            {"name": "异构架构"},
+            {"name": "理论机制"},
+        ]
+
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="multi-agent debate"),
+            make_profile(),
+            make_plan(),
+            self.ranked,
+        ).output
+
+        self.assertEqual(
+            output.current_landscape.subdirections,
+            ["理论机制", "异构架构"],
+        )
+        self.assertTrue(
+            all(not item.startswith("{") for item in output.current_landscape.subdirections)
+        )
+
 
 class QualityTests(unittest.TestCase):
     def setUp(self) -> None:

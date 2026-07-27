@@ -114,6 +114,26 @@ class KnowledgeGraphTests(unittest.TestCase):
                 knowledge_graph_shadow_mode=False,
             )
 
+    def test_validator_rejects_serialized_container_labels(self) -> None:
+        graph = KnowledgeGraphSnapshot(
+            request_id="request",
+            quality_policy_version="domain-quality-v1.0.0",
+            nodes=[
+                KnowledgeGraphNode(
+                    node_id="subdirection",
+                    node_type="subdirection",
+                    label="{'name': 'theory'}",
+                    source_path="current_landscape.subdirections.0",
+                )
+            ],
+            validation=GraphValidationReport(valid=False),
+        )
+
+        report = DomainKnowledgeGraphValidator().validate(graph)
+
+        self.assertFalse(report.valid)
+        self.assertEqual(report.issues[0].issue_type, "malformed_label")
+
 
 if __name__ == "__main__":
     unittest.main()

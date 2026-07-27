@@ -171,7 +171,8 @@ class StructuredOnboardingGenerator:
             "Output fields: domain, text, prerequisites, development_stages, current_landscape, learning_path. "
             "Each prerequisite has name, why_needed, key_points, related_paper_ids. Each development stage has "
             "name, summary, motivation, related_paper_ids, prerequisite_ids, core_concepts, main_techniques, open_problems. "
-            "current_landscape has problems and subdirections. Each learning step has step, goal, topics, paper_ids, "
+            "current_landscape has problems:list[str] and subdirections:list[str]; never put objects in either list. "
+            "Each learning step has step, goal, topics, paper_ids, "
             "activities, completion_criteria, expected_outcome. Produce at least 3 development stages and 3 subdirections. "
             "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
             "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
@@ -359,7 +360,16 @@ class StructuredOnboardingGenerator:
 
     @classmethod
     def _strings(cls, value: object) -> list[str]:
-        return [str(item).strip() for item in cls._as_list(value) if str(item).strip()]
+        normalized: list[str] = []
+        for item in cls._as_list(value):
+            if isinstance(item, dict):
+                item = item.get("name") or item.get("title") or item.get("label") or ""
+            if isinstance(item, (list, tuple, set)):
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return list(dict.fromkeys(normalized))
 
     @classmethod
     def _valid_ids(cls, value: object, references: dict[str, PaperReference]) -> list[str]:
