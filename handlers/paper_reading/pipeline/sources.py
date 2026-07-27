@@ -35,6 +35,9 @@ _RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _ARXIV_MIN_INTERVAL_SECONDS = 3.0
 _ARXIV_RATE_LOCK = Lock()
 _ARXIV_NEXT_REQUEST_AT = 0.0
+_SEMANTIC_SCHOLAR_COOLDOWN_SECONDS = 60.0
+_SEMANTIC_SCHOLAR_RATE_LOCK = Lock()
+_SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL = 0.0
 _SEARCH_CACHE_TTL_SECONDS = 3600.0
 _SEARCH_CACHE_MAX_ENTRIES = 128
 _SEARCH_CACHE_LOCK = Lock()
@@ -50,6 +53,16 @@ class PaperRetrievalError(RuntimeError):
         self.errors = errors
         details = "; ".join(f"{source}: {error}" for source, error in errors.items())
         super().__init__(f"论文源请求失败（{details}）")
+
+
+class SourceTemporarilyUnavailable(RuntimeError):
+    """论文源暂时不可用，但其他来源仍可继续接管。"""
+
+
+def _describe_error(error: BaseException) -> str:
+    """确保日志和接口错误中不会出现空异常文本。"""
+    message = str(error).strip()
+    return message or error.__class__.__name__
 
 
 def normalize_arxiv_id(value: str) -> str | None:
@@ -90,6 +103,26 @@ def _retry_after_seconds(response: Any, attempt: int, base_delay: float) -> floa
             except (TypeError, ValueError, OverflowError):
                 pass
     return min(delay, 60.0)
+
+
+def _semantic_scholar_cooldown_remaining() -> float:
+    with _SEMANTIC_SCHOLAR_RATE_LOCK:
+        return max(0.0, _SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL - monotonic())
+
+
+def _start_semantic_scholar_cooldown(response: Any) -> float:
+    """公共 API 返回 429 后暂停请求，避免同一 Agent 回合继续撞限流。"""
+    global _SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL
+    delay = max(
+        _SEMANTIC_SCHOLAR_COOLDOWN_SECONDS,
+        _retry_after_seconds(response, attempt=1, base_delay=1.0),
+    )
+    with _SEMANTIC_SCHOLAR_RATE_LOCK:
+        _SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL = max(
+            _SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL,
+            monotonic() + delay,
+        )
+    return delay
 
 
 async def _wait_for_arxiv_slot() -> None:
@@ -367,6 +400,13 @@ class SemanticScholarSource(PaperSource):
         api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
         if api_key:
             headers["x-api-key"] = api_key
+        else:
+            cooldown = _semantic_scholar_cooldown_remaining()
+            if cooldown > 0:
+                raise SourceTemporarilyUnavailable(
+                    "Semantic Scholar public API is cooling down after HTTP 429 "
+                    f"({cooldown:.0f}s remaining)"
+                )
 
         async with httpx.AsyncClient(
             timeout=30.0,
@@ -393,6 +433,17 @@ class SemanticScholarSource(PaperSource):
                     continue
 
                 status_code = getattr(response, "status_code", 200)
+                if status_code == 429 and not api_key:
+                    cooldown = _start_semantic_scholar_cooldown(response)
+                    logger.info(
+                        "Semantic Scholar public API returned HTTP 429; "
+                        "using fallback sources for %.0fs",
+                        cooldown,
+                    )
+                    raise SourceTemporarilyUnavailable(
+                        "Semantic Scholar public API returned HTTP 429; "
+                        f"fallback cooldown started for {cooldown:.0f}s"
+                    )
                 if status_code in _RETRYABLE_STATUS_CODES:
                     if attempt >= max_attempts:
                         response.raise_for_status()
@@ -674,24 +725,39 @@ class PaperPipeline:
         successful_sources = 0
         for name, result in zip(target_sources, results_list):
             if isinstance(result, Exception):
-                errors[name] = str(result)
-                logger.warning("Source %s failed: %s", name, result)
+                error_message = _describe_error(result)
+                errors[name] = error_message
+                if isinstance(result, SourceTemporarilyUnavailable):
+                    logger.info(
+                        "Source %s temporarily unavailable; continuing with "
+                        "fallback sources: %s",
+                        name,
+                        error_message,
+                    )
+                else:
+                    logger.warning("Source %s failed: %s", name, error_message)
             elif isinstance(result, list):
                 successful_sources += 1
                 all_papers.extend(result)
 
-        if successful_sources == 0 and errors:
+        if not all_papers:
             try:
                 fallback_results = await self.openalex_fallback.search(
                     normalized_query,
                     max_results,
                 )
             except Exception as error:
-                errors["openalex"] = str(error)
-                raise PaperRetrievalError(errors) from error
-            papers = self._deduplicate(fallback_results)
-            _cache_set(cache_key, papers)
-            return papers
+                errors["openalex"] = _describe_error(error)
+                if successful_sources == 0 and errors:
+                    raise PaperRetrievalError(errors) from error
+                logger.warning(
+                    "OpenAlex fallback failed after empty primary results: %s",
+                    errors["openalex"],
+                )
+            else:
+                papers = self._deduplicate(fallback_results)
+                _cache_set(cache_key, papers)
+                return papers
 
         papers = self._deduplicate(all_papers)
         _cache_set(cache_key, papers)
@@ -713,11 +779,11 @@ class PaperPipeline:
                 successful_sources += 1
                 return paper
             except Exception as error:
-                errors["openalex"] = str(error)
+                errors["openalex"] = _describe_error(error)
                 logger.warning(
                     "Exact arXiv lookup via OpenAlex failed for %s: %s",
                     arxiv_id,
-                    error,
+                    errors["openalex"],
                 )
                 return None
 
@@ -740,12 +806,17 @@ class PaperPipeline:
                 paper = await self.sources[name].fetch_by_id(lookup_id)
                 successful_sources += 1
             except Exception as error:
-                errors[name] = str(error)
-                logger.warning(
+                errors[name] = _describe_error(error)
+                log = (
+                    logger.info
+                    if isinstance(error, SourceTemporarilyUnavailable)
+                    else logger.warning
+                )
+                log(
                     "Exact arXiv lookup via %s failed for %s: %s",
                     name,
                     arxiv_id,
-                    error,
+                    errors[name],
                 )
                 continue
             if paper is not None:

@@ -13,6 +13,8 @@ from handlers.paper_reading.pipeline.sources import (
     OpenAlexFallbackSource,
     PaperPipeline,
     PaperRetrievalError,
+    SemanticScholarSource,
+    SourceTemporarilyUnavailable,
     normalize_arxiv_id,
 )
 
@@ -253,6 +255,96 @@ class PaperPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([paper.title for paper in papers], ["Fallback result"])
         self.assertEqual(papers[0].source, "openalex")
+
+    async def test_keyword_search_uses_openalex_when_primary_results_are_empty(
+        self,
+    ) -> None:
+        class _EmptySource:
+            async def search(
+                self,
+                query: str,
+                max_results: int,
+            ) -> list[PaperMetadata]:
+                return []
+
+        class _TemporarilyUnavailableSource:
+            async def search(
+                self,
+                query: str,
+                max_results: int,
+            ) -> list[PaperMetadata]:
+                raise SourceTemporarilyUnavailable("HTTP 429 cooldown")
+
+        class _OpenAlexFallback:
+            async def search(
+                self,
+                query: str,
+                max_results: int,
+            ) -> list[PaperMetadata]:
+                return [
+                    PaperMetadata(
+                        paper_id="openalex-empty-primary",
+                        source="openalex",
+                        source_id="https://openalex.org/W2",
+                        title="Recovered from empty primary results",
+                    )
+                ]
+
+        pipeline = PaperPipeline()
+        pipeline.sources = {
+            "arxiv": _EmptySource(),
+            "semantic_scholar": _TemporarilyUnavailableSource(),
+        }
+        pipeline.openalex_fallback = _OpenAlexFallback()
+
+        papers = await pipeline.search("unique empty primary query")
+
+        self.assertEqual(
+            [paper.title for paper in papers],
+            ["Recovered from empty primary results"],
+        )
+
+
+class SemanticScholarSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        import handlers.paper_reading.pipeline.sources as sources_module
+
+        sources_module._SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL = 0.0
+
+    async def asyncTearDown(self) -> None:
+        import handlers.paper_reading.pipeline.sources as sources_module
+
+        sources_module._SEMANTIC_SCHOLAR_RATE_LIMITED_UNTIL = 0.0
+
+    async def test_public_api_429_starts_cooldown_without_retries(self) -> None:
+        request = httpx.Request("GET", SemanticScholarSource.API_URL)
+        limited = httpx.Response(429, request=request)
+
+        class _RateLimitedAsyncClient(_RecordingAsyncClient):
+            request_count = 0
+
+            async def get(self, url: str, **kwargs: object) -> httpx.Response:
+                self.__class__.request_count += 1
+                return limited
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch(
+                "handlers.paper_reading.pipeline.sources.httpx.AsyncClient",
+                _RateLimitedAsyncClient,
+            ),
+        ):
+            with self.assertRaises(SourceTemporarilyUnavailable):
+                await SemanticScholarSource().search("rate limited query")
+            with self.assertRaises(SourceTemporarilyUnavailable):
+                await SemanticScholarSource().search("second query")
+
+        self.assertEqual(_RateLimitedAsyncClient.request_count, 1)
+
+    def test_empty_exception_has_visible_description(self) -> None:
+        from handlers.paper_reading.pipeline.sources import _describe_error
+
+        self.assertEqual(_describe_error(httpx.ReadTimeout("")), "ReadTimeout")
 
 
 if __name__ == "__main__":
