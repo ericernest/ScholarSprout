@@ -481,7 +481,8 @@ class KnowledgeGraphEdge(OnboardingModel):
 
 class GraphValidationIssue(OnboardingModel):
     issue_type: Literal[
-        "duplicate_node", "dangling_edge", "unknown_paper", "dependency_cycle"
+        "duplicate_node", "dangling_edge", "unknown_paper", "dependency_cycle",
+        "malformed_label",
     ]
     message: str
     target_id: str | None = None

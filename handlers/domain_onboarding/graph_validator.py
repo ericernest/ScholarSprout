@@ -21,6 +21,16 @@ class DomainKnowledgeGraphValidator:
         node_ids = set(counts)
         allowed_papers = set(graph.selected_paper_ids)
         for node in graph.nodes:
+            label = node.label.strip()
+            if (
+                (label.startswith("{") and label.endswith("}"))
+                or (label.startswith("[") and label.endswith("]"))
+            ):
+                issues.append(GraphValidationIssue(
+                    issue_type="malformed_label",
+                    target_id=node.node_id,
+                    message="node label looks like a serialized container",
+                ))
             if node.node_type == "paper" and node.node_id not in allowed_papers:
                 issues.append(GraphValidationIssue(
                     issue_type="unknown_paper",
