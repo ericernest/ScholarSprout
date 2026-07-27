@@ -6,6 +6,7 @@ const STORAGE = {
   paper: "paper_reading_paper_id",
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
+  copilotWidth: "paper_reading_copilot_width",
 };
 
 const SKILLS = [
@@ -58,6 +59,7 @@ function boot() {
   bindReader();
   bindKg();
   bindFork();
+  bindResizeHandle();
   restoreLocalState();
 }
 
@@ -154,6 +156,43 @@ function bindFork() {
   $("fork-create-button").addEventListener("click", createFork);
   $("fork-merge-button").addEventListener("click", mergeFork);
   $("fork-close-button").addEventListener("click", closeFork);
+}
+
+function bindResizeHandle() {
+  const handle = $("copilot-resize-handle");
+  const grid = $("workbench-grid");
+  const saved = Number(localStorage.getItem(STORAGE.copilotWidth));
+  if (saved >= 300 && saved <= 760) grid.style.setProperty("--copilot-width", `${saved}px`);
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  handle.addEventListener("mousedown", (event) => {
+    dragging = true;
+    startX = event.clientX;
+    startWidth = $("copilot-panel").getBoundingClientRect().width;
+    handle.classList.add("is-active");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (!dragging) return;
+    const next = Math.min(760, Math.max(300, startWidth + (startX - event.clientX)));
+    grid.style.setProperty("--copilot-width", `${next}px`);
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("is-active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    const width = $("copilot-panel").getBoundingClientRect().width;
+    localStorage.setItem(STORAGE.copilotWidth, String(Math.round(width)));
+  });
 }
 
 async function callPaperReading(body, options = {}) {

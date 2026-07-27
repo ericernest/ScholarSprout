@@ -126,7 +126,9 @@
             <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
           </article>
 
-          <aside class="workspace-panel copilot-panel">
+          <div id="copilot-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整协作区宽度"></div>
+
+          <aside id="copilot-panel" class="workspace-panel copilot-panel">
             <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><span id="active-skill-count" class="count-pill">0 Skills</span></header>
             <div id="quick-actions" class="quick-actions"></div>
             <section id="fork-panel" class="fork-panel" aria-label="Fork 专项探索" hidden>

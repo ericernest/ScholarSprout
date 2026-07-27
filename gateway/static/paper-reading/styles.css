@@ -142,10 +142,13 @@ select option { color: #07120f; }
 .paper-ribbon h1 { max-width: 1100px; margin: 0; font: 700 clamp(1.25rem,2.1vw,2rem) Georgia,serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ribbon-actions { display: flex; align-items: center; gap: .5rem; }
 .icon-text-button { padding: .55rem .7rem; }
-.workbench-grid { display: grid; grid-template-columns: 270px minmax(460px,1fr) 400px; gap: .8rem; height: calc(100vh - 146px); min-height: 680px; }
-.workbench-grid.is-pdf-mode { grid-template-columns: minmax(650px,1fr) 400px; }
+.workbench-grid { --copilot-width: 400px; display: grid; grid-template-columns: 270px minmax(460px,1fr) 6px var(--copilot-width); gap: .8rem; height: calc(100vh - 146px); min-height: 680px; }
+.workbench-grid.is-pdf-mode { grid-template-columns: minmax(650px,1fr) 6px var(--copilot-width); }
 .workbench-grid.is-pdf-mode .navigator-panel { display: none; }
 .workspace-panel { border-radius: 22px; overflow: hidden; min-width: 0; }
+.resize-handle { position: relative; width: 6px; cursor: col-resize; border-radius: 4px; background: transparent; transition: background .15s; }
+.resize-handle::after { position: absolute; inset: 0 -4px; content: ""; }
+.resize-handle:hover, .resize-handle.is-active { background: rgba(102,245,214,.35); }
 .navigator-panel { overflow-y: auto; scrollbar-width: thin; }
 .side-section { padding: 1rem; border-bottom: 1px solid var(--line); }
 .side-section h2, .copilot-heading h2, .kg-header h2 { margin: 0; font: 700 1.1rem Georgia,serif; }
@@ -353,11 +356,12 @@ select option { color: #07120f; }
 @keyframes workspace-in { from { opacity: 0; transform: translateY(24px) scale(.99); } }
 @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 @media (max-width: 1280px) {
-  .workbench-grid { grid-template-columns: 240px minmax(420px,1fr) 360px; }
-  .workbench-grid.is-pdf-mode { grid-template-columns: minmax(620px,1fr) 360px; }
+  .workbench-grid { --copilot-width: 360px; grid-template-columns: 240px minmax(420px,1fr) 6px var(--copilot-width); }
+  .workbench-grid.is-pdf-mode { grid-template-columns: minmax(620px,1fr) 6px var(--copilot-width); }
   .kg-layout { grid-template-columns: minmax(0,1fr) 290px; }
 }
 @media (max-width: 1040px) {
+  .resize-handle { display: none; }
   .intake-grid { grid-template-columns: 1fr 1fr; }
   .search-card { grid-column: 1/-1; }
   .workbench-grid { grid-template-columns: 230px 1fr; height: auto; }
