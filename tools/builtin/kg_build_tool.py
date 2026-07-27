@@ -113,7 +113,7 @@ def _load_paper_data(paper_id: str) -> dict[str, Any] | None:
     if not paper_id:
         return None
     try:
-        from paper_reading.harness.storage import PaperReadingStorage
+        from handlers.paper_reading.harness.storage import PaperReadingStorage
 
         return PaperReadingStorage().load_paper(paper_id)
     except Exception:
