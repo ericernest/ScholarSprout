@@ -346,18 +346,45 @@ class SkillLoaderRegistryTests(unittest.TestCase):
         self.assertEqual(agent.profile.skills, [])
         self.assertEqual(agent.profile.default_skill, "")
 
-    # 验证 chat Profile 的默认 Skill 与专项 Skill 都已注册。
-    def test_chat_profile_registers_default_and_special_skills(self) -> None:
+    # 验证 chat 与论文精读 Profile 声明的 Skill 都已注册。
+    def test_agent_profiles_register_default_and_special_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = SkillRegistry(user_root=Path(temp_dir) / "user")
             chat_profile = Profiles().get("chat")
-            special_skill_ids = registry.resolve_skill_ids(list(chat_profile["skills"]))
+            chat_skill_ids = registry.resolve_skill_ids(list(chat_profile["skills"]))
+            paper_profile = Profiles().get("paper_reading")
+            paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
         self.assertEqual(chat_profile["default_skill"], "chat.default")
-        self.assertEqual(special_skill_ids, ["chat.research_discussion"])
-        self.assertEqual(
+        self.assertEqual(chat_skill_ids, ["chat.research_discussion"])
+        self.assertEqual(paper_profile["default_skill"], "reading.method_analyst")
+        self.assertCountEqual(
+            paper_skill_ids,
+            [
+                "reading.method_analyst",
+                "reading.critique_agent",
+                "reading.math_verifier",
+                "reading.code_reviewer",
+                "reading.domain_expert",
+                "reading.writing_coach",
+                "reading.idea_generator",
+                "reading.cross_paper_linker",
+            ],
+        )
+        self.assertCountEqual(
             [summary.id for summary in registry.list_summaries()],
-            ["chat.default", "chat.research_discussion"],
+            [
+                "chat.default",
+                "chat.research_discussion",
+                "reading.method_analyst",
+                "reading.critique_agent",
+                "reading.math_verifier",
+                "reading.code_reviewer",
+                "reading.domain_expert",
+                "reading.writing_coach",
+                "reading.idea_generator",
+                "reading.cross_paper_linker",
+            ],
         )
 
 

@@ -2,7 +2,7 @@
 
 按论文阅读进度渐进构建 KG 节点和边：
 
-阅读进度 → KG 构建动作映射（来自 论文精读.docx 表10）:
+阅读进度 → KG 构建动作映射（来自 docs/reference/paper-reading/论文精读.docx 表10）:
   Abstract 读完      → Problem + Method(壳) 节点
   Introduction 读完   → Baseline节点集 + RelatedWork节点集 + inspires/extends 边
   Method §X 读完     → Module节点 + depends_on Concept 边 (核心创新→contributes_to)

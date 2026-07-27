@@ -153,7 +153,9 @@ Default Skill: chat.default
 Special Skill: chat.research_discussion
 ```
 
-`chat.research_discussion` 用于需要梳理科研问题、实现路径或方案取舍的请求。领域入门当前仍将完整执行要求保存在 Profile 的 `system_prompt` 中；论文精读 Handler 仍是占位实现，暂未配置 Agent Profile 或 Skill。
+`chat.research_discussion` 用于需要梳理科研问题、实现路径或方案取舍的请求。领域入门当前仍将完整执行要求保存在 Profile 的 `system_prompt` 中。
+
+论文精读已配置 Agent Profile、Default Skill `reading.method_analyst` 和八个 `reading.*` Skill。论文精读 Handler 已接入搜索、PDF 解析、会话、Fork/Merge、知识图谱和 Skill 后处理流程。
 
 Profile 示例：
 

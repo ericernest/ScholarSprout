@@ -274,7 +274,7 @@ Profile 只有 Default Skill 时，Runtime 直接加载它，不调用 Selector�
 
 Default Skill 保存当前模式每次都需要的通用方法，Profile 配置后由 Runtime 固定加载。Special Skill 保存只对部分任务生效的专项方法，由 Selector 按当前任务选择。Skill 描述方法、步骤和输出要求，不声明 Tool，也不执行 Python。
 
-当前只有 chat Agent 配置 Default Skill `chat.default`，并注册 Special Skill `chat.research_discussion`。领域入门执行要求保存在其 Profile 的 `system_prompt` 中；论文精读暂未配置 Agent Profile 或 Skill。
+chat Agent 配置 Default Skill `chat.default` 和 Special Skill `chat.research_discussion`。论文精读 Agent 配置 Default Skill `reading.method_analyst`，并注册八个 `reading.*` Special Skill。领域入门执行要求仍保存在其 Profile 的 `system_prompt` 中。
 
 ## tools 层
 
@@ -290,6 +290,10 @@ Default Skill 保存当前模式每次都需要的通用方法，Profile 配置�
 当前内置工具：
 
 - `get_current_time`
+- `paper_search`
+- `pdf_parse`
+- `kg_query`
+- `kg_build`
 
 ## Web UI
 

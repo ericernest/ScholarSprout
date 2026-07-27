@@ -1,6 +1,6 @@
 """跨论文 KG 融合引擎。
 
-触发条件（来自 论文精读.docx 5.3.4）:
+触发条件（来自 docs/reference/paper-reading/论文精读.docx 5.3.4）:
 1. 匹配同名 Dataset → 合并节点，标注实验设置差异
 2. 匹配同名 Baseline → 创建关联，支持结果对比
 3. 检测概念演化链 → auto extends 边 + key_difference
