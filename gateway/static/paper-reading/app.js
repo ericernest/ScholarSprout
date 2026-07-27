@@ -99,6 +99,8 @@ function bindWorkbench() {
   $("pause-button").addEventListener("click", pauseReading);
   $("resume-button").addEventListener("click", resumeReading);
   $("progress-button").addEventListener("click", refreshProgress);
+  $("fullscreen-button").addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const input = $("reading-chat-input");
@@ -352,6 +354,18 @@ function showIntake() {
   window.location.href = "/app?mode=paper_reading";
 }
 
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    document.documentElement.requestFullscreen?.();
+  }
+}
+
+function syncFullscreenButton() {
+  $("fullscreen-button").textContent = document.fullscreenElement ? "退出全屏" : "全屏阅读";
+}
+
 function renderPaperWorkspace() {
   const paper = state.paper || {};
   $("paper-ribbon-title").textContent = paper.title || "未命名论文";
@@ -540,22 +554,37 @@ function moveSection(offset) {
 
 async function startReading(content, sessionId = state.sessionId) {
   if (!state.paperId || state.busy) return;
-  setBusy(true, "AI 正在精读", `正在分析 ${sectionTitle(state.currentSection) || "当前内容"}…`);
+  state.busy = true;
+  const thinking = showThinkingCard(`正在分析 ${sectionTitle(state.currentSection) || "当前内容"}…`);
   try {
     const { payload } = await callPaperReading({
       action: "start_reading", session_id: sessionId || "", paper_id: state.paperId,
       target_section: state.currentSection || "", content,
       metadata: { viewport_section: state.currentSection, selected_text: state.selectedText },
     });
+    thinking.remove();
     applyReadingPayload(payload);
     toast("章节分析已更新。");
     return payload;
   } catch (error) {
+    thinking.remove();
     toast(error.message, true);
     return null;
   } finally {
-    setBusy(false);
+    state.busy = false;
   }
+}
+
+function showThinkingCard(detail) {
+  const card = create("article", "thinking-card");
+  card.append(create("span", "loading-orb"));
+  const body = create("div");
+  body.append(create("strong", "", "Synapse Copilot 正在精读"));
+  body.append(create("p", "", detail || "请稍候…"));
+  card.append(body);
+  $("analysis-feed").append(card);
+  $("analysis-feed").scrollTop = $("analysis-feed").scrollHeight;
+  return card;
 }
 
 function applyReadingPayload(payload) {
