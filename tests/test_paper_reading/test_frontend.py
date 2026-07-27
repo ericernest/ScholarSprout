@@ -77,7 +77,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "pdf-frame",
             "analysis-feed",
             "kg-graph",
-            "fork-dialog",
+            "fork-panel",
+            "pdf-fit-select",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
@@ -113,9 +114,17 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
     def test_agent_answers_use_markdown_renderer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
 
         self.assertIn("function renderMarkdown(source)", javascript)
         self.assertIn("card.append(header, renderMarkdown(text))", javascript)
+        self.assertIn('"page=1&zoom=75"', javascript)
+        self.assertIn('"page=1&zoom=55"', javascript)
+        self.assertIn('"page=1&zoom=100"', javascript)
+        self.assertIn('classList.toggle("is-pdf-mode", isPdf)', javascript)
+        self.assertIn('id="fork-panel"', html)
+        self.assertNotIn("<dialog", html)
+        self.assertNotIn(".showModal()", javascript)
 
 
 if __name__ == "__main__":

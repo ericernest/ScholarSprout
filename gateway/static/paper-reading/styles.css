@@ -97,7 +97,7 @@ select option { color: #07120f; }
 .upload-icon { font-size: 2rem; color: var(--accent); }
 .upload-dropzone small { color: var(--muted); }
 .stack-form, .search-form { display: grid; gap: .72rem; margin-top: 1rem; }
-.stack-form label, .search-form > label, .dialog-shell label { color: var(--muted); font-size: .8rem; }
+.stack-form label, .search-form > label, .fork-panel label { color: var(--muted); font-size: .8rem; }
 .accent-button {
   min-height: 43px; padding: .7rem 1rem; border: 0; border-radius: 13px; color: #03110d;
   background: linear-gradient(135deg,var(--accent),#c1fff3); box-shadow: 0 0 24px rgba(102,245,214,.14); font-weight: 750;
@@ -141,6 +141,8 @@ select option { color: #07120f; }
 .ribbon-actions { display: flex; align-items: center; gap: .5rem; }
 .icon-text-button { padding: .55rem .7rem; }
 .workbench-grid { display: grid; grid-template-columns: 270px minmax(460px,1fr) 360px; gap: .8rem; height: calc(100vh - 146px); min-height: 680px; }
+.workbench-grid.is-pdf-mode { grid-template-columns: minmax(650px,1fr) 360px; }
+.workbench-grid.is-pdf-mode .navigator-panel { display: none; }
 .workspace-panel { border-radius: 22px; overflow: hidden; }
 .navigator-panel { overflow-y: auto; scrollbar-width: thin; }
 .side-section { padding: 1rem; border-bottom: 1px solid var(--line); }
@@ -176,10 +178,16 @@ select option { color: #07120f; }
 }
 .reader-toolbar { padding: .65rem .8rem; border-bottom: 1px solid rgba(30,70,60,.14); background: rgba(242,241,234,.92); }
 .reader-tabs, .reader-actions { display: flex; gap: .35rem; }
+.reader-actions { align-items: center; }
 .reader-tab { padding: .55rem .7rem; border: 0; border-radius: 10px; color: #66736f; background: transparent; }
 .reader-tab.is-active { color: #04110e; background: var(--accent); }
 .reader-panel .mini-button { border-color: rgba(30,70,60,.16); color: #42514d; background: rgba(255,255,255,.72); }
 .reader-panel .mini-button.is-accent { border-color: rgba(38,170,143,.35); color: #075746; background: rgba(72,219,186,.16); }
+.pdf-fit-control { display: flex; align-items: center; gap: .35rem; color: #66736f; font-size: .7rem; }
+.pdf-fit-control select {
+  width: auto; min-height: 34px; padding: .35rem 1.8rem .35rem .55rem; border-color: rgba(30,70,60,.16);
+  color: #34423e; background: rgba(255,255,255,.78);
+}
 .mini-button { font-size: .72rem; }
 .mini-button.is-accent { border-color: var(--line-strong); color: #d6fff6; background: rgba(102,245,214,.12); }
 .structured-reader {
@@ -202,7 +210,7 @@ select option { color: #07120f; }
 .selection-toolbar button { padding: .45rem .55rem; border: 0; border-radius: 8px; color: var(--ink); background: transparent; font-size: .7rem; }
 .selection-toolbar button:hover { background: rgba(102,245,214,.14); }
 
-.copilot-panel { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; }
+.copilot-panel { display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto; min-height: 0; }
 .copilot-heading { padding: .9rem; border-bottom: 1px solid var(--line); }
 .quick-actions { display: flex; gap: .35rem; padding: .6rem .8rem; overflow-x: auto; border-bottom: 1px solid var(--line); }
 .quick-action { flex: 0 0 auto; padding: .48rem .6rem; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); background: transparent; font-size: .68rem; }
@@ -266,14 +274,17 @@ select option { color: #07120f; }
 .kg-answer p { color: #dbe1ff; font-size: .76rem; line-height: 1.6; white-space: pre-wrap; }
 .path-card, .evidence-card { margin-top: .4rem; padding: .55rem; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: rgba(255,255,255,.035); font-size: .7rem; }
 
-.fork-dialog { width: min(720px,calc(100% - 2rem)); padding: 0; border: 1px solid var(--line-strong); border-radius: 24px; color: var(--ink); background: rgba(6,20,18,.98); box-shadow: var(--shadow); }
-.fork-dialog::backdrop { background: rgba(0,7,6,.75); backdrop-filter: blur(8px); }
-.dialog-shell { display: grid; gap: .85rem; padding: 1.2rem; }
-.dialog-shell header, .dialog-shell footer { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
-.dialog-shell h2 { margin: 0; font: 700 1.5rem Georgia,serif; }
-.dialog-shell label { display: grid; gap: .35rem; }
+.fork-panel {
+  display: grid; gap: .65rem; max-height: min(520px,56vh); padding: .8rem; overflow-y: auto;
+  border-bottom: 1px solid var(--line); background: linear-gradient(180deg,rgba(102,245,214,.075),rgba(6,20,18,.94));
+}
+.fork-panel header, .fork-panel footer { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.fork-panel h2 { margin: 0; font: 700 1rem Georgia,serif; }
+.fork-panel label { display: grid; gap: .3rem; }
+.fork-panel textarea { min-height: 54px; }
+.fork-panel footer { position: sticky; bottom: 0; padding-top: .3rem; background: rgba(7,22,19,.95); }
 .dialog-close { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; color: var(--ink); background: transparent; font-size: 1.3rem; }
-.fork-output { max-height: 330px; padding: .8rem; border: 1px solid var(--line); border-radius: 14px; overflow-y: auto; background: rgba(255,255,255,.035); }
+.fork-output { max-height: 260px; padding: .7rem; border: 1px solid var(--line); border-radius: 14px; overflow-y: auto; background: rgba(255,255,255,.035); }
 .global-loading {
   position: fixed; left: 50%; bottom: 1.4rem; z-index: 100; display: flex; align-items: center; gap: .8rem; min-width: 280px;
   padding: .8rem 1rem; border: 1px solid var(--line-strong); border-radius: 16px; background: rgba(5,18,16,.96); box-shadow: var(--shadow); transform: translateX(-50%);
@@ -290,12 +301,14 @@ select option { color: #07120f; }
 @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 @media (max-width: 1280px) {
   .workbench-grid { grid-template-columns: 240px minmax(420px,1fr) 320px; }
+  .workbench-grid.is-pdf-mode { grid-template-columns: minmax(620px,1fr) 320px; }
   .kg-layout { grid-template-columns: minmax(0,1fr) 290px; }
 }
 @media (max-width: 1040px) {
   .intake-grid { grid-template-columns: 1fr 1fr; }
   .search-card { grid-column: 1/-1; }
   .workbench-grid { grid-template-columns: 230px 1fr; height: auto; }
+  .workbench-grid.is-pdf-mode { grid-template-columns: 1fr; }
   .copilot-panel { grid-column: 1/-1; min-height: 620px; }
   .navigator-panel, .reader-panel { height: 760px; }
 }

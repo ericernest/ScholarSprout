@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from typing import Any
@@ -548,10 +549,33 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
 
     upload_path = storage.get_upload_path(paper_id)
     paper_detail = _paper_detail_for_response(paper)
+    initial_kg: dict[str, Any] = {}
+    kg_engine = getattr(app_state, "kg_engine", None)
+    kg_builder = getattr(app_state, "kg_builder", None)
+    if kg_engine is not None:
+        if not kg_engine.list_nodes_by_paper(paper_id):
+            saved_kg = storage.load_kg(paper_id)
+            if saved_kg:
+                kg_engine.from_dict(copy.deepcopy(saved_kg))
+        if kg_engine.list_nodes_by_paper(paper_id):
+            if kg_builder is not None:
+                initial_kg = kg_builder.get_revealed_subgraph(
+                    paper_id=paper_id,
+                    current_section="abstract",
+                )
+            else:
+                graph = kg_engine.get_subgraph(paper_id)
+                initial_kg = {
+                    "current_stage": "general",
+                    "node_count": graph.get("node_count", 0),
+                    "edge_count": graph.get("edge_count", 0),
+                    "cytoscape_elements": kg_engine.to_cytoscape(paper_id).get("elements", []),
+                }
     return _ok("get_paper_detail", {
         "paper": paper_detail,
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf" if upload_path else "",
         "has_pdf": upload_path is not None,
+        "initial_kg": initial_kg,
     })
 
 

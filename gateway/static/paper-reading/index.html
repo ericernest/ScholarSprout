@@ -90,7 +90,7 @@
           <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span><button id="refresh-session-button" class="icon-text-button" type="button">同步状态</button></div>
         </header>
 
-        <div class="workbench-grid">
+        <div id="workbench-grid" class="workbench-grid">
           <aside class="workspace-panel navigator-panel">
             <section class="side-section paper-summary"><p class="panel-label">Paper</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
             <section class="side-section">
@@ -107,7 +107,16 @@
           <article class="workspace-panel reader-panel">
             <header class="reader-toolbar">
               <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">结构化正文</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
-              <div class="reader-actions"><button id="previous-section-button" class="mini-button" type="button">← 上一章</button><button id="analyze-section-button" class="mini-button is-accent" type="button">分析本节</button><button id="next-section-button" class="mini-button" type="button">下一章 →</button></div>
+              <div class="reader-actions">
+                <label id="pdf-fit-control" class="pdf-fit-control" hidden>缩放
+                  <select id="pdf-fit-select">
+                    <option value="width">适应宽度</option>
+                    <option value="page">适应整页</option>
+                    <option value="100">100%</option>
+                  </select>
+                </label>
+                <button id="previous-section-button" class="mini-button" type="button">← 上一章</button><button id="analyze-section-button" class="mini-button is-accent" type="button">分析本节</button><button id="next-section-button" class="mini-button" type="button">下一章 →</button>
+              </div>
             </header>
             <div id="selection-toolbar" class="selection-toolbar" hidden>
               <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念脉络</button><button data-selection-action="fork" type="button">Fork 深入</button><button data-selection-action="candidate" type="button">KG 候选</button>
@@ -119,6 +128,14 @@
           <aside class="workspace-panel copilot-panel">
             <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><span id="active-skill-count" class="count-pill">0 Skills</span></header>
             <div id="quick-actions" class="quick-actions"></div>
+            <section id="fork-panel" class="fork-panel" aria-label="Fork 专项探索" hidden>
+              <header><div><p class="panel-label">Fork exploration</p><h2>专项探索分支</h2></div><button id="fork-close-button" class="dialog-close" type="button" aria-label="收起 Fork 面板">×</button></header>
+              <label>选中上下文<textarea id="fork-context-input" rows="3" placeholder="选中的公式、段落或概念"></textarea></label>
+              <label>专项专家<select id="fork-skill-select"></select></label>
+              <label>探索问题<textarea id="fork-question-input" rows="2" placeholder="希望这个分支重点回答什么？"></textarea></label>
+              <div id="fork-output" class="fork-output" hidden></div>
+              <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button><button id="fork-merge-button" class="soft-button" type="button" hidden>合并回主阅读流</button></footer>
+            </section>
             <div id="analysis-feed" class="analysis-feed" aria-live="polite">
               <article class="welcome-card"><span class="assistant-avatar">N</span><div><strong>准备开始精读</strong><p>点击章节或直接提问。我会结合当前正文、阅读进度和已展开知识图谱回答。</p></div></article>
             </div>
@@ -152,17 +169,6 @@
         </section>
       </section>
     </main>
-
-    <dialog id="fork-dialog" class="fork-dialog">
-      <form method="dialog" class="dialog-shell">
-        <header><div><p class="panel-label">Fork exploration</p><h2>创建专项探索分支</h2></div><button class="dialog-close" value="cancel" aria-label="关闭">×</button></header>
-        <label>选中上下文<textarea id="fork-context-input" rows="4" placeholder="选中的公式、段落或概念"></textarea></label>
-        <label>专项专家<select id="fork-skill-select"></select></label>
-        <label>探索问题<textarea id="fork-question-input" rows="3" placeholder="希望这个分支重点回答什么？"></textarea></label>
-        <div id="fork-output" class="fork-output" hidden></div>
-        <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button><button id="fork-merge-button" class="soft-button" type="button" hidden>合并回主阅读流</button></footer>
-      </form>
-    </dialog>
 
     <div id="global-loading" class="global-loading" hidden><span class="loading-orb"></span><div><strong id="loading-title">正在处理</strong><p id="loading-detail">请稍候…</p></div></div>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>

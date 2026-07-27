@@ -117,6 +117,7 @@ function bindReader() {
   $("analyze-section-button").addEventListener("click", () => startReading("请深入分析当前章节的核心问题、方法、证据和潜在局限。"));
   $("previous-section-button").addEventListener("click", () => moveSection(-1));
   $("next-section-button").addEventListener("click", () => moveSection(1));
+  $("pdf-fit-select").addEventListener("change", renderPdf);
   $("structured-reader").addEventListener("mouseup", captureSelection);
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
   document.addEventListener("mousedown", (event) => {
@@ -150,6 +151,7 @@ function bindFork() {
   $("fork-skill-select").value = "reading.math_verifier";
   $("fork-create-button").addEventListener("click", createFork);
   $("fork-merge-button").addEventListener("click", mergeFork);
+  $("fork-close-button").addEventListener("click", closeFork);
 }
 
 async function callPaperReading(body, options = {}) {
@@ -305,6 +307,11 @@ async function loadPaperDetail() {
   state.paper = data.paper || null;
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
+  const initialKg = data.initial_kg || {};
+  if (initialKg.cytoscape_elements?.length) {
+    state.revealedKgElements = initialKg.cytoscape_elements;
+    $("kg-stage-copy").textContent = `已恢复图谱：${initialKg.current_stage || "abstract"} · ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系`;
+  }
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
 }
@@ -408,15 +415,28 @@ function renderSections() {
 }
 
 function renderPdf() {
-  $("pdf-frame").src = state.hasPdf ? state.pdfUrl : "about:blank";
+  const fit = $("pdf-fit-select").value || "width";
+  const fragments = {
+    width: "page=1&zoom=75",
+    page: "page=1&zoom=55",
+    100: "page=1&zoom=100",
+  };
+  const baseUrl = state.pdfUrl.split("#", 1)[0];
+  const nextUrl = state.hasPdf ? `${baseUrl}#${fragments[fit] || fragments.width}` : "about:blank";
+  if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
   $("pdf-frame").hidden = !state.hasPdf;
   $("pdf-empty").hidden = state.hasPdf;
 }
 
 function setReaderMode(mode) {
   const isPdf = mode === "pdf";
+  $("workbench-grid").classList.toggle("is-pdf-mode", isPdf);
   $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
+  $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
+  $("previous-section-button").hidden = isPdf;
+  $("analyze-section-button").hidden = isPdf;
+  $("next-section-button").hidden = isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
 }
 
@@ -845,7 +865,13 @@ function openFork(skillId, question) {
   $("fork-output").replaceChildren();
   $("fork-merge-button").hidden = true;
   state.activeForkSessionId = "";
-  $("fork-dialog").showModal();
+  $("fork-panel").hidden = false;
+  $("fork-question-input").focus();
+  $("fork-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeFork() {
+  $("fork-panel").hidden = true;
 }
 
 async function createFork() {
@@ -892,7 +918,7 @@ async function mergeFork() {
     (data.key_findings || []).forEach((finding) => card.append(create("p", "", finding)));
     $("analysis-feed").append(card);
     syncSkillControls();
-    $("fork-dialog").close();
+    closeFork();
     toast(data.message || "分支已合并。");
   } catch (error) {
     toast(error.message, true);
