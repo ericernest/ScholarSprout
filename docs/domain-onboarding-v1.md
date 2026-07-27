@@ -190,6 +190,22 @@ API Key 或完整生成内容。
 使用 No-Op 存储；写入失败不会改变业务响应，但会计入 Metrics 的
 `audit.write_failures`。
 
+### 离线质量评测
+
+固定六领域数据位于
+`evaluation/fixtures/domain_onboarding/v1/cases.jsonl`，通过以下命令生成报告：
+
+```bash
+python -m evaluation.domain_onboarding \
+  evaluation/fixtures/domain_onboarding/v1/cases.jsonl \
+  --output .artifacts/domain-onboarding-offline-report.json
+```
+
+报告按策略版本和领域计算首次硬门槛通过率、与标注的一致率、修复改善率、问题
+误报率、七个维度与标注的平均绝对误差及重复评估稳定性。仓库内首批六条记录是用于
+锁定框架行为的 `seed` 标注，不冒充已经完成的人工实验；团队复核后应把
+`annotation_status` 更新为 `human_verified`，再将结果用于策略上线门槛。
+
 ### 质量策略版本
 
 阈值、七个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小

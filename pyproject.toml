@@ -27,7 +27,7 @@ dependencies = [
 novicesynapse = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "gateway*", "handlers*", "models*", "paper_reading*", "runtime*", "skills*", "tools*"]
+include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "models*", "paper_reading*", "runtime*", "skills*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
