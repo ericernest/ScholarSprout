@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from gateway.app import (
     legacy_paper_reading_page,
+    paper_reading_figure,
     paper_reading_page,
     paper_reading_upload_pdf,
 )
@@ -112,6 +113,17 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertEqual(response.media_type, "application/pdf")
         self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
 
+    def test_extracted_figure_is_served_inline(self) -> None:
+        with TemporaryDirectory() as directory:
+            storage = PaperReadingStorage(Path(directory))
+            storage.save_figure("paper-1", "figure-1-p1.png", b"\x89PNG\r\n\x1a\n")
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper_storage=storage)))
+
+            response = paper_reading_figure("paper-1", "figure-1-p1.png", request)
+
+        self.assertEqual(response.media_type, "image/png")
+        self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+
     def test_agent_answers_use_markdown_renderer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
@@ -122,6 +134,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('"page=1&zoom=55"', javascript)
         self.assertIn('"page=1&zoom=100"', javascript)
         self.assertIn('classList.toggle("is-pdf-mode", isPdf)', javascript)
+        self.assertIn("function renderPaperFigure(figure)", javascript)
+        self.assertIn("figure.image_url", javascript)
         self.assertIn('id="fork-panel"', html)
         self.assertNotIn("<dialog", html)
         self.assertNotIn(".showModal()", javascript)

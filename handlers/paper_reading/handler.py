@@ -174,7 +174,10 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
 
     # 持久化
     if storage:
-        storage.save_paper(metadata.paper_id, metadata.model_dump())
+        _persist_figure_assets(storage, metadata.paper_id, metadata.figures)
+        paper_payload = metadata.model_dump()
+        paper_payload["figure_extraction_status"] = "done"
+        storage.save_paper(metadata.paper_id, paper_payload)
         if 'pdf_bytes' in dir():
             storage.save_upload(metadata.paper_id, pdf_bytes)
 
@@ -202,6 +205,7 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
         "abstract": metadata.abstract[:500],
         "sections_count": len(metadata.sections),
         "sections": sections_summary,
+        "figures_count": len(metadata.figures),
         "parse_status": metadata.parse_status,
     }
     if kg_result is not None:
@@ -548,6 +552,12 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
         return _error("论文不存在", action="get_paper_detail")
 
     upload_path = storage.get_upload_path(paper_id)
+    paper = _ensure_paper_figures(
+        paper=paper,
+        upload_path=upload_path,
+        storage=storage,
+        pipeline=getattr(app_state, "paper_pipeline", None),
+    )
     paper_detail = _paper_detail_for_response(paper)
     initial_kg: dict[str, Any] = {}
     kg_engine = getattr(app_state, "kg_engine", None)
@@ -750,6 +760,22 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
             "end_page": section.get("end_page"),
         })
 
+    paper_id = paper.get("paper_id", "")
+    figures = []
+    for figure in paper.get("figures", []) or []:
+        item = {
+            key: value
+            for key, value in figure.items()
+            if key != "image_data"
+        }
+        asset_name = str(item.get("asset_name", ""))
+        item["image_url"] = (
+            f"/paper_reading/figures/{paper_id}/{asset_name}"
+            if paper_id and asset_name
+            else ""
+        )
+        figures.append(item)
+
     return {
         "paper_id": paper.get("paper_id", ""),
         "source": paper.get("source", ""),
@@ -769,10 +795,59 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "venue": paper.get("venue", ""),
         "sections": sections,
         "sections_count": len(sections),
-        "figures": paper.get("figures", []),
+        "figures": figures,
         "tables": paper.get("tables", []),
         "references": paper.get("references", []),
         "full_text": paper.get("full_text", ""),
         "parse_status": paper.get("parse_status", ""),
         "stored_at": paper.get("stored_at", ""),
     }
+
+
+def _persist_figure_assets(
+    storage: Any,
+    paper_id: str,
+    figures: list[Any],
+) -> None:
+    for figure in figures:
+        image_data = getattr(figure, "image_data", b"")
+        asset_name = getattr(figure, "asset_name", "")
+        if image_data and asset_name:
+            storage.save_figure(paper_id, asset_name, image_data)
+
+
+def _ensure_paper_figures(
+    *,
+    paper: dict[str, Any],
+    upload_path: Any,
+    storage: Any,
+    pipeline: Any,
+) -> dict[str, Any]:
+    """Backfill extracted figures for papers stored before figure assets existed."""
+    if upload_path is None or pipeline is None:
+        return paper
+
+    figures = paper.get("figures", []) or []
+    assets_available = bool(figures) and all(
+        figure.get("asset_name")
+        and storage.get_figure_path(paper.get("paper_id", ""), figure["asset_name"])
+        for figure in figures
+    )
+    if paper.get("figure_extraction_status") == "done" and (not figures or assets_available):
+        return paper
+
+    try:
+        reparsed = pipeline.parse_pdf(upload_path)
+        paper_id = paper.get("paper_id", "")
+        _persist_figure_assets(storage, paper_id, reparsed.figures)
+        paper["figures"] = [figure.model_dump() for figure in reparsed.figures]
+        paper["figure_extraction_status"] = "done"
+        paper["sections"] = [
+            section.model_dump(mode="json")
+            for section in reparsed.sections
+        ]
+        paper["full_text"] = reparsed.full_text
+        storage.save_paper(paper_id, paper)
+    except Exception as exc:
+        logger.warning("Unable to backfill paper figures for %s: %s", paper.get("paper_id", ""), exc)
+    return paper

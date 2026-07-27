@@ -391,12 +391,14 @@ function renderSections() {
   const reader = $("structured-reader");
   reader.replaceChildren();
   const sections = state.paper?.sections || [];
+  const figures = state.paper?.figures || [];
   if (!sections.length) {
     reader.append(create("div", "empty-state", "没有解析到结构化章节，可切换到 PDF 原文。"));
     return;
   }
   sections.forEach((section, index) => {
-    const article = create("section", `paper-section${section.section_id === state.currentSection ? " is-current" : ""}`);
+    const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
+    const article = create("section", `paper-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
     article.id = domSectionId(section.section_id);
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
@@ -404,7 +406,33 @@ function renderSections() {
     if (section.start_page) meta.append(create("span", "", `Page ${section.start_page}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
     const paragraphs = section.paragraphs?.length ? section.paragraphs : splitParagraphs(section.content || "");
-    paragraphs.forEach((paragraph) => article.append(create("p", "", paragraph)));
+    const body = create("div", "paper-section-body");
+    const sectionFigures = figures.filter((figure) => (
+      figure.section_id === section.section_id
+      || (!figure.section_id
+        && figure.page
+        && section.start_page
+        && figure.page >= section.start_page
+        && figure.page <= (section.end_page || section.start_page))
+    ));
+    const figuresByParagraph = new Map();
+    sectionFigures.forEach((figure, figureIndex) => {
+      const target = Math.min(
+        Math.max(paragraphs.length - 1, 0),
+        1 + figureIndex * 2,
+      );
+      const bucket = figuresByParagraph.get(target) || [];
+      bucket.push(figure);
+      figuresByParagraph.set(target, bucket);
+    });
+    paragraphs.forEach((paragraph, paragraphIndex) => {
+      body.append(renderReflowParagraph(paragraph));
+      (figuresByParagraph.get(paragraphIndex) || []).forEach((figure) => body.append(renderPaperFigure(figure)));
+    });
+    if (!paragraphs.length) {
+      sectionFigures.forEach((figure) => body.append(renderPaperFigure(figure)));
+    }
+    article.append(body);
     reader.append(article);
   });
   requestAnimationFrame(() => {
@@ -412,6 +440,58 @@ function renderSections() {
     if (state.restored && savedScroll) reader.scrollTop = savedScroll;
   });
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
+}
+
+function renderReflowParagraph(text) {
+  const paragraph = create("p", "reflow-paragraph");
+  const value = String(text || "").trim();
+  let displayValue = value;
+  if (
+    value.length <= 220
+    && (
+      /^[([]?\d+[)\]]?$/.test(value)
+      || /[=∑∏⊆∈≤≥]/.test(value)
+    )
+  ) {
+    paragraph.classList.add("is-equation");
+  } else if (/^[•·]\s*/.test(value)) {
+    paragraph.classList.add("is-bullet");
+    displayValue = value.replace(/^[•·]\s*/, "");
+  }
+  const lead = displayValue.match(/^([A-Z][A-Za-z -]{2,48}\.)\s+(.+)$/);
+  if (lead) {
+    paragraph.append(create("strong", "paragraph-lead", lead[1]), document.createTextNode(` ${lead[2]}`));
+  } else {
+    paragraph.textContent = displayValue;
+  }
+  return paragraph;
+}
+
+function renderPaperFigure(figure) {
+  const card = create("figure", "paper-figure");
+  card.id = `paper-${String(figure.figure_id || figure.asset_name || "figure").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const image = create("img", "paper-figure-image");
+  image.src = figure.image_url || "";
+  image.alt = figure.caption || `Figure on page ${figure.page || "unknown"}`;
+  image.loading = "lazy";
+  image.decoding = "async";
+
+  const caption = create("figcaption", "paper-figure-caption");
+  const copy = create("span", "figure-caption-copy", figure.caption || "论文配图");
+  caption.append(copy);
+  if (figure.page) {
+    const sourceButton = create("button", "figure-source-button", `原文第 ${figure.page} 页`);
+    sourceButton.type = "button";
+    sourceButton.addEventListener("click", () => {
+      $("pdf-fit-select").value = "width";
+      const baseUrl = state.pdfUrl.split("#", 1)[0];
+      $("pdf-frame").src = `${baseUrl}#page=${figure.page}&zoom=75`;
+      setReaderMode("pdf");
+    });
+    caption.append(sourceButton);
+  }
+  card.append(image, caption);
+  return card;
 }
 
 function renderPdf() {

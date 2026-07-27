@@ -117,6 +117,29 @@ def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
     )
 
 
+@app.get("/paper_reading/figures/{paper_id}/{asset_name}")
+def paper_reading_figure(
+    paper_id: str,
+    asset_name: str,
+    request: Request,
+) -> FileResponse:
+    """Serve an extracted paper figure as an inline image."""
+    storage = getattr(request.app.state, "paper_storage", None)
+    if storage is None:
+        raise HTTPException(status_code=503, detail="Paper reading storage is not initialized.")
+
+    figure_path = storage.get_figure_path(paper_id, asset_name)
+    if figure_path is None:
+        raise HTTPException(status_code=404, detail="Paper figure not found.")
+
+    return FileResponse(
+        figure_path,
+        media_type="image/png",
+        filename=asset_name,
+        content_disposition_type="inline",
+    )
+
+
 # domain_onboarding 功能入口。
 @app.post("/domain_onboarding")
 async def domain_onboarding(request: Request) -> ChannelMessage:

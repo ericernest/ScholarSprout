@@ -35,7 +35,7 @@ class PaperReadingStorage:
         self.base_dir = Path(base_dir)
 
         # 确保子目录存在
-        for subdir in ("sessions", "papers", "kg", "uploads"):
+        for subdir in ("sessions", "papers", "kg", "uploads", "figures"):
             (self.base_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # ── Session 操作 ──
@@ -135,6 +135,13 @@ class PaperReadingStorage:
         if upload_path.exists():
             upload_path.unlink()
 
+        figures_dir = self.base_dir / "figures" / paper_id
+        if figures_dir.exists():
+            for figure_path in figures_dir.iterdir():
+                if figure_path.is_file():
+                    figure_path.unlink()
+            figures_dir.rmdir()
+
         return deleted
 
     def list_papers(self) -> list[dict[str, Any]]:
@@ -227,6 +234,41 @@ class PaperReadingStorage:
         path.unlink()
         return True
 
+    # ── Figure operations ──
+
+    def save_figure(self, paper_id: str, asset_name: str, image_bytes: bytes) -> Path:
+        """Persist an extracted paper figure under a paper-scoped directory."""
+        safe_name = Path(asset_name).name
+        safe_paper_id = Path(paper_id).name
+        if (
+            not safe_name
+            or safe_name != asset_name
+            or not safe_paper_id
+            or safe_paper_id != paper_id
+            or safe_paper_id in {".", ".."}
+        ):
+            raise ValueError("Invalid figure asset name.")
+        directory = self.base_dir / "figures" / safe_paper_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / safe_name
+        path.write_bytes(image_bytes)
+        return path
+
+    def get_figure_path(self, paper_id: str, asset_name: str) -> Path | None:
+        """Return a previously extracted figure without allowing path traversal."""
+        safe_name = Path(asset_name).name
+        safe_paper_id = Path(paper_id).name
+        if (
+            not safe_name
+            or safe_name != asset_name
+            or not safe_paper_id
+            or safe_paper_id != paper_id
+            or safe_paper_id in {".", ".."}
+        ):
+            return None
+        path = self.base_dir / "figures" / safe_paper_id / safe_name
+        return path if path.is_file() else None
+
     # ── 批量操作 ──
 
     def get_storage_stats(self) -> dict[str, Any]:
@@ -235,11 +277,13 @@ class PaperReadingStorage:
         papers_count = len(list((self.base_dir / "papers").glob("*.json")))
         kg_count = len(list((self.base_dir / "kg").glob("*.json")))
         uploads_count = len(list((self.base_dir / "uploads").glob("*.pdf")))
+        figures_count = len(list((self.base_dir / "figures").glob("*/*")))
 
         total_size = sum(
             p.stat().st_size
-            for subdir in ("sessions", "papers", "kg", "uploads")
-            for p in (self.base_dir / subdir).glob("*")
+            for subdir in ("sessions", "papers", "kg", "uploads", "figures")
+            for p in (self.base_dir / subdir).rglob("*")
+            if p.is_file()
         )
 
         return {
@@ -247,6 +291,7 @@ class PaperReadingStorage:
             "papers": papers_count,
             "kg_files": kg_count,
             "uploads": uploads_count,
+            "figures": figures_count,
             "total_size_bytes": total_size,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "base_dir": str(self.base_dir),
