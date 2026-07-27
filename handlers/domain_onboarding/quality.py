@@ -35,18 +35,9 @@ def _average(values: Iterable[float]) -> float:
 
 
 class CompositeQualityEvaluator:
-    dimension_weights = {
-        "structure": 0.17,
-        "paper_validity": 0.18,
-        "evidence_grounding": 0.15,
-        "topic_coverage": 0.15,
-        "development_coherence": 0.13,
-        "learning_path": 0.13,
-        "goal_alignment": 0.09,
-    }
-
     def __init__(self, config: DomainOnboardingConfig):
         self.config = config
+        self.policy = config.to_policy()
         self.evidence_validator = ClaimEvidenceValidator(config)
 
     def evaluate(
@@ -67,32 +58,39 @@ class CompositeQualityEvaluator:
             "goal_alignment": self.evaluate_goal_alignment(output, issues),
         }
         hard_gates = self._hard_gate_results(issues)
-        passed_hard_gates = not evidence.hard_failure and all(
-            gate.status == "passed" for gate in hard_gates
+        passed_hard_gates = all(gate.status == "passed" for gate in hard_gates)
+        score = sum(
+            dimensions[name] * weight
+            for name, weight in self.policy.dimension_weights.items()
         )
-        score = sum(dimensions[name] * weight for name, weight in self.dimension_weights.items())
         return ContentQuality(
             score=round(max(0.0, min(1.0, score)), 6),
-            threshold=self.config.quality_threshold,
+            threshold=self.policy.quality_threshold,
             passed_hard_gates=passed_hard_gates,
             dimensions={key: round(value, 6) for key, value in dimensions.items()},
             issues=issues,
             hard_gates=hard_gates,
+            policy_version=self.policy.policy_version,
+            policy_fingerprint=self.policy.fingerprint,
         )
 
-    @staticmethod
-    def _hard_gate_results(issues: list[QualityIssue]) -> list[QualityGateResult]:
-        groups = {
-            "required_structure": {"structure"},
-            "paper_identity": {"paper_validity"},
-            "evidence_support": {"evidence_grounding"},
-        }
+    def _hard_gate_results(self, issues: list[QualityIssue]) -> list[QualityGateResult]:
         results = []
-        for gate, dimensions in groups.items():
+        gated_dimensions = {
+            dimension
+            for dimensions in self.policy.hard_gate_dimensions.values()
+            for dimension in dimensions
+        }
+        severities = set(self.policy.hard_gate_severities)
+        for issue in issues:
+            issue.hard_gate = bool(
+                issue.dimension in gated_dimensions and issue.severity in severities
+            )
+        for gate, dimensions in self.policy.hard_gate_dimensions.items():
             issue_ids = [
                 str(issue.issue_id)
                 for issue in issues
-                if issue.hard_gate and issue.dimension in dimensions
+                if issue.hard_gate and issue.dimension in set(dimensions)
             ]
             results.append(
                 QualityGateResult(

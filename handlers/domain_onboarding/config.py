@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .policy import (
+    CURRENT_POLICY_VERSION,
+    DomainOnboardingPolicy,
+    default_critical_dimensions,
+    default_dimension_weights,
+    default_hard_gate_dimensions,
+    default_llm_repair_issue_types,
+)
+from .schemas import QualityDimension, QualityIssueType
 
 
 class DomainOnboardingConfig(BaseModel):
@@ -18,8 +30,27 @@ class DomainOnboardingConfig(BaseModel):
     coverage_similarity_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     ranking_min_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
     evidence_support_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
+    policy_version: str = Field(
+        default=CURRENT_POLICY_VERSION,
+        pattern=r"^domain-quality-v\d+\.\d+\.\d+$",
+    )
     quality_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     min_improvement_delta: float = Field(default=0.05, ge=0.0, le=1.0)
+    quality_dimension_weights: dict[QualityDimension, float] = Field(
+        default_factory=default_dimension_weights
+    )
+    hard_gate_dimensions: dict[str, list[QualityDimension]] = Field(
+        default_factory=default_hard_gate_dimensions
+    )
+    hard_gate_severities: list[Literal["error", "critical"]] = Field(
+        default_factory=lambda: ["error", "critical"]
+    )
+    llm_repair_issue_types: list[QualityIssueType] = Field(
+        default_factory=default_llm_repair_issue_types
+    )
+    critical_quality_dimensions: list[QualityDimension] = Field(
+        default_factory=default_critical_dimensions
+    )
     max_content_repairs: int = Field(default=1, ge=0, le=1)
     request_timeout_seconds: float = Field(default=90.0, gt=0.0, le=600.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
@@ -61,4 +92,17 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError("ranking weights must sum to 1.0")
         if self.retrieval_max_backoff_seconds < self.retrieval_backoff_seconds:
             raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
+        self.to_policy()
         return self
+
+    def to_policy(self) -> DomainOnboardingPolicy:
+        return DomainOnboardingPolicy(
+            policy_version=self.policy_version,
+            quality_threshold=self.quality_threshold,
+            min_improvement_delta=self.min_improvement_delta,
+            dimension_weights=self.quality_dimension_weights,
+            hard_gate_dimensions=self.hard_gate_dimensions,
+            hard_gate_severities=self.hard_gate_severities,
+            llm_repair_issue_types=self.llm_repair_issue_types,
+            critical_dimensions=self.critical_quality_dimensions,
+        )

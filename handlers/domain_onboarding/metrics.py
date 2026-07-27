@@ -14,6 +14,8 @@ from runtime.agent_runner import TokenUsage
 
 @dataclass(slots=True)
 class DomainOnboardingRequestTrace:
+    policy_version: str = "domain-quality-v1.0.0"
+    policy_fingerprint: str | None = None
     status: str = "unknown"
     total_duration_ms: float = 0.0
     first_call_duration_ms: float = 0.0
@@ -150,10 +152,17 @@ class DomainOnboardingMetrics:
         self._repair_selection_reasons: Counter[str] = Counter()
         self._repair_changed_path_counts: deque[int] = deque(maxlen=window_size)
         self._repair_dimension_deltas: dict[str, list[float]] = defaultdict(list)
+        self._policy_versions: Counter[str] = Counter()
+        self._policy_fingerprints: Counter[str] = Counter()
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
             self._requests_total += 1
+            self._policy_versions[trace.policy_version] += 1
+            if trace.policy_fingerprint:
+                self._policy_fingerprints[
+                    f"{trace.policy_version}:{trace.policy_fingerprint}"
+                ] += 1
             self._statuses[trace.status] += 1
             if trace.interrupted_stage:
                 self._interrupted_stages[trace.interrupted_stage] += 1
@@ -242,6 +251,10 @@ class DomainOnboardingMetrics:
                 )
             return {
                 "requests_total": requests_total,
+                "policies": {
+                    "versions": dict(self._policy_versions),
+                    "fingerprints": dict(self._policy_fingerprints),
+                },
                 "statuses": dict(self._statuses),
                 "interruptions": {
                     "stages": dict(self._interrupted_stages),

@@ -385,6 +385,8 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
+    policy_version: str = "domain-quality-v1.0.0"
+    policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
     passed_hard_gates: bool
@@ -435,6 +437,8 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
+    policy_version: str = "domain-quality-v1.0.0"
+    policy_fingerprint: str | None = None
     triggered: bool = False
     actions: list[RepairActionRecord] = Field(default_factory=list)
     decision: RepairDecision | None = None
@@ -445,6 +449,8 @@ class RepairPlan(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
+    policy_version: str = "domain-quality-v1.0.0"
+    policy_fingerprint: str | None = None
     status: Literal[
         "ok",
         "quality_warning",
@@ -473,6 +479,8 @@ class PipelineResult(OnboardingModel):
             status=self.status,
             mode=self.mode,
             query=self.query,
+            policy_version=self.policy_version,
+            policy_fingerprint=self.policy_fingerprint,
             quality=self.quality.model_dump(mode="json") if self.quality else None,
             quality_attempts=[
                 attempt.model_dump(mode="json") for attempt in self.quality_attempts

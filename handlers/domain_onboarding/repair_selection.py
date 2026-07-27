@@ -6,15 +6,22 @@ from .schemas import ContentQuality, RepairDecision, RepairRecord
 
 
 class RepairSelectionPolicy:
-    critical_dimensions = (
+    default_critical_dimensions = (
         "structure",
         "paper_validity",
         "evidence_grounding",
         "learning_path",
     )
 
-    def __init__(self, min_improvement_delta: float):
+    def __init__(
+        self,
+        min_improvement_delta: float,
+        critical_dimensions: list[str] | tuple[str, ...] | None = None,
+    ):
         self.min_improvement_delta = min_improvement_delta
+        self.critical_dimensions = tuple(
+            critical_dimensions or self.default_critical_dimensions
+        )
 
     def initial(self, quality: ContentQuality) -> RepairDecision:
         return RepairDecision(
