@@ -174,7 +174,7 @@ select option { color: #07120f; }
 .soft-button, .mini-button { padding: .58rem .7rem; }
 
 .reader-panel {
-  position: relative; display: grid; grid-template-rows: auto 1fr; color: #1c2724;
+  position: relative; display: grid; grid-template-rows: auto auto 1fr; color: #1c2724;
   border-color: rgba(205,213,207,.9);
   background: linear-gradient(180deg,#fbfaf6 0%,#f5f2e9 100%);
   box-shadow: 0 24px 80px rgba(0,0,0,.2), inset 0 1px 0 white;
