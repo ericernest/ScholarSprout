@@ -101,6 +101,7 @@ function bindWorkbench() {
   $("pause-button").addEventListener("click", pauseReading);
   $("resume-button").addEventListener("click", resumeReading);
   $("progress-button").addEventListener("click", refreshProgress);
+  $("regenerate-button").addEventListener("click", regenerateAnalysis);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -156,6 +157,10 @@ function bindFork() {
   $("fork-create-button").addEventListener("click", createFork);
   $("fork-merge-button").addEventListener("click", mergeFork);
   $("fork-close-button").addEventListener("click", closeFork);
+  document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("fork-modal").hidden) closeFork();
+  });
 }
 
 function bindResizeHandle() {
@@ -253,6 +258,7 @@ function renderSearchResults(papers) {
     const card = create("article", "paper-result");
     const tags = create("div", "tag-row");
     [paper.source, paper.year, paper.venue].filter(Boolean).forEach((value) => tags.append(create("span", "", String(value))));
+    if (paper.citation_count != null) tags.append(create("span", "", `引用 ${paper.citation_count}`));
     card.append(tags, create("h3", "", paper.title || "未命名论文"));
     card.append(create("p", "", (paper.authors || []).join("、") || "作者信息暂无"));
     card.append(create("p", "", truncate(paper.abstract || "暂无摘要", 230)));
@@ -489,8 +495,14 @@ function renderSections() {
     reader.append(article);
   });
   requestAnimationFrame(() => {
-    const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
-    if (state.restored && savedScroll) reader.scrollTop = savedScroll;
+    if (!state.restored) return;
+    const target = state.currentSection && document.getElementById(domSectionId(state.currentSection));
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+    } else {
+      const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
+      if (savedScroll) reader.scrollTop = savedScroll;
+    }
   });
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
@@ -626,6 +638,11 @@ function showThinkingCard(detail) {
   return card;
 }
 
+async function regenerateAnalysis() {
+  if (!state.sessionId) return toast("请先开始章节阅读，再重新生成分析。", true);
+  await startReading(`请重新分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出更深入的核心内容、论证结构与重点概念解读。`);
+}
+
 function applyReadingPayload(payload) {
   const data = payload.data || {};
   const session = payload.session || {};
@@ -663,7 +680,9 @@ function renderSkillOutputs(outputs, target) {
     const header = create("header");
     header.append(create("strong", "", output.skill_name || skillLabel(output.skill_id)), create("span", "", output.output_type || output.parse_status || "Skill"));
     card.append(header);
-    if (output.content && Object.keys(output.content).length) card.append(renderStructuredValue(output.content));
+    const content = output.content;
+    const hasStructured = output.parse_status === "parsed" && content && typeof content === "object" && Object.keys(content).length;
+    if (hasStructured) card.append(renderSkillContent(output));
     else card.append(renderMarkdown(output.rendered || "Skill 已执行，但没有返回可展示内容。"));
     const candidates = output.kg_candidates;
     if (candidates?.nodes?.length || candidates?.edges?.length) {
@@ -671,6 +690,63 @@ function renderSkillOutputs(outputs, target) {
     }
     target.append(card);
   });
+}
+
+function renderSkillContent(output) {
+  if (output.output_type === "math_derivation") return renderMathTabs(output.content);
+  return renderStructuredValue(output.content);
+}
+
+function renderMathTabs(content) {
+  const tabs = [
+    { key: "layer_1_intuition", label: "直觉理解" },
+    { key: "layer_2_derivation", label: "逐步推导" },
+    { key: "layer_3_numerical_example", label: "数值例子" },
+    { key: "detected_gaps", label: "推导跳跃" },
+  ].filter((tab) => {
+    const value = content?.[tab.key];
+    if (value == null) return false;
+    if (Array.isArray(value) && !value.length) return false;
+    if (typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length) return false;
+    return true;
+  });
+  if (tabs.length < 2) return renderStructuredValue(content);
+
+  const wrap = create("div", "skill-tabs");
+  const nav = create("div", "skill-tabs-nav");
+  const panels = create("div", "skill-tabs-panels");
+  tabs.forEach((tab, index) => {
+    const button = create("button", `skill-tab${index === 0 ? " is-active" : ""}`, tab.label);
+    button.type = "button";
+    const panel = create("div", `skill-tab-panel${index === 0 ? " is-active" : ""}`);
+    panel.append(renderTabBody(content[tab.key]));
+    button.addEventListener("click", () => {
+      nav.querySelectorAll(".skill-tab").forEach((item) => item.classList.remove("is-active"));
+      panels.querySelectorAll(".skill-tab-panel").forEach((item) => item.classList.remove("is-active"));
+      button.classList.add("is-active");
+      panel.classList.add("is-active");
+    });
+    nav.append(button);
+    panels.append(panel);
+  });
+  wrap.append(nav, panels);
+  return wrap;
+}
+
+function renderTabBody(value) {
+  if (Array.isArray(value)) {
+    const list = create("ul", "tab-list");
+    value.forEach((entry) => {
+      const li = create("li");
+      if (entry && typeof entry === "object") li.append(renderStructuredValue(entry));
+      else li.textContent = String(entry);
+      list.append(li);
+    });
+    return list;
+  }
+  if (value && typeof value === "object") return renderStructuredValue(value);
+  const paragraph = create("p", "", String(value));
+  return paragraph;
 }
 
 function renderStructuredValue(value, depth = 0) {
@@ -911,6 +987,7 @@ async function resumeReading(showToast = true) {
     state.activeSkills = payload.data?.active_skills || state.activeSkills;
     await refreshProgress(false);
     renderOutline();
+    jumpToSection(state.currentSection);
     syncSkillControls();
     updateSessionBadge();
     if (showToast) toast(payload.data?.message || "阅读已恢复。");
@@ -1013,13 +1090,12 @@ function openFork(skillId, question) {
   $("fork-output").replaceChildren();
   $("fork-merge-button").hidden = true;
   state.activeForkSessionId = "";
-  $("fork-panel").hidden = false;
+  $("fork-modal").hidden = false;
   $("fork-question-input").focus();
-  $("fork-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function closeFork() {
-  $("fork-panel").hidden = true;
+  $("fork-modal").hidden = true;
 }
 
 async function createFork() {
