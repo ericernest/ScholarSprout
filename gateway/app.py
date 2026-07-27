@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agents.agent import create_agent
@@ -58,6 +58,19 @@ def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
 
 
+# 返回嵌入应用层级的论文精读工作台。
+@app.get("/app/paper-reading")
+def paper_reading_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "paper-reading" / "index.html")
+
+
+# 旧入口回到聊天页的论文精读模式。
+@app.get("/paper-reading", include_in_schema=False)
+@app.get("/paper_reading/app", include_in_schema=False)
+def legacy_paper_reading_page() -> RedirectResponse:
+    return RedirectResponse(url="/app?mode=paper_reading")
+
+
 # 返回浏览器标签页图标。
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> FileResponse:
@@ -100,6 +113,30 @@ def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
         upload_path,
         media_type="application/pdf",
         filename=f"{paper_id}.pdf",
+        content_disposition_type="inline",
+    )
+
+
+@app.get("/paper_reading/figures/{paper_id}/{asset_name}")
+def paper_reading_figure(
+    paper_id: str,
+    asset_name: str,
+    request: Request,
+) -> FileResponse:
+    """Serve an extracted paper figure as an inline image."""
+    storage = getattr(request.app.state, "paper_storage", None)
+    if storage is None:
+        raise HTTPException(status_code=503, detail="Paper reading storage is not initialized.")
+
+    figure_path = storage.get_figure_path(paper_id, asset_name)
+    if figure_path is None:
+        raise HTTPException(status_code=404, detail="Paper figure not found.")
+
+    return FileResponse(
+        figure_path,
+        media_type="image/png",
+        filename=asset_name,
+        content_disposition_type="inline",
     )
 
 

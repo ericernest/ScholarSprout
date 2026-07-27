@@ -38,6 +38,21 @@
             <button id="clear-mode-button" type="button" aria-label="取消当前模式">×</button>
           </div>
           <textarea id="message-input" rows="1" placeholder="输入你的问题..." required></textarea>
+          <div id="paper-mode-input" class="paper-mode-input" title="也可以把 PDF 直接拖到这里" hidden>
+            <input id="paper-file-input" type="file" accept="application/pdf,.pdf" hidden />
+            <button id="paper-file-button" class="paper-file-button" type="button">
+              <span>↥</span>
+              <span id="paper-file-label">选择 PDF</span>
+            </button>
+            <span class="paper-input-divider">或</span>
+            <input
+              id="paper-url-input"
+              class="paper-url-input"
+              type="text"
+              inputmode="url"
+              placeholder="拖入 PDF，或粘贴 PDF、arXiv 链接 / ID"
+            />
+          </div>
         </div>
         <button id="send-button" class="send-button" type="submit">发送</button>
       </form>

@@ -55,6 +55,12 @@ class PaperFigure(BaseModel):
     caption: str = ""
     figure_type: Literal["architecture", "chart", "table_image", "other"] = "other"
     page: int | None = Field(default=None, ge=1)
+    section_id: str = ""
+    asset_name: str = ""
+    bbox: list[float] = Field(default_factory=list)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    image_data: bytes = Field(default=b"", exclude=True, repr=False)
 
 
 class PaperTable(BaseModel):

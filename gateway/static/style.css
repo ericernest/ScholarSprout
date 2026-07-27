@@ -153,6 +153,7 @@ h1 {
 }
 
 .primary-button,
+.secondary-button,
 .send-button,
 .icon-button,
 .mode-menu button {
@@ -186,6 +187,29 @@ h1 {
 
 .primary-button:active {
   transform: translateY(1px) scale(0.98);
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 1rem 1.45rem;
+  border: 1px solid rgba(135, 167, 255, 0.38);
+  border-radius: 999px;
+  color: #e8edff;
+  background: rgba(135, 167, 255, 0.1);
+  text-decoration: none;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.secondary-button:hover {
+  background: rgba(135, 167, 255, 0.2);
+  transform: translateY(-2px);
 }
 
 .chat-page {
@@ -282,6 +306,105 @@ h1 {
   background: var(--assistant);
 }
 
+.paper-card-message {
+  width: 100%;
+}
+
+.paper-chat-card {
+  position: relative;
+  display: grid;
+  gap: 0.6rem;
+  width: min(680px, 90%);
+  padding: 1.25rem;
+  border: 1px solid rgba(102, 245, 214, 0.34);
+  border-radius: 24px;
+  overflow: hidden;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 92% 8%, rgba(135, 167, 255, 0.18), transparent 14rem),
+    linear-gradient(145deg, rgba(13, 38, 33, 0.96), rgba(8, 24, 30, 0.95));
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.paper-chat-card::after {
+  position: absolute;
+  right: -36px;
+  bottom: -58px;
+  width: 170px;
+  height: 170px;
+  border: 1px solid rgba(102, 245, 214, 0.13);
+  border-radius: 50%;
+  content: "";
+}
+
+.paper-chat-card:hover {
+  border-color: rgba(102, 245, 214, 0.68);
+  box-shadow: 0 28px 76px rgba(0, 0, 0, 0.34), 0 0 30px rgba(102, 245, 214, 0.1);
+  transform: translateY(-3px);
+}
+
+.paper-card-kicker {
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.paper-chat-card > strong {
+  max-width: 590px;
+  font: 700 1.4rem/1.25 Georgia, "Noto Serif CJK SC", serif;
+}
+
+.paper-card-authors,
+.paper-card-abstract {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.paper-card-abstract {
+  display: -webkit-box;
+  max-width: 590px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.paper-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.paper-card-stats span {
+  padding: 0.32rem 0.5rem;
+  border: 1px solid rgba(102, 245, 214, 0.18);
+  border-radius: 999px;
+  color: #d7fff5;
+  background: rgba(102, 245, 214, 0.07);
+  font-size: 0.7rem;
+}
+
+.paper-card-enter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(102, 245, 214, 0.14);
+  color: #dbfff6;
+  font-size: 0.8rem;
+}
+
+.paper-card-enter b {
+  font-size: 1.1rem;
+}
+
 .composer {
   position: fixed;
   right: 50%;
@@ -322,6 +445,76 @@ textarea::placeholder {
   align-self: stretch;
   align-content: center;
   gap: 0.35rem;
+}
+
+.paper-mode-input {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) auto minmax(210px, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+  min-height: 44px;
+  border-radius: 15px;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.paper-mode-input.is-dragging {
+  background: rgba(102, 245, 214, 0.12);
+  box-shadow: 0 0 0 2px rgba(102, 245, 214, 0.48), 0 0 30px rgba(102, 245, 214, 0.14);
+}
+
+.paper-file-button {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  height: 42px;
+  padding: 0 0.75rem;
+  border: 1px dashed rgba(102, 245, 214, 0.42);
+  border-radius: 13px;
+  overflow: hidden;
+  color: #d8fff6;
+  background: rgba(102, 245, 214, 0.08);
+  cursor: pointer;
+  font: inherit;
+}
+
+.paper-file-button.has-file {
+  border-style: solid;
+  background: rgba(102, 245, 214, 0.16);
+}
+
+.paper-file-button span:last-child {
+  max-width: 245px;
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-input-divider {
+  color: rgba(234, 255, 247, 0.42);
+  font-size: 0.72rem;
+}
+
+.paper-url-input {
+  min-width: 0;
+  height: 42px;
+  padding: 0 0.75rem;
+  border: 1px solid rgba(102, 245, 214, 0.18);
+  border-radius: 13px;
+  outline: none;
+  color: var(--ink);
+  background: rgba(3, 13, 12, 0.42);
+  font: inherit;
+}
+
+.paper-url-input:focus {
+  border-color: rgba(102, 245, 214, 0.6);
+  box-shadow: 0 0 0 3px rgba(102, 245, 214, 0.08);
+}
+
+.paper-url-input::placeholder {
+  color: rgba(234, 255, 247, 0.4);
 }
 
 .mode-chip {
@@ -439,5 +632,17 @@ textarea::placeholder {
     align-items: flex-start;
     flex-direction: column;
     gap: 0.7rem;
+  }
+
+  .paper-mode-input {
+    grid-template-columns: 1fr;
+  }
+
+  .paper-input-divider {
+    display: none;
+  }
+
+  .paper-file-button {
+    justify-content: center;
   }
 }
