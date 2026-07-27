@@ -37,6 +37,7 @@ class FakeOnlinePipeline:
     def run(self, request, trace):
         trace.first_model_calls = 1
         trace.first_usage = TokenUsage(100, 50, 150, True)
+        trace.planning_duration_ms = 1234.5
         quality = ContentQuality(
             score=0.8,
             threshold=0.75,
@@ -138,6 +139,8 @@ class OnlineEvaluationTests(unittest.TestCase):
         self.assertEqual(report.total_tokens, 150)
         self.assertEqual(report.estimated_cost_usd, 0.0002)
         self.assertEqual(report.cross_language_warning_rate, 1.0)
+        self.assertEqual(report.cases[0].stage_durations_ms, {"planning": 1234.5})
+        self.assertIsNone(report.cases[0].interrupted_stage)
 
 
 if __name__ == "__main__":

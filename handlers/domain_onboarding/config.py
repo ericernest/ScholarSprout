@@ -52,14 +52,16 @@ class DomainOnboardingConfig(BaseModel):
         default_factory=default_critical_dimensions
     )
     max_content_repairs: int = Field(default=1, ge=0, le=1)
-    request_timeout_seconds: float = Field(default=90.0, gt=0.0, le=600.0)
+    # Calibrated from the 2026-07-27 controlled online run (3 real domains):
+    # total 111-147s, planning 13-26s, generation 78-103s.
+    request_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
-    planning_timeout_seconds: float = Field(default=20.0, gt=0.0, le=120.0)
+    planning_timeout_seconds: float = Field(default=45.0, gt=0.0, le=120.0)
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     ranking_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
-    generation_timeout_seconds: float = Field(default=35.0, gt=0.0, le=180.0)
+    generation_timeout_seconds: float = Field(default=120.0, gt=0.0, le=180.0)
     evaluation_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
-    repair_timeout_seconds: float = Field(default=25.0, gt=0.0, le=120.0)
+    repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
     relevance_weight: float = Field(default=0.55, ge=0.0, le=1.0)
     citation_weight: float = Field(default=0.20, ge=0.0, le=1.0)
     recency_weight: float = Field(default=0.15, ge=0.0, le=1.0)
