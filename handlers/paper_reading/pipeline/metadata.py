@@ -112,6 +112,7 @@ class PaperMetadata(BaseModel):
         description="学科分类标签",
     )
     keywords: list[str] = Field(default_factory=list)
+    arxiv_id: str = Field(default="", description="规范化 arXiv ID")
     doi: str = ""
     url: str = ""
     pdf_url: str = ""

@@ -19,6 +19,7 @@ class PaperSearchTool(BaseTool):
             name="paper_search",
             description=(
                 "搜索学术论文。支持 arXiv 和 Semantic Scholar 数据源。"
+                "OpenAlex 负责快速解析 arXiv ID，并在两个主源失败时自动降级。"
                 "返回论文标题、作者、年份、摘要和链接。"
                 "当用户需要查找特定主题的论文时使用此工具。"
             ),
