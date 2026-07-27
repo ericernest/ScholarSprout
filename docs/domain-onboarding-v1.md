@@ -206,6 +206,28 @@ python -m evaluation.domain_onboarding \
 锁定框架行为的 `seed` 标注，不冒充已经完成的人工实验；团队复核后应把
 `annotation_status` 更新为 `human_verified`，再将结果用于策略上线门槛。
 
+### 受控在线端到端测试
+
+真实论文源和真实模型测试默认禁用。固定中英文配对用例位于
+`evaluation/fixtures/domain_onboarding/v1/online-cases.jsonl`，运行时必须同时提供
+环境开关、费用确认、最大用例数和费用上限：
+
+```bash
+RUN_DOMAIN_ONBOARDING_ONLINE=1 \
+python -m evaluation.domain_onboarding.online_cli \
+  evaluation/fixtures/domain_onboarding/v1/online-cases.jsonl \
+  --output .artifacts/domain-onboarding-online-report.json \
+  --max-cases 2 \
+  --max-estimated-cost-usd 0.5 \
+  --cost-reserve-per-case-usd 0.25 \
+  --confirm-online
+```
+
+默认要求配置输入与输出 token 单价；只有显式传入 `--allow-unpriced` 才能在无法
+估算费用时运行。报告记录成功率、论文元数据有效率、硬门槛通过率、p50/p95
+延迟、token、费用和跨语言证据警告率。跨语言警告只作为待人工复核队列，不能在
+缺少人工标签时直接宣称为误报。
+
 ### 质量策略版本
 
 阈值、七个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小
