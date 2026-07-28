@@ -9,6 +9,7 @@ class RepairSelectionPolicy:
     default_critical_dimensions = (
         "structure",
         "paper_validity",
+        "paper_relevance",
         "evidence_grounding",
         "learning_path",
     )
