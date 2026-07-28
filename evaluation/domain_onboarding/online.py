@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from handlers.domain_onboarding.metrics import DomainOnboardingRequestTrace
-from handlers.domain_onboarding.schemas import DomainOnboardingRequest
+from handlers.domain_onboarding.schemas import (
+    ContentQuality,
+    DomainOnboardingRequest,
+    QualityAttempt,
+    RepairRecord,
+)
 
 
 class OnlineModel(BaseModel):
@@ -49,6 +54,9 @@ class OnlineCaseResult(OnlineModel):
     cross_language_warning_count: int = 0
     interrupted_stage: str | None = None
     stage_durations_ms: dict[str, float] = Field(default_factory=dict)
+    quality: ContentQuality | None = None
+    quality_attempts: list[QualityAttempt] = Field(default_factory=list)
+    repair_record: RepairRecord | None = None
 
 
 class OnlineEvaluationReport(OnlineModel):
@@ -196,6 +204,9 @@ def run_online_evaluation(
                     )
                     if float(getattr(trace, f"{stage}_duration_ms")) > 0
                 },
+                quality=result.quality,
+                quality_attempts=result.quality_attempts,
+                repair_record=result.repair_record,
             )
         )
         if spent > limits.max_estimated_cost_usd:
