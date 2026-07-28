@@ -30,6 +30,8 @@ class DomainOnboardingConfig(BaseModel):
     min_learning_steps: int = Field(default=4, ge=1, le=8)
     coverage_similarity_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     ranking_min_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
+    quality_min_paper_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
+    quality_paper_relevance_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
     evidence_support_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     policy_version: str = Field(
         default=CURRENT_POLICY_VERSION,

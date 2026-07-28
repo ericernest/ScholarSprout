@@ -128,6 +128,7 @@ class QualityTests(unittest.TestCase):
             {
                 "structure",
                 "paper_validity",
+                "paper_relevance",
                 "evidence_grounding",
                 "topic_coverage",
                 "development_coherence",
@@ -141,6 +142,7 @@ class QualityTests(unittest.TestCase):
             {
                 "required_structure": "passed",
                 "paper_identity": "passed",
+                "paper_relevance": "passed",
                 "evidence_support": "passed",
             },
         )
@@ -161,6 +163,16 @@ class QualityTests(unittest.TestCase):
         quality = self.evaluator.evaluate(self.output, self.ranked)
         self.assertFalse(quality.passed_hard_gates)
         self.assertEqual(quality.dimensions["paper_validity"], 1.0)
+
+    def test_real_but_irrelevant_papers_fail_relevance_hard_gate(self) -> None:
+        irrelevant = [paper.model_copy(update={"relevance_score": 0.0}) for paper in self.ranked]
+
+        quality = self.evaluator.evaluate(self.output, irrelevant)
+
+        self.assertFalse(quality.passed_hard_gates)
+        self.assertEqual(quality.dimensions["paper_validity"], 1.0)
+        self.assertEqual(quality.dimensions["paper_relevance"], 0.0)
+        self.assertTrue(any(issue.issue_type == "low_paper_relevance" for issue in quality.issues))
 
     def test_unsupported_explicit_claim_fails_hard_gate(self) -> None:
         self.output.evidence_claims = [

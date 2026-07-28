@@ -130,7 +130,9 @@ class PipelineTests(unittest.TestCase):
             def plan(self, query: str, profile: object) -> PlanningResult:
                 token_count = 11 if query == "request-a" else 22
                 return PlanningResult(
-                    plan=make_plan().model_copy(update={"search_queries": [query]}),
+                    plan=make_plan().model_copy(
+                        update={"search_queries": [query, "retrieval augmented generation"]}
+                    ),
                     stats=ModelCallStats(
                         model_calls=1,
                         total_tokens=token_count,
@@ -141,7 +143,7 @@ class PipelineTests(unittest.TestCase):
         class ConcurrentRetriever:
             def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
                 retrieval_barrier.wait(timeout=2)
-                cache_hits = 1 if queries == ["request-a"] else 2
+                cache_hits = 1 if queries[0] == "request-a" else 2
                 return RetrievalResult(
                     papers=make_candidates(),
                     stats=RetrievalStats(
@@ -191,8 +193,8 @@ class PipelineTests(unittest.TestCase):
             result_a, trace_a = future_a.result(timeout=5)
             result_b, trace_b = future_b.result(timeout=5)
 
-        self.assertEqual(result_a.status, "ok")
-        self.assertEqual(result_b.status, "ok")
+        self.assertEqual(result_a.status, "ok", result_a.error)
+        self.assertEqual(result_b.status, "ok", result_b.error)
         self.assertEqual(trace_a.first_usage.total_tokens, 112)
         self.assertEqual(trace_b.first_usage.total_tokens, 224)
         self.assertEqual(trace_a.retrieval_cache_hit_count, 3)
@@ -577,9 +579,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(
             snapshot["policies"]["versions"],
-            {"domain-quality-v1.0.0": 1},
+            {"domain-quality-v1.1.0": 1},
         )
-        self.assertEqual(response["policy_version"], "domain-quality-v1.0.0")
+        self.assertEqual(response["policy_version"], "domain-quality-v1.1.0")
         self.assertEqual(
             response["quality"]["policy_fingerprint"],
             response["policy_fingerprint"],
