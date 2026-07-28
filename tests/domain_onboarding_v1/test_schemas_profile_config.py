@@ -29,7 +29,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         first = config.to_policy()
         second = config.to_policy()
 
-        self.assertEqual(first.policy_version, "domain-quality-v1.2.0")
+        self.assertEqual(first.policy_version, "domain-quality-v1.3.0")
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertEqual(sum(first.dimension_weights.values()), 1.0)
 
@@ -48,7 +48,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(DomainOnboardingPolicy(quality_threshold=0.8))
 
-        self.assertEqual(registry.versions(), ["domain-quality-v1.2.0"])
+        self.assertEqual(registry.versions(), ["domain-quality-v1.3.0"])
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):

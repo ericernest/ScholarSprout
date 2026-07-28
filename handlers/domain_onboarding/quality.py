@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable
 from typing import Protocol
 
+from .canonical_papers import CanonicalPaperRegistry
 from .config import DomainOnboardingConfig
 from .evidence import ClaimEvidenceValidator
 from .schemas import (
@@ -43,6 +44,7 @@ class CompositeQualityEvaluator:
         self.config = config
         self.policy = config.to_policy()
         self.evidence_validator = ClaimEvidenceValidator(config, evidence_vectorizer)
+        self.canonical_registry = CanonicalPaperRegistry()
 
     def evaluate(
         self,
@@ -295,6 +297,30 @@ class CompositeQualityEvaluator:
                         recommended_action="重新检索并排除属于其他学科语境的同名论文。",
                     )
                 )
+            if self.config.enforce_core_paper_coverage:
+                canonical_specs = self.canonical_registry.specs(output.domain)
+                if canonical_specs:
+                    canonical_count = sum(
+                        self.canonical_registry.match(paper, output.domain) is not None
+                        for paper in selected
+                    )
+                    target = min(self.config.min_core_papers, len(canonical_specs))
+                    if target > 0:
+                        core_coverage = min(1.0, canonical_count / target)
+                        score *= 0.75 + 0.25 * core_coverage
+                    if target > 0 and canonical_count < target:
+                        issues.append(
+                            QualityIssue(
+                                issue_type="missing_core_paper",
+                                severity="error",
+                                target_path="papers",
+                                message=(
+                                    f"核心论文覆盖不足：{canonical_count}/{target}；"
+                                    f"核心论文表版本 {self.canonical_registry.version}。"
+                                ),
+                                recommended_action="补充检索该领域的奠基或核心方法论文。",
+                            )
+                        )
         if score < self.config.quality_paper_relevance_threshold:
             severity = "error" if not selected or len(low_ids) * 2 >= len(selected) else "warning"
             issues.append(
@@ -315,6 +341,11 @@ class CompositeQualityEvaluator:
     ) -> float:
         stage_scores = []
         for index, stage in enumerate(output.development_stages):
+            reference_ids = {paper.paper_id for paper in stage.representative_papers}
+            guidance_complete = all(
+                paper.contribution.strip() and paper.reading_focus
+                for paper in stage.representative_papers
+            )
             checks = [
                 bool(stage.summary.strip()),
                 bool(stage.motivation.strip()),
@@ -322,6 +353,8 @@ class CompositeQualityEvaluator:
                 bool(stage.core_concepts),
                 bool(stage.main_techniques),
                 bool(stage.open_problems),
+                reference_ids == set(stage.related_paper_ids),
+                guidance_complete,
             ]
             stage_scores.append(sum(checks) / len(checks))
             if not all(checks):
@@ -330,7 +363,7 @@ class CompositeQualityEvaluator:
                         issue_type="weak_development_stage",
                         severity="warning",
                         target_path=f"development_stages[{index}]",
-                        message="发展阶段缺少动机、论文、概念、技术或开放问题。",
+                        message="发展阶段缺少动机、论文、概念、技术、阅读指导或开放问题。",
                         recommended_action="只补充该阶段缺失字段。",
                     )
                 )
@@ -353,20 +386,55 @@ class CompositeQualityEvaluator:
                         bool(step.activities),
                         bool(step.completion_criteria),
                         bool(step.expected_outcome.strip()),
+                        all(
+                            paper.contribution.strip() and paper.reading_focus
+                            for paper in step.papers
+                        ),
                     ]
                 )
-                / 5
+                / 6
                 for step in output.learning_path
             )
         )
-        score = 0.25 * float(sequence_ok) + 0.75 * item_score
+        role_by_id = {paper.paper_id: paper.paper_role for paper in output.papers}
+        priority_by_id = {
+            paper.paper_id: paper.reading_priority for paper in output.papers
+        }
+        early_ids = {
+            paper_id
+            for step in output.learning_path[:3]
+            for paper_id in step.paper_ids
+        }
+        first_two_ids = {
+            paper_id
+            for step in output.learning_path[:2]
+            for paper_id in step.paper_ids
+        }
+        core_ids = {
+            paper_id
+            for paper_id, priority in priority_by_id.items()
+            if priority == "core"
+        }
+        late_role_ids = {
+            paper_id
+            for paper_id, role in role_by_id.items()
+            if role in {"application", "frontier"}
+        }
+        route_fit = (not core_ids or bool(core_ids & early_ids)) and not (
+            late_role_ids & first_two_ids
+        )
+        score = (
+            0.20 * float(sequence_ok)
+            + 0.70 * item_score
+            + 0.10 * float(route_fit)
+        )
         if score < 1.0:
             issues.append(
                 QualityIssue(
                     issue_type="route_conflict",
                     severity="error" if not sequence_ok else "warning",
                     target_path="learning_path",
-                    message="学习步骤不连续或缺少活动、目标和完成标准。",
+                    message="学习步骤不连续、缺少阅读指导，或核心/应用论文位置不合理。",
                     recommended_action="按基础到实验再到前沿的固定阶段重新编号并补齐。",
                 )
             )

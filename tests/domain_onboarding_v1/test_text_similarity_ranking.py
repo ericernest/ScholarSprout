@@ -126,6 +126,48 @@ class TextSimilarityTests(unittest.TestCase):
 
 
 class MMRRankingTests(unittest.TestCase):
+    def test_canonical_paper_is_core_and_keeps_domain_role(self) -> None:
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="rag-original",
+                    title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+                    abstract="retrieval augmented generation method",
+                    year=2020,
+                    citation_count=100,
+                    url="https://example.org/rag-original",
+                    source="test",
+                )
+            ],
+            make_plan(),
+            limit=1,
+        )
+
+        paper = result.papers[0]
+        self.assertTrue(paper.is_canonical)
+        self.assertEqual(paper.paper_role, "foundational")
+        self.assertEqual(paper.reading_priority, "core")
+
+    def test_recent_vertical_use_case_is_application_not_frontier(self) -> None:
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="medical-application",
+                    title="Retrieval Augmented Generation for Clinical Medical Imaging",
+                    abstract="clinical application and medical imaging case study",
+                    year=2026,
+                    url="https://example.org/medical-application",
+                    source="test",
+                )
+            ],
+            make_plan(),
+            limit=1,
+        )
+
+        paper = result.papers[0]
+        self.assertEqual(paper.paper_role, "application")
+        self.assertEqual(paper.reading_priority, "optional")
+
     def test_diffusion_context_guard_filters_same_word_wrong_field_papers(self) -> None:
         plan = DomainResearchPlan(
             normalized_domain="generative diffusion models",

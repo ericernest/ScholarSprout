@@ -178,6 +178,8 @@ class StructuredOnboardingGenerator:
             "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
             "Use abstract_explicit only when every cited paper has a non-empty abstract and directly supports the claim; "
             "metadata_inference and background_synthesis are weak evidence and must not be phrased as proven facts. "
+            "Also output paper_guidance:[{paper_id,contribution,reading_focus:list[str]}] for every core or recommended paper. "
+            "contribution explains why the paper belongs at this learning stage; reading_focus contains 1-3 concrete reading targets. "
             "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
             "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
             "at most 3 items in each explanatory list, and at most 6 evidence claims. "
@@ -215,6 +217,8 @@ class StructuredOnboardingGenerator:
             "abstract": abstract[: self.config.generation_paper_abstract_max_chars],
             "year": paper.year,
             "paper_role": paper.paper_role,
+            "reading_priority": paper.reading_priority,
+            "is_canonical": paper.is_canonical,
             "relevance_score": paper.relevance_score,
         }
 
@@ -226,6 +230,7 @@ class StructuredOnboardingGenerator:
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
     ) -> DomainOnboardingOutput:
+        guidance = self._paper_guidance(payload.get("paper_guidance"))
         references = {
             paper.paper_id: PaperReference(
                 paper_id=paper.paper_id,
@@ -233,6 +238,16 @@ class StructuredOnboardingGenerator:
                 authors=paper.authors,
                 year=paper.year,
                 url=paper.url,
+                contribution=(
+                    guidance.get(paper.paper_id, {}).get("contribution")
+                    or self._fallback_contribution(paper)
+                ),
+                reading_focus=(
+                    self._strings(guidance.get(paper.paper_id, {}).get("reading_focus"))
+                    or self._fallback_reading_focus(paper)
+                ),
+                reading_priority=paper.reading_priority,
+                is_canonical=paper.is_canonical,
             )
             for paper in papers
         }
@@ -330,6 +345,35 @@ class StructuredOnboardingGenerator:
                 )
             )
         return results
+
+    @staticmethod
+    def _paper_guidance(value: object) -> dict[str, dict[str, object]]:
+        items = value if isinstance(value, list) else []
+        return {
+            str(item.get("paper_id")): item
+            for item in items
+            if isinstance(item, dict) and str(item.get("paper_id") or "").strip()
+        }
+
+    @staticmethod
+    def _fallback_contribution(paper: RankedPaper) -> str:
+        role_labels = {
+            "survey": "综述",
+            "foundational": "奠基",
+            "method": "方法",
+            "evaluation": "评测",
+            "application": "应用",
+            "frontier": "前沿",
+            "other": "补充",
+        }
+        return f"作为{role_labels[paper.paper_role]}阅读，帮助理解《{paper.title}》所代表的研究位置与技术路线。"
+
+    @staticmethod
+    def _fallback_reading_focus(paper: RankedPaper) -> list[str]:
+        focuses = ["论文解决的核心问题", "方法设计与关键假设"]
+        if paper.paper_role in {"evaluation", "application"}:
+            focuses[1] = "实验设置、指标与适用边界"
+        return focuses
 
     def _normalize_stages(
         self,

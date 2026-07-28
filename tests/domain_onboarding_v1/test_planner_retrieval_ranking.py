@@ -276,7 +276,10 @@ class RankingTests(unittest.TestCase):
         for paper in ranked:
             self.assertGreaterEqual(paper.final_score, 0.0)
             self.assertLessEqual(paper.final_score, 1.0)
-            self.assertIn(paper.paper_role, {"survey", "foundational", "method", "evaluation", "frontier", "other"})
+            self.assertIn(
+                paper.paper_role,
+                {"survey", "foundational", "method", "evaluation", "application", "frontier", "other"},
+            )
 
     def test_candidate_limit_is_shared_fairly_across_sources(self) -> None:
         config = DomainOnboardingConfig(candidate_paper_limit=6, selected_paper_limit=6)

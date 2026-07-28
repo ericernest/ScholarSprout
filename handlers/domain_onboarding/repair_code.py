@@ -37,8 +37,11 @@ class CodeRepairExecutor:
             )
         for stage in repaired.development_stages:
             stage.related_paper_ids = self._valid_unique(stage.related_paper_ids, allowed)
+            references = {
+                paper.paper_id: paper for paper in stage.representative_papers
+            }
             stage.representative_papers = [
-                self._reference(allowed_map[paper_id])
+                self._reference(allowed_map[paper_id], references.get(paper_id))
                 for paper_id in stage.related_paper_ids
             ]
             stage.core_concepts = self._nonempty_unique(stage.core_concepts)
@@ -47,8 +50,10 @@ class CodeRepairExecutor:
         for index, step in enumerate(repaired.learning_path, start=1):
             step.step = str(index)
             step.paper_ids = self._valid_unique(step.paper_ids, allowed)
+            references = {paper.paper_id: paper for paper in step.papers}
             step.papers = [
-                self._reference(allowed_map[paper_id]) for paper_id in step.paper_ids
+                self._reference(allowed_map[paper_id], references.get(paper_id))
+                for paper_id in step.paper_ids
             ]
             step.topics = self._nonempty_unique(step.topics)
             step.activities = self._nonempty_unique(step.activities)
@@ -90,11 +95,18 @@ class CodeRepairExecutor:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
     @staticmethod
-    def _reference(paper: RankedPaper) -> PaperReference:
+    def _reference(
+        paper: RankedPaper,
+        existing: PaperReference | None = None,
+    ) -> PaperReference:
         return PaperReference(
             paper_id=paper.paper_id,
             title=paper.title,
             authors=paper.authors,
             year=paper.year,
             url=paper.url,
+            contribution=existing.contribution if existing else "",
+            reading_focus=list(existing.reading_focus) if existing else [],
+            reading_priority=paper.reading_priority,
+            is_canonical=paper.is_canonical,
         )

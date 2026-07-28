@@ -33,6 +33,8 @@ class DomainOnboardingConfig(BaseModel):
     ranking_min_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
     quality_min_paper_relevance_score: float = Field(default=0.05, ge=0.0, le=1.0)
     quality_paper_relevance_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    enforce_core_paper_coverage: bool = True
+    min_core_papers: int = Field(default=1, ge=0, le=5)
     evidence_support_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
     policy_version: str = Field(
         default=CURRENT_POLICY_VERSION,
@@ -75,7 +77,7 @@ class DomainOnboardingConfig(BaseModel):
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
-    ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "frontier"]] = Field(
+    ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "application", "frontier"]] = Field(
         default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]
     )
     ranking_min_role_coverage: int = Field(default=3, ge=0, le=5)
