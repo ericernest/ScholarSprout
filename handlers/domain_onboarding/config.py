@@ -12,6 +12,7 @@ from .policy import (
     default_critical_dimensions,
     default_dimension_weights,
     default_hard_gate_dimensions,
+    default_hard_gate_min_scores,
     default_llm_repair_issue_types,
 )
 from .schemas import QualityDimension, QualityIssueType
@@ -44,6 +45,9 @@ class DomainOnboardingConfig(BaseModel):
     )
     hard_gate_dimensions: dict[str, list[QualityDimension]] = Field(
         default_factory=default_hard_gate_dimensions
+    )
+    hard_gate_min_scores: dict[str, float] = Field(
+        default_factory=default_hard_gate_min_scores
     )
     hard_gate_severities: list[Literal["error", "critical"]] = Field(
         default_factory=lambda: ["error", "critical"]
@@ -125,6 +129,7 @@ class DomainOnboardingConfig(BaseModel):
             min_improvement_delta=self.min_improvement_delta,
             dimension_weights=self.quality_dimension_weights,
             hard_gate_dimensions=self.hard_gate_dimensions,
+            hard_gate_min_scores=self.hard_gate_min_scores,
             hard_gate_severities=self.hard_gate_severities,
             llm_repair_issue_types=self.llm_repair_issue_types,
             critical_dimensions=self.critical_quality_dimensions,

@@ -113,4 +113,12 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
             }
             for index in range(1, 6)
         ],
+        "evidence_claims": [
+            {
+                "claim": "retrieval augmented generation method benchmark evaluation",
+                "supporting_paper_ids": [paper_ids[(index - 1) % len(paper_ids)]],
+                "support_type": "abstract_explicit",
+            }
+            for index in range(1, 4)
+        ],
     }

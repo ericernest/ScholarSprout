@@ -62,7 +62,8 @@ class CompositeQualityEvaluator:
             "learning_path": self.evaluate_learning_path_quality(output, issues),
             "goal_alignment": self.evaluate_goal_alignment(output, issues),
         }
-        hard_gates = self._hard_gate_results(issues)
+        self._ensure_gate_score_issues(dimensions, issues)
+        hard_gates = self._hard_gate_results(dimensions, issues)
         passed_hard_gates = all(gate.status == "passed" for gate in hard_gates)
         score = sum(
             dimensions[name] * weight
@@ -80,7 +81,57 @@ class CompositeQualityEvaluator:
             evidence_validation_modes=evidence.validation_modes,
         )
 
-    def _hard_gate_results(self, issues: list[QualityIssue]) -> list[QualityGateResult]:
+    def _ensure_gate_score_issues(
+        self,
+        dimension_scores: dict[str, float],
+        issues: list[QualityIssue],
+    ) -> None:
+        """Make numeric gate failures actionable by the repair planner."""
+        existing_hard_dimensions = {
+            issue.dimension
+            for issue in issues
+            if issue.severity in set(self.policy.hard_gate_severities)
+        }
+        relevance_threshold = self.policy.hard_gate_min_scores["paper_relevance"]
+        if (
+            dimension_scores["paper_relevance"] < relevance_threshold
+            and "paper_relevance" not in existing_hard_dimensions
+        ):
+            issues.append(
+                QualityIssue(
+                    issue_type="low_paper_relevance",
+                    severity="error",
+                    target_path="papers",
+                    message=(
+                        "论文相关性维度低于 hard gate："
+                        f"{dimension_scores['paper_relevance']:.3f} < {relevance_threshold:.3f}。"
+                    ),
+                    recommended_action="补充检索并重新排序论文。",
+                )
+            )
+        evidence_threshold = self.policy.hard_gate_min_scores["evidence_support"]
+        if (
+            dimension_scores["evidence_grounding"] < evidence_threshold
+            and "evidence_grounding" not in existing_hard_dimensions
+        ):
+            issues.append(
+                QualityIssue(
+                    issue_type="unsupported_claim",
+                    severity="error",
+                    target_path="evidence_claims",
+                    message=(
+                        "证据支持维度低于 hard gate："
+                        f"{dimension_scores['evidence_grounding']:.3f} < {evidence_threshold:.3f}。"
+                    ),
+                    recommended_action="补充带摘要的论文并重写证据论述。",
+                )
+            )
+
+    def _hard_gate_results(
+        self,
+        dimension_scores: dict[str, float],
+        issues: list[QualityIssue],
+    ) -> list[QualityGateResult]:
         results = []
         gated_dimensions = {
             dimension
@@ -98,11 +149,22 @@ class CompositeQualityEvaluator:
                 for issue in issues
                 if issue.hard_gate and issue.dimension in set(dimensions)
             ]
+            gate_score = min(
+                (dimension_scores.get(dimension, 0.0) for dimension in dimensions),
+                default=0.0,
+            )
+            gate_threshold = self.policy.hard_gate_min_scores[gate]
             results.append(
                 QualityGateResult(
                     gate=gate,
-                    status="failed" if issue_ids else "passed",
+                    status=(
+                        "failed"
+                        if issue_ids or gate_score < gate_threshold
+                        else "passed"
+                    ),
                     issue_ids=issue_ids,
+                    score=round(gate_score, 6),
+                    threshold=gate_threshold,
                 )
             )
         return results
@@ -203,13 +265,36 @@ class CompositeQualityEvaluator:
             low_ids: list[str] = []
         else:
             threshold = self.config.quality_min_paper_relevance_score
+            context_mismatch_ids = [
+                paper.paper_id for paper in selected if paper.context_score <= 0.0
+            ]
             low_ids = [
                 paper.paper_id for paper in selected if paper.relevance_score < threshold
             ]
             relevant_ratio = 1.0 - len(low_ids) / len(selected)
             mean_relevance = _average(paper.relevance_score for paper in selected)
-            calibrated_mean = min(1.0, mean_relevance / max(threshold * 2.0, 0.1))
-            score = 0.7 * relevant_ratio + 0.3 * calibrated_mean
+            minimum_relevance = min(paper.relevance_score for paper in selected)
+            calibration_scale = max(threshold * 4.0, 0.2)
+            calibrated_mean = min(1.0, mean_relevance / calibration_scale)
+            calibrated_minimum = min(1.0, minimum_relevance / calibration_scale)
+            score = (
+                0.5 * relevant_ratio
+                + 0.3 * calibrated_mean
+                + 0.2 * calibrated_minimum
+            )
+            if context_mismatch_ids:
+                issues.append(
+                    QualityIssue(
+                        issue_type="paper_context_mismatch",
+                        severity="error",
+                        target_path="papers",
+                        message=(
+                            "推荐论文与目标领域存在同词异义语境冲突；论文 ID："
+                            f"{context_mismatch_ids}。"
+                        ),
+                        recommended_action="重新检索并排除属于其他学科语境的同名论文。",
+                    )
+                )
         if score < self.config.quality_paper_relevance_threshold:
             severity = "error" if not selected or len(low_ids) * 2 >= len(selected) else "warning"
             issues.append(

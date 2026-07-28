@@ -24,7 +24,8 @@ class EvidenceValidationResult:
 
 class ClaimEvidenceValidator:
     strong_assertion_pattern = re.compile(
-        r"首次|首个|最先进|领先|证明|显著优于|state[- ]of[- ]the[- ]art|\bsota\b|\bfirst\b|\boutperform",
+        r"首次|首个|最先进|领先|证明|显著优于|主流|关键|统一.*框架|广泛应用|最新前沿|"
+        r"state[- ]of[- ]the[- ]art|\bsota\b|\bfirst\b|\boutperform|\bdominant\b|\bwidely used\b",
         re.IGNORECASE,
     )
 
@@ -103,11 +104,13 @@ class ClaimEvidenceValidator:
             except Exception:
                 active_vectorizer = self.fallback_vectorizer
                 vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
-            similarity = max(
-                (cosine_similarity(vectors[0], vector) for vector in vectors[1:]),
-                default=0.0,
-            )
-            supported = similarity >= self.config.evidence_support_threshold
+            similarities = [
+                cosine_similarity(vectors[0], vector) for vector in vectors[1:]
+            ]
+            supported_flags = [
+                similarity >= self.config.evidence_support_threshold
+                for similarity in similarities
+            ]
             strong = bool(self.strong_assertion_pattern.search(claim.claim))
             cross_language = self._cross_language_mismatch(claim.claim, support_texts)
             backend = str(
@@ -130,17 +133,46 @@ class ClaimEvidenceValidator:
             )
             validation_modes[mode] = validation_modes.get(mode, 0) + 1
             resolved_cross_language = semantic_cross_language or bridged_cross_language
-            if claim.support_type == "abstract_explicit":
-                claim_scores.append(
-                    1.0
-                    if supported
-                    else (0.4 if cross_language and not resolved_cross_language else 0.0)
+            missing_abstract_ids = [
+                paper_id
+                for paper_id in valid_ids
+                if claim.support_type == "abstract_explicit"
+                and not (allowed[paper_id].abstract or "").strip()
+            ]
+            if missing_abstract_ids:
+                hard_failure = True
+                issues.append(
+                    QualityIssue(
+                        issue_type="unsupported_claim",
+                        severity="error",
+                        target_path=f"evidence_claims[{index}].supporting_paper_ids",
+                        message=(
+                            "abstract_explicit 证据缺少可验证摘要；论文 ID："
+                            f"{missing_abstract_ids}。"
+                        ),
+                        recommended_action="补充摘要、降低证据类型或更换支持论文。",
+                    )
                 )
+            if claim.support_type == "abstract_explicit":
+                per_paper_scores = [
+                    1.0 if supported and paper_id not in missing_abstract_ids else 0.0
+                    for paper_id, supported in zip(valid_ids, supported_flags, strict=True)
+                ]
             elif claim.support_type == "metadata_inference":
-                claim_scores.append(0.85 if supported else 0.4)
+                per_paper_scores = [0.55 if supported else 0.2 for supported in supported_flags]
             else:
-                claim_scores.append(0.75 if supported else 0.5)
-            if not supported:
+                per_paper_scores = [0.35 if supported else 0.15 for supported in supported_flags]
+            claim_scores.append(
+                sum(per_paper_scores) / len(per_paper_scores)
+                if per_paper_scores
+                else 0.0
+            )
+            unsupported_ids = [
+                paper_id
+                for paper_id, supported in zip(valid_ids, supported_flags, strict=True)
+                if not supported
+            ]
+            if unsupported_ids:
                 severity = (
                     "warning"
                     if cross_language and not resolved_cross_language
@@ -161,7 +193,10 @@ class ClaimEvidenceValidator:
                             if cross_language and not resolved_cross_language
                             else "跨语言语义校验后，绑定论文仍未提供足够支持。"
                             if cross_language
-                            else "绑定论文的标题或摘要没有提供足够的词面支持。"
+                            else (
+                                "部分绑定论文的标题或摘要没有提供足够支持；论文 ID："
+                                f"{unsupported_ids}。"
+                            )
                         ),
                         recommended_action="改写论述、降低断言强度或更换支持论文。",
                     )

@@ -176,6 +176,8 @@ class StructuredOnboardingGenerator:
             "activities, completion_criteria, expected_outcome. Produce 3 development stages and 3-5 subdirections. "
             "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
             "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
+            "Use abstract_explicit only when every cited paper has a non-empty abstract and directly supports the claim; "
+            "metadata_inference and background_synthesis are weak evidence and must not be phrased as proven facts. "
             "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
             "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
             "at most 3 items in each explanatory list, and at most 6 evidence claims. "

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.1.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.2.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:
@@ -36,6 +36,16 @@ def default_hard_gate_dimensions() -> dict[str, list[QualityDimension]]:
     }
 
 
+def default_hard_gate_min_scores() -> dict[str, float]:
+    """Minimum dimension score required even when no issue was emitted."""
+    return {
+        "required_structure": 1.0,
+        "paper_identity": 1.0,
+        "paper_relevance": 0.60,
+        "evidence_support": 0.70,
+    }
+
+
 def default_llm_repair_issue_types() -> list[QualityIssueType]:
     return [
         "missing_coverage",
@@ -45,6 +55,7 @@ def default_llm_repair_issue_types() -> list[QualityIssueType]:
         "missing_evidence",
         "unsupported_claim",
         "low_paper_relevance",
+        "paper_context_mismatch",
     ]
 
 
@@ -75,6 +86,9 @@ class DomainOnboardingPolicy(BaseModel):
     hard_gate_dimensions: dict[str, list[QualityDimension]] = Field(
         default_factory=default_hard_gate_dimensions
     )
+    hard_gate_min_scores: dict[str, float] = Field(
+        default_factory=default_hard_gate_min_scores
+    )
     hard_gate_severities: list[Literal["error", "critical"]] = Field(
         default_factory=lambda: ["error", "critical"]
     )
@@ -98,6 +112,10 @@ class DomainOnboardingPolicy(BaseModel):
             raise ValueError("at least one hard gate severity must be configured")
         if any(not name.strip() or not dimensions for name, dimensions in self.hard_gate_dimensions.items()):
             raise ValueError("hard gates require a name and at least one dimension")
+        if set(self.hard_gate_min_scores) != set(self.hard_gate_dimensions):
+            raise ValueError("hard gate score thresholds must match hard gate names")
+        if any(not 0.0 <= score <= 1.0 for score in self.hard_gate_min_scores.values()):
+            raise ValueError("hard gate score thresholds must be between 0 and 1")
         if len(set(self.hard_gate_severities)) != len(self.hard_gate_severities):
             raise ValueError("hard_gate_severities must not contain duplicates")
         if len(set(self.llm_repair_issue_types)) != len(self.llm_repair_issue_types):
