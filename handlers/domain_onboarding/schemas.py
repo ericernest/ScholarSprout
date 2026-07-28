@@ -47,6 +47,7 @@ QualityIssueType = Literal[
     "missing_evidence",
     "unsupported_claim",
     "low_paper_relevance",
+    "paper_context_mismatch",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -73,6 +74,7 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "structure_error": "structure",
     "invalid_paper": "paper_validity",
     "low_paper_relevance": "paper_relevance",
+    "paper_context_mismatch": "paper_relevance",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -88,6 +90,7 @@ _HARD_GATE_ISSUES = {
     "missing_evidence",
     "unsupported_claim",
     "low_paper_relevance",
+    "paper_context_mismatch",
 }
 _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "structure_error": "llm",
@@ -100,6 +103,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "missing_evidence": "llm",
     "unsupported_claim": "llm",
     "low_paper_relevance": "retrieval",
+    "paper_context_mismatch": "retrieval",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
@@ -239,6 +243,7 @@ class PaperCandidate(OnboardingModel):
 
 class RankedPaper(PaperCandidate):
     relevance_score: float = Field(ge=0.0, le=1.0)
+    context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     citation_score: float = Field(ge=0.0, le=1.0)
     recency_score: float = Field(ge=0.0, le=1.0)
     diversity_score: float = Field(ge=0.0, le=1.0)
@@ -259,6 +264,8 @@ class SelectedPaper(OnboardingModel):
     arxiv_id: str | None = None
     publication_types: list[str] = Field(default_factory=list)
     paper_role: PaperRole = "other"
+    relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @classmethod
@@ -394,6 +401,8 @@ class QualityGateResult(OnboardingModel):
     gate: str = Field(min_length=1)
     status: QualityGateStatus
     issue_ids: list[str] = Field(default_factory=list)
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("issue_ids")
     @classmethod
@@ -402,7 +411,7 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
-    policy_version: str = "domain-quality-v1.1.0"
+    policy_version: str = "domain-quality-v1.2.0"
     policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -455,7 +464,7 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
-    policy_version: str = "domain-quality-v1.1.0"
+    policy_version: str = "domain-quality-v1.2.0"
     policy_fingerprint: str | None = None
     adaptive_policy_version: str | None = None
     shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
@@ -517,7 +526,7 @@ class KnowledgeGraphSnapshot(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
-    policy_version: str = "domain-quality-v1.1.0"
+    policy_version: str = "domain-quality-v1.2.0"
     policy_fingerprint: str | None = None
     status: Literal[
         "ok",

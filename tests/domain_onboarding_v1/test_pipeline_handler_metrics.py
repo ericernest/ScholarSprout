@@ -579,9 +579,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(
             snapshot["policies"]["versions"],
-            {"domain-quality-v1.1.0": 1},
+            {"domain-quality-v1.2.0": 1},
         )
-        self.assertEqual(response["policy_version"], "domain-quality-v1.1.0")
+        self.assertEqual(response["policy_version"], "domain-quality-v1.2.0")
         self.assertEqual(
             response["quality"]["policy_fingerprint"],
             response["policy_fingerprint"],

@@ -203,6 +203,43 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(quality.dimensions["paper_relevance"], 0.0)
         self.assertTrue(any(issue.issue_type == "low_paper_relevance" for issue in quality.issues))
 
+    def test_numeric_hard_gate_fails_even_when_only_warning_issue_exists(self) -> None:
+        gate_results = self.evaluator._hard_gate_results(
+            {
+                "structure": 1.0,
+                "paper_validity": 1.0,
+                "paper_relevance": 0.59,
+                "evidence_grounding": 1.0,
+            },
+            [],
+        )
+
+        relevance_gate = next(
+            gate for gate in gate_results if gate.gate == "paper_relevance"
+        )
+        self.assertEqual(relevance_gate.status, "failed")
+        self.assertEqual(relevance_gate.score, 0.59)
+        self.assertEqual(relevance_gate.threshold, 0.60)
+
+    def test_explicit_claim_without_abstract_fails_evidence_gate(self) -> None:
+        ranked = [
+            paper.model_copy(update={"abstract": None}) for paper in self.ranked
+        ]
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="retrieval augmented generation method benchmark evaluation",
+                supporting_paper_ids=[ranked[0].paper_id],
+                support_type="abstract_explicit",
+            )
+        ]
+
+        quality = self.evaluator.evaluate(self.output, ranked)
+
+        self.assertFalse(quality.passed_hard_gates)
+        self.assertTrue(
+            any("缺少可验证摘要" in issue.message for issue in quality.issues)
+        )
+
     def test_unsupported_explicit_claim_fails_hard_gate(self) -> None:
         self.output.evidence_claims = [
             EvidenceClaim(

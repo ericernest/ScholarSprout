@@ -6,7 +6,7 @@ from unittest.mock import patch
 from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.pipeline import create_default_pipeline
-from handlers.domain_onboarding.schemas import PaperCandidate
+from handlers.domain_onboarding.schemas import DomainResearchPlan, PaperCandidate, ResearchPerspective
 from handlers.domain_onboarding.text_similarity import (
     CachedEmbeddingTextVectorizer,
     FastEmbedProvider,
@@ -126,6 +126,53 @@ class TextSimilarityTests(unittest.TestCase):
 
 
 class MMRRankingTests(unittest.TestCase):
+    def test_diffusion_context_guard_filters_same_word_wrong_field_papers(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="generative diffusion models",
+            perspectives=[
+                ResearchPerspective(
+                    name=name, description="generative methods", questions=[]
+                )
+                for name in ("foundations", "methods", "evaluation")
+            ],
+            search_queries=["denoising diffusion probabilistic models image generation"],
+            expected_subdirections=["DDPM", "latent diffusion", "evaluation"],
+        )
+        papers = [
+            PaperCandidate(
+                paper_id=paper_id,
+                title=title,
+                abstract=abstract,
+                year=2024,
+                url=f"https://example.org/{paper_id}",
+                source="test",
+            )
+            for paper_id, title, abstract in (
+                (
+                    "ddpm",
+                    "Denoising Diffusion Probabilistic Models",
+                    "generative image synthesis with denoising diffusion",
+                ),
+                (
+                    "diffusion-mri",
+                    "Robust Sampling of Diffusion MRI Microstructure Models",
+                    "magnetic resonance imaging microstructure",
+                ),
+                (
+                    "wiener",
+                    "First-passage Times from Wiener Diffusion Models",
+                    "decision process and first-passage sampling",
+                ),
+            )
+        ]
+
+        result = WeightedPaperRanker(
+            DomainOnboardingConfig(ranking_min_role_coverage=0)
+        ).rank(papers, plan, limit=3)
+
+        self.assertEqual([paper.paper_id for paper in result.papers], ["ddpm"])
+        self.assertEqual(result.stats.low_relevance_filtered_count, 2)
+
     def test_mmr_chooses_relevant_novel_paper_over_near_duplicate(self) -> None:
         class FixedVectorizer:
             def vectorize(self, texts: list[str]) -> list[dict[str, float]]:

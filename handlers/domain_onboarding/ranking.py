@@ -9,6 +9,7 @@ from typing import Protocol
 from urllib.parse import unquote, urlparse
 
 from .config import DomainOnboardingConfig
+from .domain_context import DomainContextGuard
 from .schemas import (
     DomainResearchPlan,
     PaperCandidate,
@@ -40,6 +41,7 @@ class WeightedPaperRanker:
         config: DomainOnboardingConfig,
         vectorizer: TextVectorizer | None = None,
         fallback_vectorizer: TextVectorizer | None = None,
+        context_guard: DomainContextGuard | None = None,
     ):
         self.config = config
         self.vectorizer = vectorizer or TfidfTextVectorizer()
@@ -48,6 +50,7 @@ class WeightedPaperRanker:
             if fallback_vectorizer is not None
             else (TfidfTextVectorizer() if vectorizer is not None else None)
         )
+        self.context_guard = context_guard or DomainContextGuard()
 
     def rank(
         self,
@@ -104,7 +107,9 @@ class WeightedPaperRanker:
             paper.paper_id: vector for paper, vector in zip(valid, document_vectors, strict=True)
         }
         for paper, paper_vector in zip(valid, document_vectors, strict=True):
-            relevance = cosine_similarity(query_vector, paper_vector)
+            semantic_relevance = cosine_similarity(query_vector, paper_vector)
+            context_score = self.context_guard.score(paper, plan)
+            relevance = semantic_relevance * context_score
             citations = (
                 math.log1p(paper.citation_count or 0) / math.log1p(max_citations)
                 if max_citations > 0 else 0.0
@@ -130,6 +135,7 @@ class WeightedPaperRanker:
                 RankedPaper(
                     **paper.model_dump(),
                     relevance_score=round(relevance, 6),
+                    context_score=round(context_score, 6),
                     citation_score=round(citations, 6),
                     recency_score=round(recency, 6),
                     diversity_score=round(diversity, 6),
@@ -138,14 +144,16 @@ class WeightedPaperRanker:
                 )
             )
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
+        context_filtered = [paper for paper in ranked if paper.context_score > 0.0]
+        low_relevance_filtered_count = len(ranked) - len(context_filtered)
+        ranked = context_filtered
         relevance_filtered = [
             paper
             for paper in ranked
             if paper.relevance_score >= self.config.ranking_min_relevance_score
         ]
-        low_relevance_filtered_count = 0
         if relevance_filtered:
-            low_relevance_filtered_count = len(ranked) - len(relevance_filtered)
+            low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
             ranked = relevance_filtered
         selected, mmr_scores = self._select_mmr(
             ranked,
