@@ -650,7 +650,7 @@ def create_default_pipeline(
         ),
         ranker=WeightedPaperRanker(settings, vectorizer=vectorizer),
         generator=generator,
-        evaluator=CompositeQualityEvaluator(settings),
+        evaluator=CompositeQualityEvaluator(settings, evidence_vectorizer=vectorizer),
         repairer=TargetedRepairer(generator, settings),
         config=settings,
         repair_advisor=load_advisor(

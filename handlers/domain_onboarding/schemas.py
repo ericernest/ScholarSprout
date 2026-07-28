@@ -414,6 +414,7 @@ class ContentQuality(OnboardingModel):
     retry_status: RetryStatus = "not_needed"
     state: QualityState = "warning"
     hard_gates: list[QualityGateResult] = Field(default_factory=list)
+    evidence_validation_modes: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def derive_state(self) -> "ContentQuality":

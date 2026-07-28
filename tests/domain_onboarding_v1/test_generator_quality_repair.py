@@ -218,7 +218,7 @@ class QualityTests(unittest.TestCase):
         self.assertTrue(quality.passed_hard_gates)
         self.assertGreaterEqual(quality.dimensions["evidence_grounding"], 0.75)
 
-    def test_cross_language_explicit_claim_is_warning_not_hard_failure(self) -> None:
+    def test_cross_language_explicit_claim_uses_terminology_bridge(self) -> None:
         self.output.evidence_claims = [
             EvidenceClaim(
                 claim="该方法通过检索外部证据增强生成结果",
@@ -230,12 +230,47 @@ class QualityTests(unittest.TestCase):
         quality = self.evaluator.evaluate(self.output, self.ranked)
 
         self.assertTrue(quality.passed_hard_gates)
-        self.assertTrue(
-            any(
-                issue.issue_type == "unsupported_claim" and issue.severity == "warning"
-                for issue in quality.issues
+        self.assertEqual(quality.evidence_validation_modes, {"terminology_bridge": 1})
+        self.assertFalse(any(issue.issue_type == "unsupported_claim" for issue in quality.issues))
+
+    def test_cross_language_unrelated_explicit_claim_fails_after_bridge(self) -> None:
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="图神经网络方法证明节点分类最先进",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:2]],
+                support_type="abstract_explicit",
             )
+        ]
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertFalse(quality.passed_hard_gates)
+        issue = next(issue for issue in quality.issues if issue.issue_type == "unsupported_claim")
+        self.assertEqual(issue.severity, "error")
+        self.assertEqual(quality.evidence_validation_modes, {"terminology_bridge": 1})
+
+    def test_evidence_embedding_failure_falls_back_to_terminology_bridge(self) -> None:
+        class FailingEmbedding:
+            name = "embedding"
+
+            def vectorize(self, texts):
+                raise RuntimeError("embedding unavailable")
+
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="该方法通过检索证据增强生成结果",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:2]],
+                support_type="abstract_explicit",
+            )
+        ]
+        evaluator = CompositeQualityEvaluator(
+            self.config, evidence_vectorizer=FailingEmbedding()
         )
+
+        quality = evaluator.evaluate(self.output, self.ranked)
+
+        self.assertTrue(quality.passed_hard_gates)
+        self.assertEqual(quality.evidence_validation_modes, {"terminology_bridge": 1})
 
 
 class RepairTests(unittest.TestCase):

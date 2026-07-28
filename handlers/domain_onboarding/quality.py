@@ -35,10 +35,14 @@ def _average(values: Iterable[float]) -> float:
 
 
 class CompositeQualityEvaluator:
-    def __init__(self, config: DomainOnboardingConfig):
+    def __init__(
+        self,
+        config: DomainOnboardingConfig,
+        evidence_vectorizer: object | None = None,
+    ):
         self.config = config
         self.policy = config.to_policy()
-        self.evidence_validator = ClaimEvidenceValidator(config)
+        self.evidence_validator = ClaimEvidenceValidator(config, evidence_vectorizer)
 
     def evaluate(
         self,
@@ -73,6 +77,7 @@ class CompositeQualityEvaluator:
             hard_gates=hard_gates,
             policy_version=self.policy.policy_version,
             policy_fingerprint=self.policy.fingerprint,
+            evidence_validation_modes=evidence.validation_modes,
         )
 
     def _hard_gate_results(self, issues: list[QualityIssue]) -> list[QualityGateResult]:

@@ -7,7 +7,11 @@ from dataclasses import dataclass
 
 from .config import DomainOnboardingConfig
 from .schemas import DomainOnboardingOutput, QualityIssue, RankedPaper
-from .text_similarity import TextVectorizer, TfidfTextVectorizer, cosine_similarity
+from .text_similarity import (
+    MultilingualEvidenceTextVectorizer,
+    TextVectorizer,
+    cosine_similarity,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +19,7 @@ class EvidenceValidationResult:
     score: float
     hard_failure: bool
     issues: list[QualityIssue]
+    validation_modes: dict[str, int]
 
 
 class ClaimEvidenceValidator:
@@ -29,7 +34,8 @@ class ClaimEvidenceValidator:
         vectorizer: TextVectorizer | None = None,
     ) -> None:
         self.config = config
-        self.vectorizer = vectorizer or TfidfTextVectorizer()
+        self.vectorizer = vectorizer or MultilingualEvidenceTextVectorizer()
+        self.fallback_vectorizer = MultilingualEvidenceTextVectorizer()
 
     def validate(
         self,
@@ -52,10 +58,12 @@ class ClaimEvidenceValidator:
                         recommended_action="为发展阶段的关键论述补充候选论文 ID。",
                     )
                 ],
+                validation_modes={"missing": 1},
             )
 
         claim_scores: list[float] = []
         cited_ids: set[str] = set()
+        validation_modes: dict[str, int] = {}
         for index, claim in enumerate(output.evidence_claims):
             invalid = [paper_id for paper_id in claim.supporting_paper_ids if paper_id not in allowed]
             valid_ids = [paper_id for paper_id in claim.supporting_paper_ids if paper_id in allowed]
@@ -89,7 +97,12 @@ class ClaimEvidenceValidator:
                 self._support_text(claim.support_type, allowed[paper_id])
                 for paper_id in valid_ids
             ]
-            vectors = self.vectorizer.vectorize([claim.claim, *support_texts])
+            active_vectorizer = self.vectorizer
+            try:
+                vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
+            except Exception:
+                active_vectorizer = self.fallback_vectorizer
+                vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
             similarity = max(
                 (cosine_similarity(vectors[0], vector) for vector in vectors[1:]),
                 default=0.0,
@@ -97,8 +110,32 @@ class ClaimEvidenceValidator:
             supported = similarity >= self.config.evidence_support_threshold
             strong = bool(self.strong_assertion_pattern.search(claim.claim))
             cross_language = self._cross_language_mismatch(claim.claim, support_texts)
+            backend = str(
+                getattr(active_vectorizer, "name", type(active_vectorizer).__name__)
+            ).lower()
+            semantic_cross_language = cross_language and backend == "embedding"
+            bridged_cross_language = (
+                cross_language
+                and backend == "multilingual_tfidf"
+                and MultilingualEvidenceTextVectorizer.has_bridge_terms(claim.claim)
+            )
+            mode = (
+                "multilingual_embedding"
+                if semantic_cross_language
+                else "terminology_bridge"
+                if bridged_cross_language
+                else "cross_language_unresolved"
+                if cross_language
+                else backend
+            )
+            validation_modes[mode] = validation_modes.get(mode, 0) + 1
+            resolved_cross_language = semantic_cross_language or bridged_cross_language
             if claim.support_type == "abstract_explicit":
-                claim_scores.append(1.0 if supported else (0.6 if cross_language else 0.0))
+                claim_scores.append(
+                    1.0
+                    if supported
+                    else (0.4 if cross_language and not resolved_cross_language else 0.0)
+                )
             elif claim.support_type == "metadata_inference":
                 claim_scores.append(0.85 if supported else 0.4)
             else:
@@ -106,7 +143,7 @@ class ClaimEvidenceValidator:
             if not supported:
                 severity = (
                     "warning"
-                    if cross_language
+                    if cross_language and not resolved_cross_language
                     else (
                         "error"
                         if strong or claim.support_type == "abstract_explicit"
@@ -120,7 +157,9 @@ class ClaimEvidenceValidator:
                         severity=severity,
                         target_path=f"evidence_claims[{index}].claim",
                         message=(
-                            "论述与论文为跨语言文本，当前词面校验无法确认支持强度。"
+                            "论述与论文为跨语言文本，当前校验缺少可识别的术语桥接。"
+                            if cross_language and not resolved_cross_language
+                            else "跨语言语义校验后，绑定论文仍未提供足够支持。"
                             if cross_language
                             else "绑定论文的标题或摘要没有提供足够的词面支持。"
                         ),
@@ -148,6 +187,7 @@ class ClaimEvidenceValidator:
             score=0.75 * claim_score + 0.25 * coverage_score,
             hard_failure=hard_failure,
             issues=issues,
+            validation_modes=validation_modes,
         )
 
     @staticmethod
