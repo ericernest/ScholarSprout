@@ -628,6 +628,8 @@ class RankingStats(OnboardingModel):
     vectorizer_backend: str = "unknown"
     vectorizer_fallback_used: bool = False
     low_relevance_filtered_count: int = 0
+    covered_roles: list[PaperRole] = Field(default_factory=list)
+    missing_required_roles: list[PaperRole] = Field(default_factory=list)
 
 
 class RankingResult(OnboardingModel):

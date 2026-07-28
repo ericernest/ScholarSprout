@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
+from handlers.domain_onboarding.pipeline import create_default_pipeline
 from handlers.domain_onboarding.schemas import PaperCandidate
-from handlers.domain_onboarding.text_similarity import TfidfTextVectorizer, cosine_similarity
+from handlers.domain_onboarding.text_similarity import (
+    CachedEmbeddingTextVectorizer,
+    OpenAIEmbeddingProvider,
+    TfidfTextVectorizer,
+    cosine_similarity,
+)
 
 from .fakes import make_plan
 
@@ -24,6 +31,44 @@ class TextSimilarityTests(unittest.TestCase):
             cosine_similarity(vectors[0], vectors[1]),
             cosine_similarity(vectors[0], vectors[2]),
         )
+
+    def test_openai_embedding_adapter_preserves_multilingual_semantics(self) -> None:
+        class Model:
+            def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+                self.model = model
+                mapping = {
+                    "检索增强生成": [1.0, 0.0],
+                    "retrieval augmented generation": [1.0, 0.0],
+                    "graph neural networks": [0.0, 1.0],
+                }
+                return [mapping[text] for text in texts]
+
+        model = Model()
+        vectorizer = CachedEmbeddingTextVectorizer(
+            OpenAIEmbeddingProvider(model, "multilingual-embedding")
+        )
+        vectors = vectorizer.vectorize(
+            ["检索增强生成", "retrieval augmented generation", "graph neural networks"]
+        )
+
+        self.assertEqual(model.model, "multilingual-embedding")
+        self.assertEqual(cosine_similarity(vectors[0], vectors[1]), 1.0)
+        self.assertEqual(cosine_similarity(vectors[0], vectors[2]), 0.0)
+
+    def test_default_pipeline_enables_embedding_only_with_explicit_model(self) -> None:
+        class Model:
+            def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+                return [[1.0] for _ in texts]
+
+        with patch.dict(
+            "os.environ",
+            {"DOMAIN_ONBOARDING_EMBEDDING_MODEL": "multilingual-embedding"},
+        ):
+            pipeline = create_default_pipeline(Model())
+        try:
+            self.assertEqual(pipeline.ranker.vectorizer.name, "embedding")
+        finally:
+            pipeline.close()
 
 
 class MMRRankingTests(unittest.TestCase):
@@ -103,6 +148,42 @@ class MMRRankingTests(unittest.TestCase):
         }
 
         self.assertEqual(forward, reverse)
+
+    def test_role_gate_covers_available_required_roles_before_duplicates(self) -> None:
+        class FixedVectorizer:
+            def vectorize(self, texts: list[str]) -> list[dict[str, float]]:
+                return [{"topic": 1.0} for _ in texts]
+
+        config = DomainOnboardingConfig(
+            selected_paper_limit=3,
+            ranking_min_role_coverage=3,
+            ranking_required_roles=["survey", "method", "evaluation"],
+            ranking_min_relevance_score=0.0,
+        )
+        papers = [
+            PaperCandidate(
+                paper_id=paper_id,
+                title=title,
+                abstract=abstract,
+                year=year,
+                citation_count=citations,
+                url=f"https://example.org/{paper_id}",
+                source="test",
+            )
+            for paper_id, title, abstract, year, citations in (
+                ("survey", "RAG Survey", "review overview", 2023, 20),
+                ("method", "RAG Framework", "method framework", 2022, 100),
+                ("evaluation", "RAG Benchmark", "evaluation benchmark", 2024, 10),
+                ("method-2", "RAG Model", "method model", 2021, 10000),
+            )
+        ]
+
+        result = WeightedPaperRanker(config, vectorizer=FixedVectorizer()).rank(
+            papers, make_plan(), limit=3
+        )
+
+        self.assertEqual(set(result.stats.covered_roles), {"survey", "method", "evaluation"})
+        self.assertEqual(result.stats.missing_required_roles, [])
 
 
 if __name__ == "__main__":

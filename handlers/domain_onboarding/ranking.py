@@ -162,6 +162,12 @@ class WeightedPaperRanker:
                 vectorizer_backend=vectorizer_backend,
                 vectorizer_fallback_used=fallback_used,
                 low_relevance_filtered_count=low_relevance_filtered_count,
+                covered_roles=sorted({paper.paper_role for paper in selected}),
+                missing_required_roles=[
+                    role
+                    for role in self.config.ranking_required_roles
+                    if role not in {paper.paper_role for paper in selected}
+                ],
             ),
         )
 
@@ -315,8 +321,18 @@ class WeightedPaperRanker:
         selected: list[RankedPaper] = []
         remaining = list(ranked)
         covered_roles: set[PaperRole] = set()
+        available_required_roles = [
+            role
+            for role in self.config.ranking_required_roles
+            if any(paper.paper_role == role for paper in remaining)
+        ]
+        target_role_count = min(
+            self.config.ranking_min_role_coverage,
+            len(available_required_roles),
+            limit,
+        )
         while remaining and len(selected) < limit:
-            scored: list[tuple[float, float, int, RankedPaper]] = []
+            scored: list[tuple[float, float, float, int, RankedPaper]] = []
             for index, paper in enumerate(remaining):
                 redundancy = max(
                     (
@@ -331,13 +347,22 @@ class WeightedPaperRanker:
                     if paper.paper_role != "other" and paper.paper_role not in covered_roles
                     else 0.0
                 )
+                uncovered_required = {
+                    role for role in available_required_roles if role not in covered_roles
+                }
+                role_gate = (
+                    1.0
+                    if len(covered_roles.intersection(available_required_roles)) < target_role_count
+                    and paper.paper_role in uncovered_required
+                    else 0.0
+                )
                 mmr_score = (
                     self.config.mmr_lambda * paper.final_score
                     + (1.0 - self.config.mmr_lambda) * novelty
                     + role_bonus
                 )
-                scored.append((mmr_score, paper.final_score, -index, paper))
-            mmr_score, _, _, chosen = max(scored, key=lambda item: item[:3])
+                scored.append((role_gate, mmr_score, paper.final_score, -index, paper))
+            _, mmr_score, _, _, chosen = max(scored, key=lambda item: item[:4])
             selected.append(chosen)
             covered_roles.add(chosen.paper_role)
             mmr_scores[chosen.paper_id] = round(mmr_score, 6)

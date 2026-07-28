@@ -19,6 +19,22 @@ class EmbeddingProvider(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
+class OpenAIEmbeddingProvider:
+    """Adapter for OpenAI-compatible clients with an explicit embedding model."""
+
+    def __init__(self, model: object, embedding_model: str) -> None:
+        if not embedding_model.strip():
+            raise ValueError("embedding_model must not be empty")
+        self.model = model
+        self.embedding_model = embedding_model.strip()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        method = getattr(self.model, "embed", None)
+        if not callable(method):
+            raise TypeError("configured model does not support embeddings")
+        return method(texts, model=self.embedding_model)
+
+
 def tokenize(text: str) -> list[str]:
     normalized = text.lower()
     tokens = re.findall(r"[a-z0-9]+", normalized)

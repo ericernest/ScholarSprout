@@ -69,6 +69,12 @@ class DomainOnboardingConfig(BaseModel):
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
+    ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "frontier"]] = Field(
+        default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]
+    )
+    ranking_min_role_coverage: int = Field(default=3, ge=0, le=5)
+    embedding_batch_size: int = Field(default=32, ge=1, le=128)
+    embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
     retrieval_timeout_seconds: float = Field(default=12.0, gt=0.0, le=60.0)
     retrieval_max_attempts: int = Field(default=3, ge=1, le=5)
     retrieval_backoff_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
@@ -99,6 +105,10 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
         if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
             raise ValueError("knowledge graph foundation supports shadow mode only")
+        if len(self.ranking_required_roles) != len(set(self.ranking_required_roles)):
+            raise ValueError("ranking_required_roles must not contain duplicates")
+        if self.ranking_min_role_coverage > len(self.ranking_required_roles):
+            raise ValueError("ranking_min_role_coverage exceeds configured required roles")
         self.to_policy()
         return self
 
