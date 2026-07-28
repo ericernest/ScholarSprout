@@ -23,6 +23,11 @@ dependencies = [
     "networkx>=3.0,<4.0",         # 知识图谱数据结构
 ]
 
+[project.optional-dependencies]
+embeddings = [
+    "fastembed>=0.8,<1.0",
+]
+
 [project.scripts]
 novicesynapse = "cli.main:app"
 

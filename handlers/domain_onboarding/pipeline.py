@@ -41,7 +41,11 @@ from .schemas import (
     RepairRecord,
     RetrievalStats,
 )
-from .text_similarity import CachedEmbeddingTextVectorizer, OpenAIEmbeddingProvider
+from .text_similarity import (
+    CachedEmbeddingTextVectorizer,
+    FastEmbedProvider,
+    OpenAIEmbeddingProvider,
+)
 
 
 class DomainOnboardingPipeline:
@@ -613,14 +617,27 @@ def create_default_pipeline(
         "cache_ttl_seconds": settings.retrieval_cache_ttl_seconds,
         "cache_max_entries": settings.retrieval_cache_max_entries,
     }
-    embedding_model = os.getenv("DOMAIN_ONBOARDING_EMBEDDING_MODEL", "").strip()
+    local_embedding_model = os.getenv(
+        "DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL", ""
+    ).strip()
+    remote_embedding_model = os.getenv(
+        "DOMAIN_ONBOARDING_EMBEDDING_MODEL", ""
+    ).strip()
+    embedding_provider = None
+    if local_embedding_model:
+        embedding_provider = FastEmbedProvider(
+            local_embedding_model,
+            cache_dir=os.getenv("DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR") or None,
+        )
+    elif remote_embedding_model:
+        embedding_provider = OpenAIEmbeddingProvider(model, remote_embedding_model)
     vectorizer = (
         CachedEmbeddingTextVectorizer(
-            OpenAIEmbeddingProvider(model, embedding_model),
+            embedding_provider,
             batch_size=settings.embedding_batch_size,
             cache_max_entries=settings.embedding_cache_max_entries,
         )
-        if embedding_model
+        if embedding_provider is not None
         else None
     )
     return DomainOnboardingPipeline(
