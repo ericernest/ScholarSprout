@@ -503,6 +503,7 @@ class DomainOnboardingPipeline:
         trace.first_score = quality.score
         trace.first_dimensions = dict(quality.dimensions)
         trace.first_quality_state = quality.state
+        trace.evidence_validation_modes = dict(quality.evidence_validation_modes)
         for issue in quality.issues:
             trace.first_issue_type_counts[issue.issue_type] = (
                 trace.first_issue_type_counts.get(issue.issue_type, 0) + 1
