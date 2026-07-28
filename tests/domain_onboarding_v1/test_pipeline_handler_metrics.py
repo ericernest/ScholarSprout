@@ -210,11 +210,12 @@ class PipelineTests(unittest.TestCase):
             "大模型幻觉检测",
         ]
         paper_ids = [paper.paper_id for paper in make_candidates()]
+        config = DomainOnboardingConfig(enforce_core_paper_coverage=False)
         for domain in domains:
             with self.subTest(domain=domain):
                 payload = make_generation_payload(paper_ids)
                 payload["domain"] = domain
-                result = make_pipeline([payload]).run(
+                result = make_pipeline([payload], config=config).run(
                     DomainOnboardingRequest(query=domain), DomainOnboardingRequestTrace()
                 )
                 self.assertEqual(result.status, "ok")
@@ -579,9 +580,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(
             snapshot["policies"]["versions"],
-            {"domain-quality-v1.2.0": 1},
+            {"domain-quality-v1.3.0": 1},
         )
-        self.assertEqual(response["policy_version"], "domain-quality-v1.2.0")
+        self.assertEqual(response["policy_version"], "domain-quality-v1.3.0")
         self.assertEqual(
             response["quality"]["policy_fingerprint"],
             response["policy_fingerprint"],

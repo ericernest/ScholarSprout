@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.2.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.3.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:

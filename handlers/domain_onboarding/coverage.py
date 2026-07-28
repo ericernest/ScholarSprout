@@ -36,6 +36,7 @@ class PaperCoverageAnalyzer:
         "foundational": "foundational seminal early work",
         "method": "method model framework",
         "evaluation": "benchmark evaluation dataset",
+        "application": "application applied case study",
         "frontier": "recent advances state of the art",
         "other": "research paper",
     }

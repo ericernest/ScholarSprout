@@ -45,6 +45,15 @@ class GeneratorTests(unittest.TestCase):
         canonical = {paper.paper_id: paper for paper in self.ranked}
         for paper in output.papers:
             self.assertEqual(paper.title, canonical[paper.paper_id].title)
+        core_references = [
+            reference
+            for stage in output.development_stages
+            for reference in stage.representative_papers
+            if reference.reading_priority == "core"
+        ]
+        self.assertTrue(core_references)
+        self.assertTrue(all(item.contribution for item in core_references))
+        self.assertTrue(all(item.reading_focus for item in core_references))
 
     def test_generator_sends_compact_grounding_context_and_token_limit(self) -> None:
         config = self.config.model_copy(
@@ -202,6 +211,41 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(quality.dimensions["paper_validity"], 1.0)
         self.assertEqual(quality.dimensions["paper_relevance"], 0.0)
         self.assertTrue(any(issue.issue_type == "low_paper_relevance" for issue in quality.issues))
+
+    def test_missing_canonical_reading_fails_relevance_gate(self) -> None:
+        noncanonical = [
+            paper
+            for paper in self.ranked
+            if "Knowledge-Intensive NLP Tasks" not in paper.title
+        ]
+        payload = make_generation_payload([paper.paper_id for paper in noncanonical])
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            noncanonical,
+        ).output
+
+        quality = self.evaluator.evaluate(output, noncanonical)
+
+        self.assertFalse(quality.passed_hard_gates)
+        self.assertTrue(
+            any(issue.issue_type == "missing_core_paper" for issue in quality.issues)
+        )
+
+    def test_missing_paper_guidance_reduces_stage_quality(self) -> None:
+        reference = self.output.development_stages[0].representative_papers[0]
+        reference.contribution = ""
+        reference.reading_focus = []
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertLess(quality.dimensions["development_coherence"], 1.0)
+        self.assertTrue(
+            any(issue.issue_type == "weak_development_stage" for issue in quality.issues)
+        )
 
     def test_numeric_hard_gate_fails_even_when_only_warning_issue_exists(self) -> None:
         gate_results = self.evaluator._hard_gate_results(
@@ -382,6 +426,36 @@ class RepairTests(unittest.TestCase):
         self.assertTrue(
             any(action.status == "skipped" for action in repair_result.record.actions)
         )
+
+    def test_code_repair_preserves_reading_guidance_and_priority(self) -> None:
+        config = DomainOnboardingConfig(max_content_repairs=0)
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        generator = StructuredOnboardingGenerator(FakeJSONModel([payload]), config)
+        output = generator.generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+        ).output
+
+        repaired = TargetedRepairer(generator, config).code_executor.execute(
+            output, ranked
+        )
+
+        references = [
+            *repaired.development_stages[0].representative_papers,
+            *repaired.learning_path[0].papers,
+        ]
+        self.assertTrue(all(reference.contribution for reference in references))
+        self.assertTrue(all(reference.reading_focus for reference in references))
+        self.assertEqual(
+            {reference.reading_priority for reference in references},
+            {"core"},
+        )
+        self.assertTrue(all(reference.is_canonical for reference in references))
 
     def test_targeted_repair_prompt_receives_quality_issues(self) -> None:
         config = DomainOnboardingConfig()

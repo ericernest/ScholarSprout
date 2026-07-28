@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from typing import Protocol
 from urllib.parse import unquote, urlparse
 
+from .canonical_papers import CanonicalPaperRegistry
 from .config import DomainOnboardingConfig
 from .domain_context import DomainContextGuard
 from .schemas import (
     DomainResearchPlan,
     PaperCandidate,
     PaperRole,
+    ReadingPriority,
     RankedPaper,
     RankingResult,
     RankingStats,
@@ -42,6 +44,7 @@ class WeightedPaperRanker:
         vectorizer: TextVectorizer | None = None,
         fallback_vectorizer: TextVectorizer | None = None,
         context_guard: DomainContextGuard | None = None,
+        canonical_registry: CanonicalPaperRegistry | None = None,
     ):
         self.config = config
         self.vectorizer = vectorizer or TfidfTextVectorizer()
@@ -51,6 +54,7 @@ class WeightedPaperRanker:
             else (TfidfTextVectorizer() if vectorizer is not None else None)
         )
         self.context_guard = context_guard or DomainContextGuard()
+        self.canonical_registry = canonical_registry or CanonicalPaperRegistry()
 
     def rank(
         self,
@@ -124,7 +128,9 @@ class WeightedPaperRanker:
                 default=0.0,
             )
             diversity = 1.0 - nearest_neighbor
-            role = self._classify_role(paper)
+            canonical = self.canonical_registry.match(paper, plan.normalized_domain)
+            role = canonical.role if canonical else self._classify_role(paper)
+            reading_priority = self._reading_priority(role, canonical is not None)
             final = (
                 self.config.relevance_weight * relevance
                 + self.config.citation_weight * citations
@@ -141,6 +147,8 @@ class WeightedPaperRanker:
                     diversity_score=round(diversity, 6),
                     final_score=round(min(1.0, final), 6),
                     paper_role=role,
+                    reading_priority=reading_priority,
+                    is_canonical=canonical is not None,
                 )
             )
         ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
@@ -307,6 +315,12 @@ class WeightedPaperRanker:
             return "survey"
         if re.search(r"benchmark|evaluation|evaluating|dataset|评测", text):
             return "evaluation"
+        if re.search(
+            r"medical|imaging|remote sensing|segmentation|detection|forecasting|"
+            r"clinical|finance|industrial|application|应用|医学|遥感",
+            text,
+        ):
+            return "application"
         year = paper.year or 0
         current = datetime.now(timezone.utc).year
         if year and year <= current - 8 and (paper.citation_count or 0) >= 100:
@@ -316,6 +330,16 @@ class WeightedPaperRanker:
         if re.search(r"method|model|framework|architecture|algorithm", text):
             return "method"
         return "other"
+
+    @staticmethod
+    def _reading_priority(role: PaperRole, is_canonical: bool) -> ReadingPriority:
+        if is_canonical or role == "foundational":
+            return "core"
+        if role in {"survey", "method", "evaluation"}:
+            return "recommended"
+        if role in {"frontier", "application"}:
+            return "optional"
+        return "extended"
 
     def _select_mmr(
         self,
@@ -329,6 +353,7 @@ class WeightedPaperRanker:
         selected: list[RankedPaper] = []
         remaining = list(ranked)
         covered_roles: set[PaperRole] = set()
+        core_selected = False
         available_required_roles = [
             role
             for role in self.config.ranking_required_roles
@@ -364,15 +389,19 @@ class WeightedPaperRanker:
                     and paper.paper_role in uncovered_required
                     else 0.0
                 )
+                core_gate = 1.0 if paper.reading_priority == "core" and not core_selected else 0.0
                 mmr_score = (
                     self.config.mmr_lambda * paper.final_score
                     + (1.0 - self.config.mmr_lambda) * novelty
                     + role_bonus
                 )
-                scored.append((role_gate, mmr_score, paper.final_score, -index, paper))
-            _, mmr_score, _, _, chosen = max(scored, key=lambda item: item[:4])
+                scored.append(
+                    (core_gate, role_gate, mmr_score, paper.final_score, -index, paper)
+                )
+            _, _, mmr_score, _, _, chosen = max(scored, key=lambda item: item[:5])
             selected.append(chosen)
             covered_roles.add(chosen.paper_role)
+            core_selected = core_selected or chosen.reading_priority == "core"
             mmr_scores[chosen.paper_id] = round(mmr_score, 6)
             remaining.remove(chosen)
         return selected, mmr_scores

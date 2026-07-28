@@ -9,7 +9,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Preference = Literal["theory_first", "experiment_first", "balanced"]
-PaperRole = Literal["survey", "foundational", "method", "evaluation", "frontier", "other"]
+PaperRole = Literal[
+    "survey", "foundational", "method", "evaluation", "application", "frontier", "other"
+]
+ReadingPriority = Literal["core", "recommended", "optional", "extended"]
 QualityDimension = Literal[
     "structure",
     "paper_validity",
@@ -48,6 +51,7 @@ QualityIssueType = Literal[
     "unsupported_claim",
     "low_paper_relevance",
     "paper_context_mismatch",
+    "missing_core_paper",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -75,6 +79,7 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "invalid_paper": "paper_validity",
     "low_paper_relevance": "paper_relevance",
     "paper_context_mismatch": "paper_relevance",
+    "missing_core_paper": "paper_relevance",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -91,6 +96,7 @@ _HARD_GATE_ISSUES = {
     "unsupported_claim",
     "low_paper_relevance",
     "paper_context_mismatch",
+    "missing_core_paper",
 }
 _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "structure_error": "llm",
@@ -104,6 +110,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "unsupported_claim": "llm",
     "low_paper_relevance": "retrieval",
     "paper_context_mismatch": "retrieval",
+    "missing_core_paper": "retrieval",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
@@ -249,6 +256,8 @@ class RankedPaper(PaperCandidate):
     diversity_score: float = Field(ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
     paper_role: PaperRole = "other"
+    reading_priority: ReadingPriority = "optional"
+    is_canonical: bool = False
 
 
 class SelectedPaper(OnboardingModel):
@@ -264,6 +273,8 @@ class SelectedPaper(OnboardingModel):
     arxiv_id: str | None = None
     publication_types: list[str] = Field(default_factory=list)
     paper_role: PaperRole = "other"
+    reading_priority: ReadingPriority = "optional"
+    is_canonical: bool = False
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
     context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -280,6 +291,9 @@ class PaperReference(OnboardingModel):
     year: int | None = None
     url: str
     contribution: str = ""
+    reading_focus: list[str] = Field(default_factory=list)
+    reading_priority: ReadingPriority = "optional"
+    is_canonical: bool = False
 
 
 class Prerequisite(OnboardingModel):
@@ -411,7 +425,7 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
-    policy_version: str = "domain-quality-v1.2.0"
+    policy_version: str = "domain-quality-v1.3.0"
     policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -464,7 +478,7 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
-    policy_version: str = "domain-quality-v1.2.0"
+    policy_version: str = "domain-quality-v1.3.0"
     policy_fingerprint: str | None = None
     adaptive_policy_version: str | None = None
     shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
@@ -526,7 +540,7 @@ class KnowledgeGraphSnapshot(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
-    policy_version: str = "domain-quality-v1.2.0"
+    policy_version: str = "domain-quality-v1.3.0"
     policy_fingerprint: str | None = None
     status: Literal[
         "ok",
