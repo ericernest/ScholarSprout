@@ -45,3 +45,11 @@ class OpenAIClient:
             kwargs["tool_choice"] = tool_choice
 
         return self.client.chat.completions.create(**kwargs)
+
+    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+        """Create dense vectors through an OpenAI-compatible embedding endpoint."""
+        if not texts:
+            return []
+        response = self.client.embeddings.create(model=model, input=texts)
+        ordered = sorted(response.data, key=lambda item: item.index)
+        return [list(item.embedding) for item in ordered]

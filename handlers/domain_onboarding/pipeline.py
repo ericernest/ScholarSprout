@@ -41,6 +41,7 @@ from .schemas import (
     RepairRecord,
     RetrievalStats,
 )
+from .text_similarity import CachedEmbeddingTextVectorizer, OpenAIEmbeddingProvider
 
 
 class DomainOnboardingPipeline:
@@ -611,6 +612,16 @@ def create_default_pipeline(
         "cache_ttl_seconds": settings.retrieval_cache_ttl_seconds,
         "cache_max_entries": settings.retrieval_cache_max_entries,
     }
+    embedding_model = os.getenv("DOMAIN_ONBOARDING_EMBEDDING_MODEL", "").strip()
+    vectorizer = (
+        CachedEmbeddingTextVectorizer(
+            OpenAIEmbeddingProvider(model, embedding_model),
+            batch_size=settings.embedding_batch_size,
+            cache_max_entries=settings.embedding_cache_max_entries,
+        )
+        if embedding_model
+        else None
+    )
     return DomainOnboardingPipeline(
         profile_builder=RuleBasedProfileBuilder(),
         planner=StormLitePlanner(model, settings),
@@ -637,7 +648,7 @@ def create_default_pipeline(
             circuit_cooldown_seconds=settings.retrieval_circuit_cooldown_seconds,
             stale_cache_seconds=settings.retrieval_stale_cache_seconds,
         ),
-        ranker=WeightedPaperRanker(settings),
+        ranker=WeightedPaperRanker(settings, vectorizer=vectorizer),
         generator=generator,
         evaluator=CompositeQualityEvaluator(settings),
         repairer=TargetedRepairer(generator, settings),
