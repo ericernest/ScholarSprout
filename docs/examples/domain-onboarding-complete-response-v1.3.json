@@ -1,0 +1,222 @@
+{
+  "session_id": "web-2f8e2a62",
+  "channel": "web",
+  "direction": "outbound",
+  "mode": "domain_onboarding",
+  "content": {
+    "domain": "检索增强生成",
+    "text": "检索增强生成（RAG）通过在生成前检索外部证据，降低参数知识过时和不可追溯的问题。入门时应将信息检索、上下文构造、受证据约束的生成和端到端评测作为一条完整链路学习。",
+    "learner_profile": {
+      "background": ["Python", "Transformer"],
+      "goal": "建立 RAG 知识框架并完成基线实验",
+      "time_budget_weeks": 6,
+      "preference": "experiment_first"
+    },
+    "prerequisites": [
+      {
+        "prerequisite_id": "pre-information-retrieval",
+        "name": "信息检索基础",
+        "why_needed": "理解召回、排序与检索误差如何传递到生成端。",
+        "key_points": ["BM25", "向量检索", "Recall@K"],
+        "related_paper_ids": ["paper-dpr"]
+      },
+      {
+        "prerequisite_id": "pre-transformer",
+        "name": "Transformer 与语言模型",
+        "why_needed": "理解检索文档如何作为上下文改变生成分布。",
+        "key_points": ["自注意力", "上下文窗口", "条件生成"],
+        "related_paper_ids": ["paper-rag"]
+      },
+      {
+        "prerequisite_id": "pre-evaluation",
+        "name": "机器学习评测",
+        "why_needed": "将检索质量、答案质量与证据一致性分开测量。",
+        "key_points": ["离线指标", "人工评测", "误差分析"],
+        "related_paper_ids": ["paper-ragas"]
+      }
+    ],
+    "development_stages": [
+      {
+        "stage_id": "stage-retrieval-foundation",
+        "name": "密集检索奠基",
+        "summary": "使用双编码器将问题和段落投影到同一向量空间。",
+        "motivation": "传统关键词检索难以覆盖语义改写。",
+        "representative_papers": [
+          {
+            "paper_id": "paper-dpr",
+            "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+            "authors": ["Vladimir Karpukhin", "Barlas Oguz", "Sewon Min"],
+            "year": 2020,
+            "url": "https://arxiv.org/abs/2004.04906",
+            "contribution": "建立密集段落检索基线，帮助理解 RAG 的检索器来源。",
+            "reading_focus": ["双编码器训练目标", "负样本构造", "召回指标"],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "core_concepts": ["双编码器", "最大内积搜索"],
+        "main_techniques": ["密集向量索引", "in-batch negatives"],
+        "open_problems": ["领域迁移", "难负样本偏差"],
+        "related_paper_ids": ["paper-dpr"],
+        "prerequisite_ids": ["pre-information-retrieval"]
+      },
+      {
+        "stage_id": "stage-grounded-generation",
+        "name": "检索与生成联合",
+        "summary": "将检索到的外部文档作为潜变量或显式上下文参与生成。",
+        "motivation": "让模型在不重新训练的情况下使用可更新知识。",
+        "representative_papers": [
+          {
+            "paper_id": "paper-rag",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "authors": ["Patrick Lewis", "Ethan Perez", "Aleksandra Piktus"],
+            "year": 2020,
+            "url": "https://arxiv.org/abs/2005.11401",
+            "contribution": "作为 RAG 奠基阅读，连接检索器、生成器与知识密集任务。",
+            "reading_focus": ["RAG-Sequence 与 RAG-Token", "联合训练目标", "实验任务设置"],
+            "reading_priority": "core",
+            "is_canonical": true
+          }
+        ],
+        "core_concepts": ["非参数记忆", "证据条件生成"],
+        "main_techniques": ["top-k 文档边缘化", "检索-生成组合"],
+        "open_problems": ["检索噪声", "引用与生成不一致"],
+        "related_paper_ids": ["paper-rag"],
+        "prerequisite_ids": ["pre-transformer", "pre-information-retrieval"]
+      },
+      {
+        "stage_id": "stage-rag-evaluation",
+        "name": "端到端评测与可靠性",
+        "summary": "将忠实度、答案相关性和上下文质量分解评估。",
+        "motivation": "只看最终答案指标无法定位检索器或生成器的错误。",
+        "representative_papers": [
+          {
+            "paper_id": "paper-ragas",
+            "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation",
+            "authors": ["Shahul Es", "Jithin James", "Luis Espinosa-Anke"],
+            "year": 2023,
+            "url": "https://arxiv.org/abs/2309.15217",
+            "contribution": "提供 RAG 系统的分维度评测视角。",
+            "reading_focus": ["指标定义", "无参考评测假设", "与人工判断的关系"],
+            "reading_priority": "recommended",
+            "is_canonical": true
+          }
+        ],
+        "core_concepts": ["忠实度", "上下文精度"],
+        "main_techniques": ["LLM-as-judge", "分维度诊断"],
+        "open_problems": ["评估器偏差", "跨语言证据判断"],
+        "related_paper_ids": ["paper-ragas"],
+        "prerequisite_ids": ["pre-evaluation"]
+      }
+    ],
+    "current_landscape": {
+      "problems": ["检索噪声会诱导生成", "长上下文中证据利用不稳定", "端到端评测难以区分错误来源"],
+      "subdirections": ["检索与重排序", "自适应检索", "证据约束生成", "RAG 评测与可观测性"],
+      "subdirection_ids": {
+        "检索与重排序": "sub-retrieval",
+        "自适应检索": "sub-adaptive",
+        "证据约束生成": "sub-grounding",
+        "RAG 评测与可观测性": "sub-evaluation"
+      }
+    },
+    "learning_path": [
+      {
+        "step": "1",
+        "goal": "补齐检索与评测基础",
+        "topics": ["BM25", "密集检索", "Recall@K"],
+        "papers": [{"paper_id": "paper-dpr", "title": "Dense Passage Retrieval for Open-Domain Question Answering", "authors": ["Vladimir Karpukhin", "Barlas Oguz", "Sewon Min"], "year": 2020, "url": "https://arxiv.org/abs/2004.04906", "contribution": "建立密集段落检索基线。", "reading_focus": ["双编码器训练目标", "负样本构造"], "reading_priority": "recommended", "is_canonical": false}],
+        "paper_ids": ["paper-dpr"],
+        "activities": ["在小型语料上对比 BM25 与向量检索"],
+        "completion_criteria": ["能计算 Recall@K 并解释两类检索的失败样例"],
+        "expected_outcome": "得到一份检索基线实验记录。"
+      },
+      {
+        "step": "2",
+        "goal": "理解 RAG 核心建模方式",
+        "topics": ["非参数记忆", "RAG-Sequence", "RAG-Token"],
+        "papers": [{"paper_id": "paper-rag", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": ["Patrick Lewis", "Ethan Perez", "Aleksandra Piktus"], "year": 2020, "url": "https://arxiv.org/abs/2005.11401", "contribution": "连接检索器、生成器与知识密集任务。", "reading_focus": ["RAG-Sequence 与 RAG-Token", "联合训练目标"], "reading_priority": "core", "is_canonical": true}],
+        "paper_ids": ["paper-rag"],
+        "activities": ["绘制论文的检索-生成数据流图"],
+        "completion_criteria": ["能说明两种 RAG 建模方式的差别"],
+        "expected_outcome": "形成 RAG 核心机制笔记。"
+      },
+      {
+        "step": "3",
+        "goal": "实现一个可运行的 RAG 基线",
+        "topics": ["文档切分", "embedding", "prompt 构造"],
+        "papers": [{"paper_id": "paper-rag", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": ["Patrick Lewis", "Ethan Perez", "Aleksandra Piktus"], "year": 2020, "url": "https://arxiv.org/abs/2005.11401", "contribution": "作为基线系统的方法参考。", "reading_focus": ["输入输出接口", "检索文档与生成的组合"], "reading_priority": "core", "is_canonical": true}],
+        "paper_ids": ["paper-rag"],
+        "activities": ["实现索引、top-k 检索和带引用的生成链路", "记录实验配置与结果"],
+        "completion_criteria": ["使用固定测试集运行端到端基线"],
+        "expected_outcome": "交付可重复运行的基线代码。"
+      },
+      {
+        "step": "4",
+        "goal": "建立分层评测与误差分析",
+        "topics": ["检索评测", "忠实度", "答案相关性"],
+        "papers": [{"paper_id": "paper-ragas", "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation", "authors": ["Shahul Es", "Jithin James", "Luis Espinosa-Anke"], "year": 2023, "url": "https://arxiv.org/abs/2309.15217", "contribution": "提供可作为误差分析起点的分维度评测。", "reading_focus": ["指标假设", "评估器偏差"], "reading_priority": "recommended", "is_canonical": true}],
+        "paper_ids": ["paper-ragas"],
+        "activities": ["对 20 个失败样例标注检索错误或生成错误"],
+        "completion_criteria": ["得到按错误类型分组的评测报告"],
+        "expected_outcome": "能定位基线的主要质量瓶颈。"
+      },
+      {
+        "step": "5",
+        "goal": "选择一个可验证的改进方向",
+        "topics": ["自适应检索", "重排序", "证据一致性"],
+        "papers": [{"paper_id": "paper-ragas", "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation", "authors": ["Shahul Es", "Jithin James", "Luis Espinosa-Anke"], "year": 2023, "url": "https://arxiv.org/abs/2309.15217", "contribution": "用评测维度限定改进目标。", "reading_focus": ["指标与人工判断的一致性"], "reading_priority": "recommended", "is_canonical": true}],
+        "paper_ids": ["paper-ragas"],
+        "activities": ["只改变一个变量并与基线对比"],
+        "completion_criteria": ["改进结果有可复核指标和失败分析"],
+        "expected_outcome": "形成一个可继续研究的小型选题。"
+      }
+    ],
+    "papers": [
+      {"paper_id": "paper-rag", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": ["Patrick Lewis", "Ethan Perez", "Aleksandra Piktus"], "abstract": "Retrieval-augmented generation combines parametric and non-parametric memory for knowledge-intensive NLP tasks.", "year": 2020, "url": "https://arxiv.org/abs/2005.11401", "citation_count": 9500, "source": "semantic_scholar", "matched_queries": ["retrieval augmented generation foundational"], "doi": null, "arxiv_id": "2005.11401", "publication_types": ["JournalArticle"], "paper_role": "foundational", "reading_priority": "core", "is_canonical": true, "relevance_score": 0.94, "context_score": 1.0, "final_score": 0.91},
+      {"paper_id": "paper-dpr", "title": "Dense Passage Retrieval for Open-Domain Question Answering", "authors": ["Vladimir Karpukhin", "Barlas Oguz", "Sewon Min"], "abstract": "We show that retrieval can be implemented using dense representations alone.", "year": 2020, "url": "https://arxiv.org/abs/2004.04906", "citation_count": 6200, "source": "semantic_scholar", "matched_queries": ["dense retrieval RAG"], "doi": null, "arxiv_id": "2004.04906", "publication_types": ["Conference"], "paper_role": "method", "reading_priority": "recommended", "is_canonical": false, "relevance_score": 0.86, "context_score": 1.0, "final_score": 0.82},
+      {"paper_id": "paper-ragas", "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation", "authors": ["Shahul Es", "Jithin James", "Luis Espinosa-Anke"], "abstract": "We introduce a framework for reference-free evaluation of retrieval augmented generation pipelines.", "year": 2023, "url": "https://arxiv.org/abs/2309.15217", "citation_count": 1200, "source": "semantic_scholar", "matched_queries": ["RAG evaluation benchmark"], "doi": null, "arxiv_id": "2309.15217", "publication_types": ["Conference"], "paper_role": "evaluation", "reading_priority": "recommended", "is_canonical": true, "relevance_score": 0.89, "context_score": 1.0, "final_score": 0.84}
+    ],
+    "evidence_claims": [
+      {"claim_id": "claim-rag-memory", "claim": "RAG 将参数化语言模型与非参数检索记忆结合。", "supporting_paper_ids": ["paper-rag"], "support_type": "abstract_explicit"},
+      {"claim_id": "claim-dense-retrieval", "claim": "密集检索可以使用学习到的问题和段落表示完成候选召回。", "supporting_paper_ids": ["paper-dpr"], "support_type": "abstract_explicit"},
+      {"claim_id": "claim-rag-evaluation", "claim": "RAG 评测需要区分证据忠实度、答案相关性和检索上下文质量。", "supporting_paper_ids": ["paper-ragas"], "support_type": "metadata_inference"}
+    ],
+    "status": "ok",
+    "mode": "domain_onboarding",
+    "query": "我已经学过 Transformer，希望六周入门 RAG，并完成一个基线实验",
+    "policy_version": "domain-quality-v1.3.0",
+    "policy_fingerprint": "6d57ad45f97a7bca03fdd38b6f97446f6b5cfeb7a9b711b525b62df68342ef10",
+    "quality": {
+      "policy_version": "domain-quality-v1.3.0",
+      "policy_fingerprint": "6d57ad45f97a7bca03fdd38b6f97446f6b5cfeb7a9b711b525b62df68342ef10",
+      "score": 0.91,
+      "threshold": 0.75,
+      "passed_hard_gates": true,
+      "dimensions": {"structure": 1.0, "paper_validity": 1.0, "paper_relevance": 0.91, "evidence_grounding": 0.84, "topic_coverage": 1.0, "development_coherence": 1.0, "learning_path": 1.0, "goal_alignment": 1.0},
+      "issues": [{"issue_id": "issue-weak-evidence", "issue_type": "unsupported_claim", "severity": "warning", "dimension": "evidence_grounding", "hard_gate": false, "repairability": "llm", "target_path": "evidence_claims[2]", "message": "该声明使用元数据推断，不应表述为论文已直接证明的结论。", "recommended_action": "保留限定性措辞，或补充可直接验证的摘要证据。"}],
+      "attempts": 1,
+      "selected_attempt": 1,
+      "retry_status": "not_needed",
+      "state": "passed",
+      "hard_gates": [
+        {"gate": "required_structure", "status": "passed", "issue_ids": [], "score": 1.0, "threshold": 1.0},
+        {"gate": "paper_identity", "status": "passed", "issue_ids": [], "score": 1.0, "threshold": 1.0},
+        {"gate": "paper_relevance", "status": "passed", "issue_ids": [], "score": 0.91, "threshold": 0.7},
+        {"gate": "evidence_support", "status": "passed", "issue_ids": [], "score": 0.84, "threshold": 0.75}
+      ],
+      "evidence_validation_modes": {"multilingual_embedding": 2, "metadata_inference": 1}
+    },
+    "quality_attempts": [
+      {"attempt_number": 1, "source": "initial", "quality": {"policy_version": "domain-quality-v1.3.0", "policy_fingerprint": "6d57ad45f97a7bca03fdd38b6f97446f6b5cfeb7a9b711b525b62df68342ef10", "score": 0.91, "threshold": 0.75, "passed_hard_gates": true, "dimensions": {"structure": 1.0, "paper_validity": 1.0, "paper_relevance": 0.91, "evidence_grounding": 0.84, "topic_coverage": 1.0, "development_coherence": 1.0, "learning_path": 1.0, "goal_alignment": 1.0}, "issues": [], "attempts": 1, "selected_attempt": 1, "retry_status": "not_needed", "state": "passed", "hard_gates": [], "evidence_validation_modes": {"multilingual_embedding": 2, "metadata_inference": 1}}, "duration_ms": 18.7}
+    ],
+    "repair_record": {
+      "policy_version": "domain-quality-v1.3.0",
+      "policy_fingerprint": "6d57ad45f97a7bca03fdd38b6f97446f6b5cfeb7a9b711b525b62df68342ef10",
+      "adaptive_policy_version": null,
+      "shadow_recommendations": {},
+      "triggered": false,
+      "actions": [],
+      "decision": {"selected_attempt": 1, "decision": "initial_selected", "reasons": [], "score_delta": 0.0, "dimension_deltas": {}}
+    }
+  }
+}

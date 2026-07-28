@@ -13,6 +13,7 @@ NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助�
 - 功能开发说明：[docs/development-guide.md](docs/development-guide.md)
 - Git 分支开发流程：[docs/git-workflow.md](docs/git-workflow.md)
 - 领域入门 V1：[docs/domain-onboarding-v1.md](docs/domain-onboarding-v1.md)
+- 领域入门前后端交接：[docs/领域入门-前后端接口与展示方案.md](docs/领域入门-前后端接口与展示方案.md)
 - 论文精读后端交接：[docs/论文精读-后端功能与接口交接文档.md](docs/论文精读-后端功能与接口交接文档.md)
 - 论文精读前端方案：[docs/论文精读-前端接口与展示方案.md](docs/论文精读-前端接口与展示方案.md)
 - 论文精读原始设计：[DOCX](docs/reference/paper-reading/论文精读.docx) /

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07120f" />
+    <title>领域学习工作台 · NoviceSynapse</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/domain-onboarding/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/"><span>N</span>NoviceSynapse</a>
+      <div class="workspace-state"><i id="status-dot"></i><span id="workspace-status">领域学习工作台</span></div>
+      <nav><button id="new-plan-button" type="button">新建路线</button><a href="/app">返回对话</a></nav>
+    </header>
+
+    <main>
+      <section id="intake-view" class="intake-view">
+        <div class="hero">
+          <p class="eyebrow">Domain learning studio</p>
+          <h1>从一个领域名称，到一条有证据的学习路线。</h1>
+          <p>系统会规划领域、检索并验证论文，再根据你的背景生成阶段化学习计划。</p>
+        </div>
+        <form id="onboarding-form" class="intake-card">
+          <label class="full">想入门的领域
+            <textarea id="domain-query" rows="3" placeholder="例如：我已经学过 Transformer，想用 6 周入门 RAG 并完成一个基线实验" required></textarea>
+          </label>
+          <label>已有背景<input id="profile-background" type="text" placeholder="Python, Transformer" /></label>
+          <label>学习目标<input id="profile-goal" type="text" placeholder="建立知识框架并完成基线实验" /></label>
+          <label>时间预算（周）<input id="profile-weeks" type="number" min="1" max="104" placeholder="6" /></label>
+          <label>学习偏好<select id="profile-preference"><option value="balanced">理论与实验平衡</option><option value="theory_first">理论优先</option><option value="experiment_first">实验优先</option></select></label>
+          <button class="primary-button full" type="submit">生成领域学习路线 <span>→</span></button>
+        </form>
+        <div id="restore-card" class="restore-card" hidden><div><strong>找到上次的领域路线</strong><p id="restore-copy"></p></div><button id="restore-button" type="button">继续学习</button></div>
+      </section>
+
+      <section id="loading-view" class="loading-view" hidden>
+        <div class="orbit"><span></span></div><p class="eyebrow">Grounded generation</p><h1 id="loading-title">正在规划领域</h1><p id="loading-detail">需要完成论文检索、排序、证据验证和质量评估，请稍候。</p>
+        <ol id="loading-steps"><li class="active">需求与画像</li><li>领域规划</li><li>论文检索</li><li>内容生成</li><li>质量检查</li></ol>
+      </section>
+
+      <section id="error-view" class="error-view" hidden><span>!</span><h1>未能完成这次领域入门</h1><p id="error-message"></p><button id="retry-button" class="primary-button" type="button">返回修改输入</button></section>
+
+      <section id="workbench-view" class="workbench-view" hidden>
+        <header class="result-ribbon">
+          <div><p id="result-meta" class="eyebrow"></p><h1 id="result-domain"></h1><p id="result-summary"></p></div>
+          <div id="quality-badge" class="quality-badge"></div>
+        </header>
+        <div class="workspace-grid">
+          <aside class="panel navigator-panel">
+            <section><p class="panel-label">Learner profile</p><div id="profile-summary"></div></section>
+            <section><p class="panel-label">Navigation</p><nav id="section-navigation"></nav></section>
+            <section><p class="panel-label">Prerequisites</p><div id="prerequisite-list"></div></section>
+          </aside>
+
+          <article class="panel learning-panel">
+            <section id="overview-section" class="content-section"><div class="section-title"><span>01</span><div><p class="panel-label">Landscape</p><h2>领域全景</h2></div></div><div id="landscape-content"></div></section>
+            <section id="stages-section" class="content-section"><div class="section-title"><span>02</span><div><p class="panel-label">Evolution</p><h2>发展阶段</h2></div></div><div id="stage-timeline" class="timeline"></div></section>
+            <section id="path-section" class="content-section"><div class="section-title"><span>03</span><div><p class="panel-label">Learning path</p><h2>五阶段学习路线</h2></div></div><div id="learning-path" class="learning-path"></div></section>
+            <details id="quality-section" class="quality-details"><summary>质量评估与修复记录 <span id="quality-summary"></span></summary><div id="quality-content"></div></details>
+          </article>
+
+          <aside class="panel evidence-panel">
+            <section><div class="panel-heading"><div><p class="panel-label">Reading list</p><h2>代表论文</h2></div><span id="paper-count"></span></div><div id="paper-filters" class="filter-row"></div><div id="paper-list"></div></section>
+            <section><p class="panel-label">Evidence</p><h2>证据声明</h2><div id="evidence-list"></div></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script type="module" src="/static/domain-onboarding/app.js"></script>
+  </body>
+</html>
