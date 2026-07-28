@@ -35,6 +35,46 @@ class OpenAIEmbeddingProvider:
         return method(texts, model=self.embedding_model)
 
 
+class MultilingualEvidenceTextVectorizer:
+    """Adds a small, deterministic terminology bridge before lexical fallback."""
+
+    name = "multilingual_tfidf"
+    _TERMS = {
+        "检索": "retrieval",
+        "增强": "augmented augmentation",
+        "生成": "generation generate",
+        "证据": "evidence",
+        "事实": "factual factuality",
+        "幻觉": "hallucination",
+        "图神经网络": "graph neural network",
+        "扩散模型": "diffusion model",
+        "多模态": "multimodal",
+        "智能体": "agent",
+        "辩论": "debate",
+        "方法": "method",
+        "模型": "model",
+        "评测": "evaluation benchmark",
+        "基准": "benchmark",
+        "训练": "training",
+        "推理": "reasoning inference",
+    }
+
+    def __init__(self, base: TextVectorizer | None = None) -> None:
+        self.base = base or TfidfTextVectorizer()
+
+    def vectorize(self, texts: list[str]) -> list[SparseVector]:
+        return self.base.vectorize([self.expand(text) for text in texts])
+
+    @classmethod
+    def expand(cls, text: str) -> str:
+        bridged = [english for chinese, english in cls._TERMS.items() if chinese in text]
+        return " ".join([text, *bridged])
+
+    @classmethod
+    def has_bridge_terms(cls, text: str) -> bool:
+        return any(term in text for term in cls._TERMS)
+
+
 def tokenize(text: str) -> list[str]:
     normalized = text.lower()
     tokens = re.findall(r"[a-z0-9]+", normalized)
