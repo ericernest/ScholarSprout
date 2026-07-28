@@ -53,7 +53,10 @@ class StormLitePlanner:
         )
         try:
             payload, stats = invoke_json(
-                self.model, system_prompt=system_prompt, user_prompt=user_prompt
+                self.model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=self.config.planning_max_tokens,
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:

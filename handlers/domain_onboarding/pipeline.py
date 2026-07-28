@@ -665,6 +665,7 @@ def create_default_pipeline(
             circuit_failure_threshold=settings.retrieval_circuit_failure_threshold,
             circuit_cooldown_seconds=settings.retrieval_circuit_cooldown_seconds,
             stale_cache_seconds=settings.retrieval_stale_cache_seconds,
+            max_queries_per_source=settings.retrieval_queries_per_source,
         ),
         ranker=WeightedPaperRanker(settings, vectorizer=vectorizer),
         generator=generator,

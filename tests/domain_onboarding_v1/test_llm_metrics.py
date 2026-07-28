@@ -8,6 +8,18 @@ from .fakes import FakeJSONModel
 
 
 class FailedLLMCallMetricsTests(unittest.TestCase):
+    def test_max_tokens_is_forwarded_to_model(self) -> None:
+        model = FakeJSONModel([{"ok": True}])
+
+        invoke_json(
+            model,
+            system_prompt="system",
+            user_prompt="user",
+            max_tokens=1234,
+        )
+
+        self.assertEqual(model.calls[0]["max_tokens"], 1234)
+
     def test_invalid_json_error_preserves_reported_usage(self) -> None:
         model = FakeJSONModel(["not json"])
 

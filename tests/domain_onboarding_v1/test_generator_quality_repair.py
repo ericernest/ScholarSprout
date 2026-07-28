@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from handlers.domain_onboarding.config import DomainOnboardingConfig
@@ -44,6 +45,34 @@ class GeneratorTests(unittest.TestCase):
         canonical = {paper.paper_id: paper for paper in self.ranked}
         for paper in output.papers:
             self.assertEqual(paper.title, canonical[paper.paper_id].title)
+
+    def test_generator_sends_compact_grounding_context_and_token_limit(self) -> None:
+        config = self.config.model_copy(
+            update={
+                "generation_paper_abstract_max_chars": 200,
+                "generation_max_tokens": 4321,
+            }
+        )
+        ranked = list(self.ranked)
+        ranked[0] = ranked[0].model_copy(update={"abstract": "x" * 1000})
+        model = FakeJSONModel(
+            [make_generation_payload([paper.paper_id for paper in ranked])]
+        )
+
+        StructuredOnboardingGenerator(model, config).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+        )
+
+        call = model.calls[0]
+        prompt = json.loads(call["messages"][1]["content"])
+        paper = prompt["allowed_papers"][0]
+        self.assertEqual(call["max_tokens"], 4321)
+        self.assertEqual(len(paper["abstract"]), 200)
+        self.assertNotIn("authors", paper)
+        self.assertNotIn("url", paper)
 
     def test_learning_path_is_fixed_order_and_profile_sensitive(self) -> None:
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])

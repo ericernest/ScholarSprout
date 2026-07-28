@@ -230,6 +230,22 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(len(result.papers), 1)
         self.assertTrue(result.stats.errors)
 
+    def test_composite_caps_queries_sent_to_each_source(self) -> None:
+        observed: list[list[str]] = []
+
+        class Working:
+            def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+                observed.append(queries)
+                return RetrievalResult(papers=make_candidates(1))
+
+        result = CompositePaperRetriever(
+            [Working(), Working()],
+            max_queries_per_source=2,
+        ).search(["q1", "q2", "q3", "q4"], limit_per_query=1)
+
+        self.assertTrue(result.papers)
+        self.assertEqual(observed, [["q1", "q2"], ["q1", "q2"]])
+
 
 class RankingTests(unittest.TestCase):
     def setUp(self) -> None:

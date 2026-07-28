@@ -451,6 +451,7 @@ class CompositePaperRetriever:
         circuit_failure_threshold: int = 3,
         circuit_cooldown_seconds: float = 30.0,
         stale_cache_seconds: float = 86400.0,
+        max_queries_per_source: int | None = None,
         clock: Callable[[], float] = monotonic,
     ):
         if not retrievers:
@@ -460,6 +461,9 @@ class CompositePaperRetriever:
         if self.max_workers < 1:
             raise ValueError("max_workers must be positive")
         self.stale_cache_seconds = stale_cache_seconds
+        if max_queries_per_source is not None and max_queries_per_source < 1:
+            raise ValueError("max_queries_per_source must be positive")
+        self.max_queries_per_source = max_queries_per_source
         self._clock = clock
         self._circuits = {
             self._source_name(retriever): ProviderCircuitBreaker(
@@ -471,6 +475,11 @@ class CompositePaperRetriever:
         }
 
     def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
+        source_queries = (
+            queries[: self.max_queries_per_source]
+            if self.max_queries_per_source is not None
+            else queries
+        )
         source_batches: dict[int, list[PaperCandidate]] = {}
         combined_stats = RetrievalStats()
         workers = min(self.max_workers, len(self.retrievers))
@@ -480,7 +489,7 @@ class CompositePaperRetriever:
                 source_name = self._source_name(retriever)
                 circuit = self._circuits[source_name]
                 if not circuit.allow_request():
-                    stale = self._stale_results(retriever, queries, limit_per_query)
+                    stale = self._stale_results(retriever, source_queries, limit_per_query)
                     source_batches[index] = stale
                     provider = ProviderRetrievalStats(
                         provider=source_name,
@@ -497,7 +506,7 @@ class CompositePaperRetriever:
                 futures[index] = executor.submit(
                     self._search_source,
                     retriever,
-                    queries,
+                    source_queries,
                     limit_per_query,
                 )
 
@@ -523,7 +532,7 @@ class CompositePaperRetriever:
 
                 self._circuits[source_name].record_failure()
                 error_stats = error.stats if isinstance(error, PaperRetrievalError) else RetrievalStats()
-                stale = self._stale_results(retriever, queries, limit_per_query)
+                stale = self._stale_results(retriever, source_queries, limit_per_query)
                 source_batches[index] = stale
                 provider = self._provider_stats(
                     source_name,
