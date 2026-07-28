@@ -7,7 +7,11 @@
 ```text
 DOMAIN_ONBOARDING_AUDIT_DIR=/var/lib/novicesynapse/audit
 DOMAIN_ONBOARDING_AUDIT_FSYNC=1
-DOMAIN_ONBOARDING_EMBEDDING_MODEL=<multilingual-embedding-model>
+# 推荐：本地 ONNX 多语言 embedding，不需要远程 embedding API 权限
+DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/novicesynapse/embeddings
+# 如需改用 OpenAI-compatible embedding API，则不设置上述 LOCAL 变量：
+# DOMAIN_ONBOARDING_EMBEDDING_MODEL=<multilingual-embedding-model>
 SEMANTIC_SCHOLAR_API_KEY=<optional>
 CROSSREF_MAILTO=<operations-email>
 ```

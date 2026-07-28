@@ -6,7 +6,7 @@ import math
 import re
 from collections import Counter, OrderedDict
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
 
 SparseVector = dict[str, float]
 
@@ -33,6 +33,41 @@ class OpenAIEmbeddingProvider:
         if not callable(method):
             raise TypeError("configured model does not support embeddings")
         return method(texts, model=self.embedding_model)
+
+
+class FastEmbedProvider:
+    """Local ONNX embedding provider backed by the optional FastEmbed package."""
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        cache_dir: str | None = None,
+        encoder: Any | None = None,
+    ) -> None:
+        if not model_name.strip():
+            raise ValueError("model_name must not be empty")
+        self.model_name = model_name.strip()
+        if encoder is not None:
+            self.encoder = encoder
+            return
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:
+            raise RuntimeError(
+                "local embeddings require the optional dependency: "
+                "pip install 'NoviceSynapse[embeddings]'"
+            ) from exc
+        kwargs = {"model_name": self.model_name}
+        if cache_dir:
+            kwargs["cache_dir"] = cache_dir
+        self.encoder = TextEmbedding(**kwargs)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [
+            vector.tolist() if hasattr(vector, "tolist") else list(vector)
+            for vector in self.encoder.embed(texts)
+        ]
 
 
 class MultilingualEvidenceTextVectorizer:

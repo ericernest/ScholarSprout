@@ -9,6 +9,7 @@ from handlers.domain_onboarding.pipeline import create_default_pipeline
 from handlers.domain_onboarding.schemas import PaperCandidate
 from handlers.domain_onboarding.text_similarity import (
     CachedEmbeddingTextVectorizer,
+    FastEmbedProvider,
     OpenAIEmbeddingProvider,
     TfidfTextVectorizer,
     cosine_similarity,
@@ -18,6 +19,28 @@ from .fakes import make_plan
 
 
 class TextSimilarityTests(unittest.TestCase):
+    def test_fastembed_adapter_converts_local_vectors(self) -> None:
+        class Vector:
+            def __init__(self, values: list[float]) -> None:
+                self.values = values
+
+            def tolist(self) -> list[float]:
+                return self.values
+
+        class Encoder:
+            def embed(self, texts: list[str]):
+                return (
+                    Vector([float(index), 1.0])
+                    for index, _ in enumerate(texts)
+                )
+
+        provider = FastEmbedProvider("multilingual-test", encoder=Encoder())
+
+        self.assertEqual(
+            provider.embed(["中文", "English"]),
+            [[0.0, 1.0], [1.0, 1.0]],
+        )
+
     def test_tfidf_cosine_prefers_related_text(self) -> None:
         vectors = TfidfTextVectorizer().vectorize(
             [
@@ -67,6 +90,37 @@ class TextSimilarityTests(unittest.TestCase):
             pipeline = create_default_pipeline(Model())
         try:
             self.assertEqual(pipeline.ranker.vectorizer.name, "embedding")
+        finally:
+            pipeline.close()
+
+    def test_default_pipeline_prefers_local_embedding_model(self) -> None:
+        class Provider:
+            def __init__(self, model_name: str, *, cache_dir: str | None = None) -> None:
+                self.model_name = model_name
+                self.cache_dir = cache_dir
+
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[1.0] for _ in texts]
+
+        with (
+            patch(
+                "handlers.domain_onboarding.pipeline.FastEmbedProvider",
+                Provider,
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL": "local-multilingual",
+                    "DOMAIN_ONBOARDING_EMBEDDING_MODEL": "remote-model",
+                    "DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR": "/tmp/embedding-cache",
+                },
+            ),
+        ):
+            pipeline = create_default_pipeline(object())
+        try:
+            provider = pipeline.ranker.vectorizer.provider
+            self.assertEqual(provider.model_name, "local-multilingual")
+            self.assertEqual(provider.cache_dir, "/tmp/embedding-cache")
         finally:
             pipeline.close()
 
