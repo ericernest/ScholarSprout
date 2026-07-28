@@ -13,6 +13,7 @@ PaperRole = Literal["survey", "foundational", "method", "evaluation", "frontier"
 QualityDimension = Literal[
     "structure",
     "paper_validity",
+    "paper_relevance",
     "evidence_grounding",
     "topic_coverage",
     "development_coherence",
@@ -45,6 +46,7 @@ QualityIssueType = Literal[
     "format_error",
     "missing_evidence",
     "unsupported_claim",
+    "low_paper_relevance",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -70,6 +72,7 @@ KnowledgeEdgeType = Literal[
 _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "structure_error": "structure",
     "invalid_paper": "paper_validity",
+    "low_paper_relevance": "paper_relevance",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -84,6 +87,7 @@ _HARD_GATE_ISSUES = {
     "format_error",
     "missing_evidence",
     "unsupported_claim",
+    "low_paper_relevance",
 }
 _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "structure_error": "llm",
@@ -95,6 +99,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "format_error": "code",
     "missing_evidence": "llm",
     "unsupported_claim": "llm",
+    "low_paper_relevance": "retrieval",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)

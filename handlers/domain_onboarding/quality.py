@@ -51,6 +51,7 @@ class CompositeQualityEvaluator:
         dimensions = {
             "structure": self.evaluate_structure_quality(output, issues),
             "paper_validity": self.evaluate_paper_validity(output, allowed_papers, issues),
+            "paper_relevance": self.evaluate_paper_relevance(output, allowed_papers, issues),
             "evidence_grounding": evidence.score,
             "topic_coverage": self.evaluate_topic_coverage(output, issues),
             "development_coherence": self.evaluate_development_coherence(output, issues),
@@ -184,6 +185,39 @@ class CompositeQualityEvaluator:
             )
         return score
 
+    def evaluate_paper_relevance(
+        self,
+        output: DomainOnboardingOutput,
+        allowed_papers: list[RankedPaper],
+        issues: list[QualityIssue],
+    ) -> float:
+        allowed = {paper.paper_id: paper for paper in allowed_papers}
+        selected = [allowed[paper.paper_id] for paper in output.papers if paper.paper_id in allowed]
+        if not selected:
+            score = 0.0
+            low_ids: list[str] = []
+        else:
+            threshold = self.config.quality_min_paper_relevance_score
+            low_ids = [
+                paper.paper_id for paper in selected if paper.relevance_score < threshold
+            ]
+            relevant_ratio = 1.0 - len(low_ids) / len(selected)
+            mean_relevance = _average(paper.relevance_score for paper in selected)
+            calibrated_mean = min(1.0, mean_relevance / max(threshold * 2.0, 0.1))
+            score = 0.7 * relevant_ratio + 0.3 * calibrated_mean
+        if score < self.config.quality_paper_relevance_threshold:
+            severity = "error" if not selected or len(low_ids) * 2 >= len(selected) else "warning"
+            issues.append(
+                QualityIssue(
+                    issue_type="low_paper_relevance",
+                    severity=severity,
+                    target_path="papers",
+                    message=f"推荐论文主题相关性不足；低相关论文 ID：{low_ids}。",
+                    recommended_action="补充检索并重新排序，只保留与规划主题直接相关的论文。",
+                )
+            )
+        return score
+
     def evaluate_development_coherence(
         self,
         output: DomainOnboardingOutput,
@@ -304,7 +338,9 @@ def critical_dimensions_not_regressed(
     first: ContentQuality,
     retry: ContentQuality,
 ) -> bool:
-    for name in ("structure", "paper_validity", "evidence_grounding", "learning_path"):
+    for name in (
+        "structure", "paper_validity", "paper_relevance", "evidence_grounding", "learning_path"
+    ):
         if retry.dimensions.get(name, 0.0) + 1e-9 < first.dimensions.get(name, 0.0):
             return False
     return True

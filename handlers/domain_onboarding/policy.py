@@ -11,18 +11,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.0.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.1.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:
     return {
-        "structure": 0.17,
-        "paper_validity": 0.18,
-        "evidence_grounding": 0.15,
-        "topic_coverage": 0.15,
-        "development_coherence": 0.13,
-        "learning_path": 0.13,
-        "goal_alignment": 0.09,
+        "structure": 0.15,
+        "paper_validity": 0.15,
+        "paper_relevance": 0.15,
+        "evidence_grounding": 0.14,
+        "topic_coverage": 0.13,
+        "development_coherence": 0.11,
+        "learning_path": 0.10,
+        "goal_alignment": 0.07,
     }
 
 
@@ -30,6 +31,7 @@ def default_hard_gate_dimensions() -> dict[str, list[QualityDimension]]:
     return {
         "required_structure": ["structure"],
         "paper_identity": ["paper_validity"],
+        "paper_relevance": ["paper_relevance"],
         "evidence_support": ["evidence_grounding"],
     }
 
@@ -42,6 +44,7 @@ def default_llm_repair_issue_types() -> list[QualityIssueType]:
         "structure_error",
         "missing_evidence",
         "unsupported_claim",
+        "low_paper_relevance",
     ]
 
 
@@ -49,6 +52,7 @@ def default_critical_dimensions() -> list[QualityDimension]:
     return [
         "structure",
         "paper_validity",
+        "paper_relevance",
         "evidence_grounding",
         "learning_path",
     ]

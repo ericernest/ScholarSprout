@@ -36,7 +36,7 @@ def evaluate_cases(
         for case in repair_cases
     )
     false_positive_count, predicted_issue_count = _issue_counts(cases)
-    dimensions = list(default_dimension_weights())
+    dimensions = _common_dimensions(cases)
     dimension_mae = {
         name: _round(
             fmean(
@@ -95,7 +95,7 @@ def _policy_summary(cases: list[OfflineEvaluationCase]) -> PolicyEvaluationSumma
         and case.retry.passed_hard_gates
         for case in repair_cases
     )
-    dimensions = list(default_dimension_weights())
+    dimensions = _common_dimensions(cases)
     return PolicyEvaluationSummary(
         **base.model_dump(),
         repair_attempt_count=len(repair_cases),
@@ -149,6 +149,13 @@ def _dimension_range(case: OfflineEvaluationCase, dimension: str) -> float:
     observations = case.repeated_dimensions or [case.first.dimensions]
     values = [items[dimension] for items in observations]
     return max(values) - min(values)
+
+
+def _common_dimensions(cases: list[OfflineEvaluationCase]) -> list[str]:
+    available = set.intersection(
+        *(set(case.first.dimensions) & set(case.human.dimension_scores) for case in cases)
+    )
+    return [name for name in default_dimension_weights() if name in available]
 
 
 def _ratio(numerator: int, denominator: int) -> float:
