@@ -141,6 +141,13 @@ class OnlineEvaluationTests(unittest.TestCase):
         self.assertEqual(report.cross_language_warning_rate, 1.0)
         self.assertEqual(report.cases[0].stage_durations_ms, {"planning": 1234.5})
         self.assertIsNone(report.cases[0].interrupted_stage)
+        self.assertEqual(report.cases[0].quality.score, 0.8)
+        self.assertEqual(
+            report.cases[0].quality.issues[0].target_path,
+            "evidence_claims[0]",
+        )
+        self.assertEqual(report.cases[0].quality_attempts, [])
+        self.assertIsNone(report.cases[0].repair_record)
 
 
 if __name__ == "__main__":
