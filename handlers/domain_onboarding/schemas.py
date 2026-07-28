@@ -402,7 +402,7 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
-    policy_version: str = "domain-quality-v1.0.0"
+    policy_version: str = "domain-quality-v1.1.0"
     policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -455,7 +455,7 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
-    policy_version: str = "domain-quality-v1.0.0"
+    policy_version: str = "domain-quality-v1.1.0"
     policy_fingerprint: str | None = None
     adaptive_policy_version: str | None = None
     shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
@@ -517,7 +517,7 @@ class KnowledgeGraphSnapshot(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
-    policy_version: str = "domain-quality-v1.0.0"
+    policy_version: str = "domain-quality-v1.1.0"
     policy_fingerprint: str | None = None
     status: Literal[
         "ok",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agents.agent import create_agent
@@ -16,6 +16,7 @@ from channels.web import WebChannel
 from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
+from handlers.domain_onboarding.pipeline import create_default_pipeline
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
@@ -44,6 +45,28 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "novicesynapse-gateway"}
+
+
+@app.get("/ready")
+def readiness(request: Request) -> dict[str, object]:
+    components = {
+        "model": getattr(request.app.state, "model", None) is not None,
+        "domain_onboarding_pipeline": (
+            getattr(request.app.state, "domain_onboarding_pipeline", None) is not None
+        ),
+        "domain_onboarding_metrics": (
+            getattr(request.app.state, "domain_onboarding_metrics", None) is not None
+        ),
+        "domain_onboarding_audit": (
+            getattr(request.app.state, "domain_onboarding_audit_sink", None) is not None
+        ),
+    }
+    if not all(components.values()):
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "components": components},
+        )
+    return {"status": "ready", "components": components}
 
 
 # 返回首页。
@@ -159,6 +182,14 @@ def domain_onboarding_metrics(request: Request) -> dict:
     return metrics.snapshot()
 
 
+@app.get("/metrics/domain_onboarding/prometheus", response_class=PlainTextResponse)
+def domain_onboarding_prometheus_metrics(request: Request) -> str:
+    metrics = getattr(request.app.state, "domain_onboarding_metrics", None)
+    if metrics is None:
+        raise HTTPException(status_code=503, detail="Domain onboarding is not initialized.")
+    return metrics.prometheus()
+
+
 @app.on_event("shutdown")
 def close_domain_onboarding_resources() -> None:
     pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
@@ -199,11 +230,7 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.chat_agent = chat_agent
     app.state.domain_onboarding_agent = domain_onboarding_agent
     app.state.paper_reading_agent = paper_reading_agent
-    app.state.domain_onboarding_metrics = DomainOnboardingMetrics(
-        input_cost_per_million_tokens=config.client.input_cost_per_million_tokens,
-        output_cost_per_million_tokens=config.client.output_cost_per_million_tokens,
-    )
-    app.state.domain_onboarding_audit_sink = create_audit_sink_from_env()
+    configure_domain_onboarding_runtime(app.state, model, config.client)
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
     app.state.capability_selector = capability_selector
@@ -220,3 +247,17 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.paper_pipeline = paper_pipeline
 
     uvicorn.run(app, host=host, port=port)
+
+
+def configure_domain_onboarding_runtime(app_state: object, model: object, client_config: object) -> None:
+    """Wire the V1 pipeline and its observability dependencies into the gateway."""
+    app_state.domain_onboarding_pipeline = create_default_pipeline(model)
+    app_state.domain_onboarding_metrics = DomainOnboardingMetrics(
+        input_cost_per_million_tokens=getattr(
+            client_config, "input_cost_per_million_tokens", None
+        ),
+        output_cost_per_million_tokens=getattr(
+            client_config, "output_cost_per_million_tokens", None
+        ),
+    )
+    app_state.domain_onboarding_audit_sink = create_audit_sink_from_env()

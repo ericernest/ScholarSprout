@@ -16,7 +16,7 @@ from runtime.agent_runner import TokenUsage
 @dataclass(slots=True)
 class DomainOnboardingRequestTrace:
     request_id: str = field(default_factory=lambda: str(uuid4()))
-    policy_version: str = "domain-quality-v1.0.0"
+    policy_version: str = "domain-quality-v1.1.0"
     policy_fingerprint: str | None = None
     status: str = "unknown"
     total_duration_ms: float = 0.0
@@ -55,6 +55,7 @@ class DomainOnboardingRequestTrace:
     evidence_claim_count: int = 0
     unsupported_claim_count: int = 0
     missing_evidence_count: int = 0
+    evidence_validation_modes: dict[str, int] = field(default_factory=dict)
 
     first_dimensions: dict[str, float] = field(default_factory=dict)
     final_dimensions: dict[str, float] = field(default_factory=dict)
@@ -152,6 +153,7 @@ class DomainOnboardingMetrics:
         self._ranking_backends: Counter[str] = Counter()
         self._ranking_fallbacks = 0
         self._evidence_totals: Counter[str] = Counter()
+        self._evidence_validation_modes: Counter[str] = Counter()
         self._first_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._final_dimension_values: dict[str, list[float]] = defaultdict(list)
         self._quality_deltas: deque[float] = deque(maxlen=window_size)
@@ -248,6 +250,7 @@ class DomainOnboardingMetrics:
                 "missing_evidence_count",
             ):
                 self._evidence_totals[field_name] += int(getattr(trace, field_name))
+            self._evidence_validation_modes.update(trace.evidence_validation_modes)
             for name, value in trace.first_dimensions.items():
                 self._first_dimension_values[name].append(value)
             for name, value in trace.final_dimensions.items():
@@ -352,7 +355,10 @@ class DomainOnboardingMetrics:
                     "vectorizer_backends": dict(self._ranking_backends),
                     "fallback_count": self._ranking_fallbacks,
                 },
-                "evidence": dict(self._evidence_totals),
+                "evidence": {
+                    **dict(self._evidence_totals),
+                    "validation_modes": dict(self._evidence_validation_modes),
+                },
                 "quality": {
                     "first_states": dict(self._first_quality_states),
                     "final_states": dict(self._final_quality_states),
@@ -374,7 +380,66 @@ class DomainOnboardingMetrics:
                     "estimated_cost": estimated_cost,
                 },
                 "model_usage": self._model_usage_snapshot(),
+                "model_cost": self._model_cost_snapshot(),
             }
+
+    def prometheus(self) -> str:
+        """Expose a stable, dependency-free Prometheus text view."""
+        snapshot = self.snapshot()
+        lines = [
+            "# HELP novicesynapse_domain_onboarding_requests_total Requests by final status.",
+            "# TYPE novicesynapse_domain_onboarding_requests_total counter",
+        ]
+        for status, value in sorted(snapshot["statuses"].items()):
+            lines.append(
+                f'novicesynapse_domain_onboarding_requests_total{{status="{_label(status)}"}} {value}'
+            )
+        lines.extend(
+            [
+                "# TYPE novicesynapse_domain_onboarding_request_p95_ms gauge",
+                f'novicesynapse_domain_onboarding_request_p95_ms {snapshot["latency"]["request"]["p95_ms"]}',
+                "# TYPE novicesynapse_domain_onboarding_model_tokens_total counter",
+                f'novicesynapse_domain_onboarding_model_tokens_total {snapshot["model_usage"]["total"]["total_tokens"]}',
+                "# TYPE novicesynapse_domain_onboarding_retrieval_failures_total counter",
+                f'novicesynapse_domain_onboarding_retrieval_failures_total {snapshot["papers"].get("retrieval_source_failure_count", 0)}',
+                "# TYPE novicesynapse_domain_onboarding_ranking_fallbacks_total counter",
+                f'novicesynapse_domain_onboarding_ranking_fallbacks_total {snapshot["ranking"]["fallback_count"]}',
+                "# TYPE novicesynapse_domain_onboarding_audit_write_failures_total counter",
+                f'novicesynapse_domain_onboarding_audit_write_failures_total {snapshot["audit"]["write_failures"]}',
+            ]
+        )
+        estimated = snapshot["model_cost"]["estimated_total_usd"]
+        if estimated is not None:
+            lines.extend(
+                [
+                    "# TYPE novicesynapse_domain_onboarding_estimated_cost_usd_total counter",
+                    f"novicesynapse_domain_onboarding_estimated_cost_usd_total {estimated}",
+                ]
+            )
+        return "\n".join(lines) + "\n"
+
+    def _model_cost_snapshot(self) -> dict[str, Any]:
+        total = TokenUsage()
+        total.add(self._primary_usage)
+        total.add(self._extra_usage)
+        calls = self._primary_model_calls + self._extra_model_calls
+        unreported = self._primary_unreported_usage_calls + self._retry_unreported_usage_calls
+        complete = calls > 0 and unreported == 0
+        configured = self._input_cost is not None and self._output_cost is not None
+        estimated = None
+        if configured and complete:
+            estimated = round(
+                total.prompt_tokens / 1_000_000 * float(self._input_cost)
+                + total.completion_tokens / 1_000_000 * float(self._output_cost),
+                8,
+            )
+        return {
+            "pricing_configured": configured,
+            "usage_complete": complete,
+            "input_cost_per_million_tokens": self._input_cost,
+            "output_cost_per_million_tokens": self._output_cost,
+            "estimated_total_usd": estimated,
+        }
 
     def _model_usage_snapshot(self) -> dict[str, Any]:
         total_usage = TokenUsage()
@@ -425,3 +490,7 @@ class DomainOnboardingMetrics:
             "total": sum(values),
             "average": round(fmean(values), 3) if values else 0.0,
         }
+
+
+def _label(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
