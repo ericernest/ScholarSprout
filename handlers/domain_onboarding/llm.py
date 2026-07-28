@@ -44,14 +44,21 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
         offset = start + 1
 
 
-def invoke_json(model: Any, *, system_prompt: str, user_prompt: str) -> tuple[dict[str, Any], ModelCallStats]:
+def invoke_json(
+    model: Any,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int | None = None,
+) -> tuple[dict[str, Any], ModelCallStats]:
     started = perf_counter()
     try:
         response = model.chat(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
-            ]
+            ],
+            max_tokens=max_tokens,
         )
     except Exception as error:
         stats = ModelCallStats(

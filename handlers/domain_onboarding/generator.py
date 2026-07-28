@@ -173,19 +173,25 @@ class StructuredOnboardingGenerator:
             "name, summary, motivation, related_paper_ids, prerequisite_ids, core_concepts, main_techniques, open_problems. "
             "current_landscape has problems:list[str] and subdirections:list[str]; never put objects in either list. "
             "Each learning step has step, goal, topics, paper_ids, "
-            "activities, completion_criteria, expected_outcome. Produce at least 3 development stages and 3 subdirections. "
+            "activities, completion_criteria, expected_outcome. Produce 3 development stages and 3-5 subdirections. "
             "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
             "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
-            "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入."
+            "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
+            "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
+            "at most 3 items in each explanatory list, and at most 6 evidence claims. "
+            "Return paper IDs only inside generated sections; paper metadata is attached by code."
         )
         user_payload: dict[str, Any] = {
             "request": request.model_dump(mode="json"),
             "learner_profile": profile.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
-            "allowed_papers": [paper.model_dump(mode="json") for paper in papers],
+            "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
         }
         if previous_output is not None:
-            user_payload["previous_output"] = previous_output.model_dump(mode="json")
+            user_payload["previous_output"] = previous_output.model_dump(
+                mode="json",
+                exclude={"learner_profile", "papers"},
+            )
             user_payload["repair_issues"] = [issue.model_dump(mode="json") for issue in issues or []]
             user_payload["instruction"] = "Repair only the reported weaknesses while preserving valid paper IDs."
         try:
@@ -193,10 +199,22 @@ class StructuredOnboardingGenerator:
                 self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
+                max_tokens=self.config.generation_max_tokens,
             )
             return payload, stats
         except StructuredLLMError as error:
             raise GenerationError(str(error), stats=error.stats) from error
+
+    def _paper_prompt_payload(self, paper: RankedPaper) -> dict[str, Any]:
+        abstract = (paper.abstract or "").strip()
+        return {
+            "paper_id": paper.paper_id,
+            "title": paper.title,
+            "abstract": abstract[: self.config.generation_paper_abstract_max_chars],
+            "year": paper.year,
+            "paper_role": paper.paper_role,
+            "relevance_score": paper.relevance_score,
+        }
 
     def _normalize(
         self,

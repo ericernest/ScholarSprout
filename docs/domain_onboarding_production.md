@@ -3,6 +3,7 @@
 ## 必需配置
 
 先通过 `novicesynapse config` 设置真实 `api_key`、`base_url` 和聊天模型。生产环境还应设置：
+启用本地多语言 embedding 的部署需要安装 `pip install '.[embeddings]'`。
 
 ```text
 DOMAIN_ONBOARDING_AUDIT_DIR=/var/lib/novicesynapse/audit
@@ -27,6 +28,10 @@ curl -f http://127.0.0.1:8000/ready
 ```
 
 `/health` 只表示进程存活；`/ready` 只有在模型、V1 pipeline、指标和审计均已装配时返回 200。部署滚动更新应以 `/ready` 为就绪探针。
+
+互动链路默认对每个论文源最多发送 4 条查询，单个外部请求最多 8 秒且不串行重试。
+规划和生成分别限制为 1600 和 6000 tokens；生成阶段 deadline 为 150 秒。
+修改这些边界后应重跑六领域受控回归，不应只为单个慢请求无界提高 deadline。
 
 ## 监控
 
