@@ -105,7 +105,7 @@ function bindWorkbench() {
   $("pause-button").addEventListener("click", pauseReading);
   $("resume-button").addEventListener("click", resumeReading);
   $("progress-button").addEventListener("click", refreshProgress);
-  $("regenerate-button").addEventListener("click", regenerateAnalysis);
+  $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -125,8 +125,8 @@ function bindReader() {
   document.querySelectorAll("[data-reader-mode]").forEach((button) => {
     button.addEventListener("click", () => setReaderMode(button.dataset.readerMode));
   });
-  $("analyze-section-button").addEventListener("click", () => startReading("请深入分析当前章节的核心问题、方法、证据和潜在局限。"));
-  $("fork-explore-button").addEventListener("click", () => openFork("reading.math_verifier", ""));
+  $("analyze-section-button").addEventListener("click", analyzeCurrentSection);
+  $("fork-explore-button").addEventListener("click", () => openFork(""));
   $("previous-section-button").addEventListener("click", () => moveSection(-1));
   $("next-section-button").addEventListener("click", () => moveSection(1));
   $("pdf-fit-select").addEventListener("change", renderPdf);
@@ -160,12 +160,6 @@ function bindKg() {
 }
 
 function bindFork() {
-  SKILLS.forEach((skill) => {
-    const option = create("option", "", skill.label);
-    option.value = skill.id;
-    $("fork-skill-select").append(option);
-  });
-  $("fork-skill-select").value = "reading.math_verifier";
   $("fork-create-button").addEventListener("click", createFork);
   $("fork-close-button").addEventListener("click", closeFork);
   document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
@@ -369,7 +363,7 @@ async function loadPaperDetail() {
   if (initialKg.cytoscape_elements?.length) {
     state.revealedKgElements = initialKg.cytoscape_elements;
     state.kgMaxStageIndex = Math.max(0, KG_STAGE_ORDER.indexOf(initialKg.current_stage || "abstract"));
-    $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex]} 阶段 · 累计 ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系（随阅读只增不减）`;
+    $("kg-stage-copy").textContent = `完整图谱 · ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系`;
   }
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
@@ -399,12 +393,6 @@ async function enterWorkbench() {
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
   window.scrollTo({ top: 0, behavior: "auto" });
-  if (state.restored && state.sessionId) {
-    if (state.sessionState === "paused") await resumeReading(false);
-    await startReading("请继续上次的阅读，并概括当前章节接下来的理解重点。");
-  } else if (!state.sessionId) {
-    await startReading("请先给出这篇论文的阅读导览，并分析当前章节的核心结构。");
-  }
 }
 
 function showIntake() {
@@ -452,7 +440,7 @@ function renderOutline() {
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", statuses[section.section_id] === "completed" ? "●" : String(index + 1).padStart(2, "0"));
     button.append(icon, create("span", "outline-title", section.title || `Section ${index + 1}`));
-    button.addEventListener("click", () => selectSection(section.section_id, true));
+    button.addEventListener("click", () => selectSection(section.section_id, false));
     container.append(button);
   });
   $("outline-count").textContent = String(sections.length);
@@ -625,7 +613,7 @@ function moveSection(offset) {
   if (!sections.length) return;
   const current = Math.max(0, sections.findIndex((item) => item.section_id === state.currentSection));
   const target = sections[Math.min(sections.length - 1, Math.max(0, current + offset))];
-  if (target) selectSection(target.section_id, true);
+  if (target) selectSection(target.section_id, false);
 }
 
 async function startReading(content, sessionId = state.sessionId) {
@@ -663,9 +651,8 @@ function showThinkingCard(detail, target = $("analysis-feed")) {
   return card;
 }
 
-async function regenerateAnalysis() {
-  if (!state.sessionId) return toast("请先开始章节阅读，再重新生成分析。", true);
-  await startReading(`请重新分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出更深入的核心内容、论证结构与重点概念解读。`);
+async function analyzeCurrentSection() {
+  await startReading(`请分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出核心内容、论证结构、关键证据与需要重点理解的概念。`);
 }
 
 function applyReadingPayload(payload) {
@@ -690,7 +677,7 @@ function applyReadingPayload(payload) {
   updateSessionBadge();
   const revealedNodes = state.revealedKgElements.filter((item) => !item.data?.source).length;
   const revealedEdges = state.revealedKgElements.length - revealedNodes;
-  $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex] || "general"} 阶段 · 累计 ${revealedNodes} 节点 / ${revealedEdges} 关系（随阅读只增不减）`;
+  $("kg-stage-copy").textContent = `完整图谱 · ${revealedNodes} 节点 / ${revealedEdges} 关系`;
   renderKg(state.revealedKgElements);
 }
 
@@ -728,10 +715,6 @@ function renderSkillOutputs(outputs, target) {
     const hasStructured = output.parse_status === "parsed" && content && typeof content === "object" && Object.keys(content).length;
     if (hasStructured) card.append(renderSkillContent(output));
     else card.append(renderMarkdown(output.rendered || "Skill 已执行，但没有返回可展示内容。"));
-    const candidates = output.kg_candidates;
-    if (candidates?.nodes?.length || candidates?.edges?.length) {
-      card.append(create("span", "count-pill", `${candidates.nodes?.length || 0} 个 KG 候选`));
-    }
     target.append(card);
   });
 }
@@ -800,28 +783,58 @@ function renderStructuredValue(value, depth = 0) {
     return container;
   }
   Object.entries(value || {}).forEach(([key, item]) => {
-    const block = create("div", "value-block");
-    block.append(create("strong", "", humanizeKey(key)));
+    const block = create("section", "value-block");
+    block.append(create("h4", "", humanizeKey(key)));
     if (Array.isArray(item)) {
       if (!item.length) block.append(create("p", "", "暂无"));
-      else {
-        const list = create("ul");
-        item.forEach((entry) => {
-          const li = create("li");
-          if (entry && typeof entry === "object") li.append(renderStructuredValue(entry, depth + 1));
-          else li.textContent = String(entry);
-          list.append(li);
-        });
-        block.append(list);
-      }
+      else block.append(renderStructuredArray(item, depth + 1));
     } else if (item && typeof item === "object") {
-      block.append(renderStructuredValue(item, depth + 1));
+      block.append(renderCompactObject(item, depth + 1));
     } else {
       block.append(create("p", "", item == null || item === "" ? "暂无" : String(item)));
     }
     container.append(block);
   });
   return container;
+}
+
+function renderStructuredArray(items, depth = 0) {
+  if (!items.some((entry) => entry && typeof entry === "object")) {
+    const list = create("ul", "compact-list");
+    items.forEach((entry) => list.append(create("li", "", String(entry))));
+    return list;
+  }
+  const wrap = create("div", "compact-object-list");
+  items.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      wrap.append(create("p", "compact-text", String(entry)));
+      return;
+    }
+    const item = create("article", "compact-object");
+    const title = entry.name || entry.title || entry.label || entry.step_id || entry.id || `Item ${index + 1}`;
+    item.append(create("h5", "", String(title)));
+    item.append(renderCompactObject(entry, depth + 1, new Set(["name", "title", "label"])));
+    wrap.append(item);
+  });
+  return wrap;
+}
+
+function renderCompactObject(value, depth = 0, hiddenKeys = new Set()) {
+  const grid = create("dl", "compact-fields");
+  Object.entries(value || {}).forEach(([key, item]) => {
+    if (hiddenKeys.has(key)) return;
+    const dt = create("dt", "", humanizeKey(key));
+    const dd = create("dd");
+    if (Array.isArray(item)) {
+      dd.append(item.length ? renderStructuredArray(item, depth + 1) : create("span", "", "暂无"));
+    } else if (item && typeof item === "object") {
+      dd.append(depth > 3 ? create("pre", "analysis-text", JSON.stringify(item, null, 2)) : renderCompactObject(item, depth + 1));
+    } else {
+      dd.textContent = item == null || item === "" ? "暂无" : String(item);
+    }
+    grid.append(dt, dd);
+  });
+  return grid;
 }
 
 // Render the Markdown subset used by model answers without injecting raw HTML.
@@ -934,73 +947,13 @@ function appendInlineMarkdown(target, text) {
 }
 
 function renderSkillControls() {
-  const switches = $("skill-switches");
-  const quick = $("quick-actions");
-  SKILLS.forEach((skill) => {
-    const label = create("label", "skill-toggle");
-    label.append(create("span", "", skill.label));
-    const input = create("input");
-    input.type = "checkbox";
-    input.dataset.skillId = skill.id;
-    input.addEventListener("change", () => toggleSkill(skill.id, input.checked, input));
-    label.append(input, create("span", "toggle-ui"));
-    switches.append(label);
-
-    const button = create("button", "quick-action", skill.short);
-    button.type = "button";
-    button.addEventListener("click", () => runSkill(skill));
-    quick.append(button);
-  });
+  // Skill routing is handled by the backend. The frontend only renders returned outputs.
 }
 
 function renderQuickActions() {}
 
-async function toggleSkill(skillId, active, input) {
-  if (!state.sessionId) {
-    input.checked = false;
-    toast("首次章节分析完成后才能加载 Skill。", true);
-    return;
-  }
-  setBusy(true, active ? "正在加载专家" : "正在卸载专家", skillLabel(skillId));
-  try {
-    const { payload } = await callPaperReading({
-      action: active ? "load_skill" : "unload_skill", session_id: state.sessionId, skill_ids: [skillId],
-    });
-    state.activeSkills = payload.data?.active_skills || [];
-    syncSkillControls();
-    toast(payload.data?.message || "Skill 状态已更新。");
-  } catch (error) {
-    input.checked = !active;
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function runSkill(skill) {
-  if (!state.sessionId) {
-    toast("正在先初始化阅读会话，请稍候。");
-    await startReading("请初始化本篇论文的阅读上下文。");
-  }
-  if (!state.sessionId) return;
-  if (!state.activeSkills.includes(skill.id)) {
-    try {
-      const { payload } = await callPaperReading({ action: "load_skill", session_id: state.sessionId, skill_ids: [skill.id] });
-      state.activeSkills = payload.data?.active_skills || state.activeSkills;
-      syncSkillControls();
-    } catch (error) {
-      toast(error.message, true);
-      return;
-    }
-  }
-  await startReading(skill.prompt);
-}
-
 function syncSkillControls() {
-  document.querySelectorAll("[data-skill-id]").forEach((input) => {
-    input.checked = state.activeSkills.includes(input.dataset.skillId);
-  });
-  $("active-skill-count").textContent = `${state.activeSkills.length} Skills`;
+  // No frontend skill controls are rendered; skill choice is handled server-side.
 }
 
 async function pauseReading(showToast = true) {
@@ -1119,17 +1072,15 @@ async function handleSelectionAction(event) {
   $("selection-toolbar").hidden = true;
   const quoted = `\n\n选中内容：\n${state.selectedText}`;
   if (action === "explain") await startReading(`请解释这段内容的直觉、上下文和关键假设。${quoted}`);
-  if (action === "concept") await runSkill({ ...SKILLS.find((item) => item.id === "reading.domain_expert"), prompt: `请解释选中概念的定义、前置知识和领域脉络。${quoted}` });
-  if (action === "formula") openFork("reading.math_verifier", "请对选中公式做直觉、逐步推导和数值例子三层分析。");
-  if (action === "fork") openFork("reading.domain_expert", "请围绕选中内容进行深入探索。");
-  if (action === "candidate") toast("已加入本页 KG 候选区；后端暂未提供确认写入 action。");
+  if (action === "concept") await startReading(`请解释选中概念的定义、前置知识和领域脉络。${quoted}`);
+  if (action === "formula") openFork("请对选中公式做直觉、逐步推导和数值例子三层分析。");
+  if (action === "fork") openFork("请围绕选中内容进行深入探索。");
 }
 
-function openFork(skillId, question) {
+function openFork(question) {
   if (!state.sessionId) return toast("请先开始章节阅读，再创建 Fork。", true);
   $("fork-context-input").value = state.selectedText || sectionTitle(state.currentSection);
   $("fork-question-input").value = question || "请深入分析这段内容。";
-  $("fork-skill-select").value = skillId || "reading.math_verifier";
   $("fork-modal").hidden = false;
   $("fork-question-input").focus();
 }
@@ -1141,14 +1092,13 @@ function closeFork() {
 async function createFork() {
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
-  const skillId = $("fork-skill-select").value;
   closeFork();
 
   const fork = {
     id: `fork-${Date.now()}`,
     sessionId: "",
-    skillId,
-    label: `${skillShort(skillId)} ${state.forks.length + 1}`,
+    skillId: "",
+    label: `Fork ${state.forks.length + 1}`,
     feedEl: null,
   };
   addForkTab(fork);
@@ -1158,7 +1108,7 @@ async function createFork() {
   try {
     const { payload } = await callPaperReading({
       action: "fork", session_id: state.sessionId, paper_id: state.paperId,
-      fork_context: context, fork_question: question, fork_skills: [skillId],
+      fork_context: context, fork_question: question, fork_skills: [],
       metadata: { selected_text: context, source_section_id: state.currentSection },
     });
     fork.sessionId = payload.data?.fork_session_id || "";

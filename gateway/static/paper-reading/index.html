@@ -99,7 +99,6 @@
               <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
             </section>
             <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count">0</strong></div><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
-            <section class="side-section"><div class="panel-heading"><span>AI 专家</span><small>动态加载</small></div><div id="skill-switches" class="skill-switches"></div></section>
             <section class="session-actions">
               <button id="pause-button" class="soft-button" type="button">暂停并保存</button><button id="resume-button" class="soft-button" type="button">恢复阅读</button><button id="progress-button" class="soft-button" type="button">刷新进度</button>
             </section>
@@ -120,9 +119,9 @@
               </div>
             </header>
             <div id="selection-toolbar" class="selection-toolbar" hidden>
-              <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念脉络</button><button data-selection-action="fork" type="button">Fork 深入</button><button data-selection-action="candidate" type="button">KG 候选</button>
+              <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念脉络</button><button data-selection-action="fork" type="button">Fork 深入</button>
             </div>
-            <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>划选解释 / 公式推导 / 概念脉络 / KG 候选需切回「论文重排」视图；此处可用左侧目录跳转、分析本节、⑂ Fork 探索与右侧提问。</div>
+            <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>划选解释 / 公式推导 / 概念脉络需切回「论文重排」视图；此处可用左侧目录跳转、分析本节、⑂ Fork 探索与右侧提问。</div>
             <div id="structured-reader" class="structured-reader"></div>
             <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
           </article>
@@ -130,8 +129,7 @@
           <div id="copilot-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整协作区宽度"></div>
 
           <aside id="copilot-panel" class="workspace-panel copilot-panel">
-            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="regenerate-button" class="mini-button is-accent" type="button" title="重新生成本章分析">↻ 重新生成</button><span id="active-skill-count" class="count-pill">0 Skills</span></div></header>
-            <div id="quick-actions" class="quick-actions"></div>
+            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
             <div id="copilot-tabs" class="copilot-tabs" role="tablist" aria-label="分析选项卡"></div>
             <div id="copilot-feeds" class="copilot-feeds">
               <div id="analysis-feed" class="analysis-feed copilot-feed is-active" data-feed-id="main" aria-live="polite">
@@ -147,7 +145,7 @@
 
         <section class="workspace-panel kg-panel">
           <header class="kg-header">
-            <div><p class="panel-label">Knowledge Graph</p><h2>论文知识图谱</h2><p id="kg-stage-copy" class="muted-copy">图谱会随阅读章节逐步展开。</p></div>
+            <div><p class="panel-label">Knowledge Graph</p><h2>论文知识图谱</h2><p id="kg-stage-copy" class="muted-copy">完整图谱会在论文解析完成后直接展示。</p></div>
             <form id="kg-query-form" class="kg-query-form">
               <select id="kg-query-type"><option value="search">智能检索</option><option value="path">关系路径</option><option value="neighbors">节点邻域</option><option value="subgraph">相关子图</option></select>
               <input id="kg-question-input" type="text" placeholder="向知识图谱提问…" required /><button class="accent-button" type="submit">问 KG</button>
@@ -174,7 +172,6 @@
       <section id="fork-panel" class="fork-panel" role="dialog" aria-modal="true" aria-label="Fork 专项探索">
         <header><div><p class="panel-label">Fork exploration</p><h2>创建专项探索分支</h2></div><button id="fork-close-button" class="dialog-close" type="button" aria-label="关闭 Fork 弹窗">×</button></header>
         <label>选中上下文<textarea id="fork-context-input" rows="3" placeholder="选中的公式、段落或概念"></textarea></label>
-        <label>专项专家<select id="fork-skill-select"></select></label>
         <label>探索问题<textarea id="fork-question-input" rows="2" placeholder="希望这个分支重点回答什么？"></textarea></label>
         <p class="fork-hint">创建后会在右侧协作区生成独立选项卡，可继续追问，随时合并回主流程。</p>
         <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button></footer>
