@@ -66,7 +66,6 @@ def make_skill_output(
     text: str,
     data: dict[str, Any] | None,
     trigger: str = "auto",
-    kg_candidates: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """构造前端可消费的 SkillOutput-like dict。"""
     return {
@@ -76,32 +75,5 @@ def make_skill_output(
         "output_type": output_type,
         "content": data or {"text": text or ""},
         "rendered": render_dict_markdown(skill_name, data, text),
-        "kg_candidates": kg_candidates or {"nodes": [], "edges": []},
         "parse_status": "parsed" if data else "raw_text",
     }
-
-
-def limitation_candidates(
-    weaknesses: list[dict[str, Any]],
-    paper_id: str,
-    section_id: str = "",
-) -> dict[str, list[dict[str, Any]]]:
-    nodes = []
-    for index, item in enumerate(weaknesses[:8], start=1):
-        if not isinstance(item, dict):
-            continue
-        nodes.append({
-            "ref": f"limitation:{index}",
-            "node_type": "Limitation",
-            "label": str(item.get("category") or item.get("severity") or "Limitation"),
-            "paper_id": paper_id,
-            "section_id": section_id,
-            "properties": {
-                "description": item.get("description", ""),
-                "severity": item.get("severity", ""),
-                "suggestion": item.get("suggestion", ""),
-                "why_reviewers_care": item.get("why_reviewers_care", ""),
-                "read_stage": "conclusion",
-            },
-        })
-    return {"nodes": nodes, "edges": []}

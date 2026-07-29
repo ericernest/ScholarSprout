@@ -260,7 +260,7 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
         )
         revealed_kg = kg_builder.get_revealed_subgraph(
             paper_id=session.paper_id or request.paper_id,
-            current_section=current_section,
+            current_section="general",
         )
         if storage and kg_engine is not None:
             storage.save_kg(session.paper_id or request.paper_id, kg_engine.to_dict(session.paper_id or request.paper_id))
@@ -283,7 +283,11 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
         max_steps=5,
     )
 
-    active_skill_ids = _active_skill_ids_for_context(session.active_skills, current_section)
+    active_skill_ids = _active_skill_ids_for_context(
+        session.active_skills,
+        current_section,
+        request.content,
+    )
     skill_outputs = postprocess_agent_output(
         result.text,
         skill_ids=active_skill_ids,
@@ -309,7 +313,7 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
         "current_section": current_section,
         "context": {
             "paper_loaded": paper_data is not None,
-            "kg_mode": "full_paper_once_progressive_reveal",
+            "kg_mode": "full_paper_once_full_display",
             "active_skill_ids": active_skill_ids,
         },
         "revealed_kg": revealed_kg,
@@ -572,7 +576,7 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
             if kg_builder is not None:
                 initial_kg = kg_builder.get_revealed_subgraph(
                     paper_id=paper_id,
-                    current_section="abstract",
+                    current_section="general",
                 )
             else:
                 graph = kg_engine.get_subgraph(paper_id)
@@ -736,9 +740,26 @@ def _author_names(authors: list[Any]) -> list[str]:
     return [name for name in names if name]
 
 
-def _active_skill_ids_for_context(active_skills: list[str], current_section: str) -> list[str]:
-    if active_skills:
-        return list(active_skills)
+def _active_skill_ids_for_context(
+    active_skills: list[str],
+    current_section: str,
+    user_content: str = "",
+) -> list[str]:
+    text = f"{current_section}\n{user_content}".lower()
+    if any(token in text for token in ("formula", "equation", "derivation", "math", "公式", "推导", "数学")):
+        return ["reading.math_verifier"]
+    if any(token in text for token in ("critique", "review", "weakness", "limitation", "审稿", "批判", "局限", "不足")):
+        return ["reading.critique_agent"]
+    if any(token in text for token in ("code", "implementation", "reproduce", "复现", "代码", "实现")):
+        return ["reading.code_reviewer"]
+    if any(token in text for token in ("domain", "concept", "background", "领域", "概念", "脉络", "背景")):
+        return ["reading.domain_expert"]
+    if any(token in text for token in ("writing", "rhetoric", "narrative", "写作", "行文", "表达")):
+        return ["reading.writing_coach"]
+    if any(token in text for token in ("idea", "future", "extension", "创新", "想法", "未来", "后续")):
+        return ["reading.idea_generator"]
+    if any(token in text for token in ("related", "citation", "cross", "相关工作", "引用", "跨论文")):
+        return ["reading.cross_paper_linker"]
     section = current_section.lower()
     if "experiment" in section or "result" in section or "实验" in section:
         return ["reading.critique_agent"]
