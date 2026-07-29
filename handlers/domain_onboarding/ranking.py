@@ -158,7 +158,8 @@ class WeightedPaperRanker:
         relevance_filtered = [
             paper
             for paper in ranked
-            if paper.relevance_score >= self.config.ranking_min_relevance_score
+            if paper.is_canonical
+            or paper.relevance_score >= self.config.ranking_min_relevance_score
         ]
         if relevance_filtered:
             low_relevance_filtered_count += len(ranked) - len(relevance_filtered)

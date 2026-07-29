@@ -12,6 +12,7 @@ from handlers.domain_onboarding.schemas import (
     CurrentLandscape,
     DomainOnboardingRequest,
     PaperCandidate,
+    PipelineResult,
     Prerequisite,
     QualityAttempt,
     QualityIssue,
@@ -29,9 +30,10 @@ class ConfigAndSchemaTests(unittest.TestCase):
         first = config.to_policy()
         second = config.to_policy()
 
-        self.assertEqual(first.policy_version, "domain-quality-v1.3.0")
+        self.assertEqual(first.policy_version, "domain-quality-v1.4.0")
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertEqual(sum(first.dimension_weights.values()), 1.0)
+        self.assertGreater(config.planning_timeout_seconds, 60.0)
 
     def test_quality_policy_requires_complete_normalized_weights(self) -> None:
         with self.assertRaises(ValidationError):
@@ -48,7 +50,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(DomainOnboardingPolicy(quality_threshold=0.8))
 
-        self.assertEqual(registry.versions(), ["domain-quality-v1.3.0"])
+        self.assertEqual(registry.versions(), ["domain-quality-v1.4.0"])
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
@@ -204,6 +206,39 @@ class ConfigAndSchemaTests(unittest.TestCase):
             record,
         )
         self.assertEqual(attempt.quality.policy_version, record.policy_version)
+
+    def test_pipeline_result_rejects_drifted_selected_quality_attempt(self) -> None:
+        quality = ContentQuality(
+            policy_fingerprint="0123456789abcdef",
+            score=0.8,
+            threshold=0.75,
+            passed_hard_gates=True,
+            dimensions={"structure": 1.0},
+        )
+        drifted = quality.model_copy(update={"issues": [
+            QualityIssue(
+                issue_type="unsupported_claim",
+                severity="warning",
+                target_path="evidence_claims[0]",
+                message="drifted",
+                recommended_action="repair",
+            )
+        ]})
+
+        with self.assertRaisesRegex(ValidationError, "selected quality attempt"):
+            PipelineResult(
+                policy_fingerprint="0123456789abcdef",
+                status="ok",
+                query="RAG",
+                quality=quality,
+                quality_attempts=[
+                    QualityAttempt(
+                        attempt_number=1,
+                        source="initial",
+                        quality=drifted,
+                    )
+                ],
+            )
 
 
 class ProfileTests(unittest.TestCase):

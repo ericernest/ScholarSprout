@@ -216,8 +216,32 @@ class ClaimEvidenceValidator:
                         recommended_action="增加一条绑定该阶段代表论文的证据论述。",
                     )
                 )
+        landscape_coverage: list[float] = []
+        landscape_items = [
+            *(('problem_details', index, item) for index, item in enumerate(output.current_landscape.problem_details)),
+            *(('subdirection_details', index, item) for index, item in enumerate(output.current_landscape.subdirection_details)),
+        ]
+        for field, index, item in landscape_items:
+            related_ids = set(item.related_paper_ids)
+            covered = bool(related_ids and related_ids & cited_ids)
+            landscape_coverage.append(float(covered))
+            if not covered:
+                issues.append(
+                    QualityIssue(
+                        issue_type="missing_evidence",
+                        severity="warning",
+                        target_path=f"current_landscape.{field}[{index}]",
+                        message="该领域全景项没有与已验证论文证据声明建立关联。",
+                        recommended_action="补充相关论文 ID，并增加一条可验证的证据论述。",
+                    )
+                )
         claim_score = sum(claim_scores) / len(claim_scores) if claim_scores else 0.0
-        coverage_score = sum(stage_coverage) / len(stage_coverage) if stage_coverage else 0.0
+        coverage_values = [*stage_coverage, *landscape_coverage]
+        coverage_score = (
+            sum(coverage_values) / len(coverage_values)
+            if coverage_values
+            else 0.0
+        )
         return EvidenceValidationResult(
             score=0.75 * claim_score + 0.25 * coverage_score,
             hard_failure=hard_failure,

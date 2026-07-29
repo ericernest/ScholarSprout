@@ -87,9 +87,17 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
         ],
         "development_stages": [
             {
+                "stage_id": f"stage-{index}",
+                "sequence": index,
                 "name": f"阶段 {index}",
+                "period": f"时期 {index}",
                 "summary": "形成代表性研究范式",
                 "motivation": "解决知识更新和事实可靠性问题",
+                "transition_from_previous": (
+                    ""
+                    if index == 1
+                    else f"阶段 {index - 1} 的局限推动了阶段 {index}。"
+                ),
                 "related_paper_ids": [paper_ids[(index - 1) % len(paper_ids)]],
                 "core_concepts": ["检索增强"],
                 "main_techniques": ["检索与生成"],
@@ -100,6 +108,26 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
         "current_landscape": {
             "problems": ["检索噪声", "证据冲突", "端到端评测"],
             "subdirections": ["检索优化", "生成约束", "自动评测"],
+            "problem_details": [
+                {
+                    "name": name,
+                    "description": f"{name}会限制 RAG 的可靠性。",
+                    "related_paper_ids": [paper_ids[index % len(paper_ids)]],
+                    "related_stage_ids": [f"stage-{index % 3 + 1}"],
+                }
+                for index, name in enumerate(["检索噪声", "证据冲突", "端到端评测"])
+            ],
+            "subdirection_details": [
+                {
+                    "name": name,
+                    "description": f"{name}是当前可证据化的技术方向。",
+                    "why_it_matters": "直接影响召回、生成或评测质量。",
+                    "research_questions": [f"如何稳定改善{name}？"],
+                    "related_paper_ids": [paper_ids[index % len(paper_ids)]],
+                    "related_stage_ids": [f"stage-{index % 3 + 1}"],
+                }
+                for index, name in enumerate(["检索优化", "生成约束", "自动评测"])
+            ],
         },
         "learning_path": [
             {
@@ -110,6 +138,8 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                 "activities": ["阅读论文并完成实验"],
                 "completion_criteria": ["形成可检查的笔记或实验结果"],
                 "expected_outcome": "能够解释并实现核心方法",
+                "estimated_hours": 6,
+                "milestone": f"完成阶段 {index} 的可验收产出",
             }
             for index in range(1, 6)
         ],

@@ -43,7 +43,12 @@ class PlannerTests(unittest.TestCase):
         plan = result.plan
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(len(plan.perspectives), 3)
-        self.assertIn("survey", plan.search_queries[0])
+        self.assertTrue(any("survey" in query for query in plan.search_queries))
+        self.assertEqual(plan.search_queries[0], "ARXIV:2005.11401")
+        self.assertEqual(
+            plan.search_queries[1],
+            '"Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks"',
+        )
 
     def test_invalid_model_output_falls_back_without_fabricating_papers(self) -> None:
         planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
@@ -85,6 +90,33 @@ class FakeHTTPClient:
 
 
 class RetrievalTests(unittest.TestCase):
+    def test_semantic_scholar_uses_exact_arxiv_lookup_for_canonical_query(self) -> None:
+        client = FakeHTTPClient(
+            [
+                FakeResponse(
+                    {
+                        "paperId": "semantic-rag",
+                        "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+                        "abstract": "Retrieval augmented generation combines parametric and non-parametric memory.",
+                        "year": 2020,
+                        "url": "https://www.semanticscholar.org/paper/semantic-rag",
+                        "citationCount": 100,
+                        "authors": [{"name": "Patrick Lewis"}],
+                        "externalIds": {"ArXiv": "2005.11401"},
+                        "publicationTypes": ["Conference"],
+                    }
+                )
+            ]
+        )
+
+        papers = SemanticScholarRetriever(client=client).search(
+            ["ARXIV:2005.11401"], limit_per_query=10
+        ).papers
+
+        self.assertEqual([paper.paper_id for paper in papers], ["semantic-rag"])
+        self.assertTrue(client.calls[0]["url"].endswith("/paper/ARXIV:2005.11401"))
+        self.assertNotIn("query", client.calls[0]["params"])
+
     def test_crossref_response_converts_to_candidate(self) -> None:
         client = FakeHTTPClient(
             [
@@ -160,6 +192,27 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(papers[0].paper_id, "arxiv:2401.00001")
         self.assertEqual(papers[0].year, 2024)
         self.assertEqual(papers[0].authors, ["Ada Lovelace"])
+
+    def test_arxiv_uses_id_list_for_exact_canonical_query(self) -> None:
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>https://arxiv.org/abs/2005.11401v4</id>
+            <title>Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks</title>
+            <summary>Retrieval augmented generation combines parametric and non-parametric memory.</summary>
+            <published>2020-05-22T00:00:00Z</published>
+            <author><name>Patrick Lewis</name></author>
+          </entry>
+        </feed>"""
+        client = FakeHTTPClient([FakeResponse({}, text=feed)])
+
+        papers = ArxivRetriever(client=client).search(
+            ["ARXIV:2005.11401"], limit_per_query=10
+        ).papers
+
+        self.assertEqual([paper.paper_id for paper in papers], ["arxiv:2005.11401"])
+        self.assertEqual(client.calls[0]["params"]["id_list"], "2005.11401")
+        self.assertNotIn("search_query", client.calls[0]["params"])
 
     def test_semantic_scholar_response_converts_to_candidate(self) -> None:
         client = FakeHTTPClient(
@@ -329,7 +382,7 @@ class RankingTests(unittest.TestCase):
             ),
             PaperCandidate(
                 paper_id="valid",
-                title="Valid Semantic Scholar Paper",
+                title="Valid Retrieval-Augmented Generation Paper",
                 year=2024,
                 url="https://example.org/valid",
                 source="semantic_scholar",

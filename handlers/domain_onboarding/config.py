@@ -65,7 +65,9 @@ class DomainOnboardingConfig(BaseModel):
     # total 111-147s, planning 13-26s, generation 78-103s.
     request_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
-    planning_timeout_seconds: float = Field(default=45.0, gt=0.0, le=120.0)
+    # Must exceed the configured model client's 60s timeout so a timed-out LLM
+    # call can return to StormLitePlanner and activate its deterministic fallback.
+    planning_timeout_seconds: float = Field(default=75.0, gt=0.0, le=120.0)
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     ranking_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
     generation_timeout_seconds: float = Field(default=150.0, gt=0.0, le=180.0)

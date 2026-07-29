@@ -311,9 +311,13 @@ class Prerequisite(OnboardingModel):
 
 class DevelopmentStage(OnboardingModel):
     stage_id: str | None = None
+    sequence: int = Field(default=1, ge=1)
     name: str
+    period: str = ""
     summary: str = ""
     motivation: str = ""
+    previous_stage_id: str | None = None
+    transition_from_previous: str = ""
     representative_papers: list[PaperReference] = Field(default_factory=list)
     core_concepts: list[str] = Field(default_factory=list)
     main_techniques: list[str] = Field(default_factory=list)
@@ -327,15 +331,61 @@ class DevelopmentStage(OnboardingModel):
         return self
 
 
+class LandscapeProblem(OnboardingModel):
+    problem_id: str | None = None
+    name: str
+    description: str = ""
+    related_paper_ids: list[str] = Field(default_factory=list)
+    related_stage_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "LandscapeProblem":
+        self.problem_id = self.problem_id or stable_id("problem", self.name)
+        self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
+        self.related_stage_ids = list(dict.fromkeys(self.related_stage_ids))
+        return self
+
+
+class SubdirectionDetail(OnboardingModel):
+    subdirection_id: str | None = None
+    name: str
+    description: str = ""
+    why_it_matters: str = ""
+    research_questions: list[str] = Field(default_factory=list)
+    related_paper_ids: list[str] = Field(default_factory=list)
+    related_stage_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "SubdirectionDetail":
+        self.subdirection_id = self.subdirection_id or stable_id("sub", self.name)
+        self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
+        self.related_stage_ids = list(dict.fromkeys(self.related_stage_ids))
+        return self
+
+
 class CurrentLandscape(OnboardingModel):
     problems: list[str] = Field(default_factory=list)
     subdirections: list[str] = Field(default_factory=list)
     subdirection_ids: dict[str, str] = Field(default_factory=dict)
+    problem_details: list[LandscapeProblem] = Field(default_factory=list)
+    subdirection_details: list[SubdirectionDetail] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def ensure_ids(self) -> "CurrentLandscape":
+        if not self.problems and self.problem_details:
+            self.problems = [item.name for item in self.problem_details]
+        if not self.subdirections and self.subdirection_details:
+            self.subdirections = [item.name for item in self.subdirection_details]
         self.subdirection_ids = {
-            name: self.subdirection_ids.get(name) or stable_id("sub", name)
+            name: self.subdirection_ids.get(name)
+            or next(
+                (
+                    str(item.subdirection_id)
+                    for item in self.subdirection_details
+                    if item.name == name
+                ),
+                stable_id("sub", name),
+            )
             for name in self.subdirections
         }
         return self
@@ -350,6 +400,10 @@ class LearningStep(OnboardingModel):
     activities: list[str] = Field(default_factory=list)
     completion_criteria: list[str] = Field(default_factory=list)
     expected_outcome: str = ""
+    start_week: int | None = Field(default=None, ge=1)
+    end_week: int | None = Field(default=None, ge=1)
+    estimated_hours: int | None = Field(default=None, ge=1)
+    milestone: str = ""
 
     @field_validator("step", mode="before")
     @classmethod
@@ -425,7 +479,7 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
-    policy_version: str = "domain-quality-v1.3.0"
+    policy_version: str = "domain-quality-v1.4.0"
     policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -478,7 +532,7 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
-    policy_version: str = "domain-quality-v1.3.0"
+    policy_version: str = "domain-quality-v1.4.0"
     policy_fingerprint: str | None = None
     adaptive_policy_version: str | None = None
     shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
@@ -540,7 +594,7 @@ class KnowledgeGraphSnapshot(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
-    policy_version: str = "domain-quality-v1.3.0"
+    policy_version: str = "domain-quality-v1.4.0"
     policy_fingerprint: str | None = None
     status: Literal[
         "ok",
@@ -562,6 +616,45 @@ class PipelineResult(OnboardingModel):
     repair_record: RepairRecord | None = None
     knowledge_graph: KnowledgeGraphSnapshot | None = None
     error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_quality_audit_consistency(self) -> "PipelineResult":
+        if self.quality is None:
+            return self
+        if self.quality.policy_version != self.policy_version:
+            raise ValueError("result and quality policy versions must match")
+        if self.quality.policy_fingerprint != self.policy_fingerprint:
+            raise ValueError("result and quality policy fingerprints must match")
+        selected = next(
+            (
+                attempt.quality
+                for attempt in self.quality_attempts
+                if attempt.attempt_number == self.quality.selected_attempt
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError("selected quality attempt is missing")
+        fields = (
+            "policy_version",
+            "policy_fingerprint",
+            "score",
+            "threshold",
+            "passed_hard_gates",
+            "dimensions",
+            "issues",
+            "state",
+            "hard_gates",
+            "evidence_validation_modes",
+        )
+        if any(getattr(selected, field) != getattr(self.quality, field) for field in fields):
+            raise ValueError("selected quality attempt must match final quality")
+        if self.repair_record is not None:
+            if self.repair_record.policy_version != self.policy_version:
+                raise ValueError("result and repair policy versions must match")
+            if self.repair_record.policy_fingerprint != self.policy_fingerprint:
+                raise ValueError("result and repair policy fingerprints must match")
+        return self
 
     def to_response(self) -> dict[str, Any]:
         if self.output is None:

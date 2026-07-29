@@ -235,11 +235,31 @@ class CompositeQualityEvaluator:
         output: DomainOnboardingOutput,
         issues: list[QualityIssue],
     ) -> float:
+        problem_detail_score = _average(
+            float(
+                bool(item.description.strip())
+                and bool(item.related_paper_ids)
+                and bool(item.related_stage_ids)
+            )
+            for item in output.current_landscape.problem_details
+        )
+        subdirection_detail_score = _average(
+            float(
+                bool(item.description.strip())
+                and bool(item.why_it_matters.strip())
+                and bool(item.research_questions)
+                and bool(item.related_paper_ids)
+                and bool(item.related_stage_ids)
+            )
+            for item in output.current_landscape.subdirection_details
+        )
         values = [
             _coverage(len(output.prerequisites), 3),
             _coverage(len(output.development_stages), self.config.min_development_stages),
             _coverage(len(output.current_landscape.problems), 3),
             _coverage(len(output.current_landscape.subdirections), self.config.min_subdirections),
+            problem_detail_score,
+            subdirection_detail_score,
         ]
         score = _average(values)
         if score < 1.0:
@@ -248,8 +268,8 @@ class CompositeQualityEvaluator:
                     issue_type="missing_coverage",
                     severity="warning",
                     target_path="current_landscape",
-                    message="领域分支、问题、前置知识或发展阶段覆盖不足。",
-                    recommended_action="围绕缺失子方向补充检索并局部生成。",
+                    message="领域分支、问题、前置知识、发展阶段或全景证据覆盖不足。",
+                    recommended_action="围绕缺失问题和子方向补充论文、阶段关联与可验证描述。",
                 )
             )
         return score
@@ -347,8 +367,17 @@ class CompositeQualityEvaluator:
                 for paper in stage.representative_papers
             )
             checks = [
+                stage.sequence == index + 1,
+                bool(stage.period.strip()),
                 bool(stage.summary.strip()),
                 bool(stage.motivation.strip()),
+                (
+                    stage.previous_stage_id is None
+                    if index == 0
+                    else stage.previous_stage_id
+                    == output.development_stages[index - 1].stage_id
+                ),
+                index == 0 or bool(stage.transition_from_previous.strip()),
                 bool(stage.related_paper_ids),
                 bool(stage.core_concepts),
                 bool(stage.main_techniques),
@@ -363,8 +392,8 @@ class CompositeQualityEvaluator:
                         issue_type="weak_development_stage",
                         severity="warning",
                         target_path=f"development_stages[{index}]",
-                        message="发展阶段缺少动机、论文、概念、技术、阅读指导或开放问题。",
-                        recommended_action="只补充该阶段缺失字段。",
+                        message="发展阶段顺序、时期、前后承接、论文或内容字段不完整。",
+                        recommended_action="按时间顺序补充该阶段的时期、前驱阶段和技术转折说明。",
                     )
                 )
         return _average(stage_scores)
@@ -423,10 +452,12 @@ class CompositeQualityEvaluator:
         route_fit = (not core_ids or bool(core_ids & early_ids)) and not (
             late_role_ids & first_two_ids
         )
+        time_fit = self._learning_time_fit(output)
         score = (
-            0.20 * float(sequence_ok)
-            + 0.70 * item_score
+            0.15 * float(sequence_ok)
+            + 0.60 * item_score
             + 0.10 * float(route_fit)
+            + 0.15 * float(time_fit)
         )
         if score < 1.0:
             issues.append(
@@ -434,11 +465,34 @@ class CompositeQualityEvaluator:
                     issue_type="route_conflict",
                     severity="error" if not sequence_ok else "warning",
                     target_path="learning_path",
-                    message="学习步骤不连续、缺少阅读指导，或核心/应用论文位置不合理。",
-                    recommended_action="按基础到实验再到前沿的固定阶段重新编号并补齐。",
+                    message="学习步骤不连续、缺少阅读指导、论文位置不合理，或未覆盖用户时间预算。",
+                    recommended_action="按基础到实验再到前沿的固定阶段重新编号，并补齐周次、里程碑和验收条件。",
                 )
             )
         return score
+
+    @staticmethod
+    def _learning_time_fit(output: DomainOnboardingOutput) -> bool:
+        total_weeks = output.learner_profile.time_budget_weeks
+        if total_weeks is None:
+            return True
+        if not output.learning_path:
+            return False
+        ranges = [(step.start_week, step.end_week) for step in output.learning_path]
+        if any(start is None or end is None for start, end in ranges):
+            return False
+        normalized = [(int(start), int(end)) for start, end in ranges]
+        return (
+            normalized[0][0] == 1
+            and normalized[-1][1] == total_weeks
+            and all(1 <= start <= end <= total_weeks for start, end in normalized)
+            and all(
+                normalized[index][0] >= normalized[index - 1][0]
+                and normalized[index][1] >= normalized[index - 1][1]
+                for index in range(1, len(normalized))
+            )
+            and all(step.milestone.strip() for step in output.learning_path)
+        )
 
     def evaluate_goal_alignment(
         self,
@@ -490,6 +544,10 @@ class CompositeQualityEvaluator:
             yield from (paper.paper_id for paper in step.papers)
         for claim in output.evidence_claims:
             yield from claim.supporting_paper_ids
+        for problem in output.current_landscape.problem_details:
+            yield from problem.related_paper_ids
+        for subdirection in output.current_landscape.subdirection_details:
+            yield from subdirection.related_paper_ids
 
 
 def critical_dimensions_not_regressed(

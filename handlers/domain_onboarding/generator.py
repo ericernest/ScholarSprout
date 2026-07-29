@@ -18,6 +18,7 @@ from .schemas import (
     EvidenceClaim,
     GenerationResult,
     LearnerProfile,
+    LandscapeProblem,
     LearningStep,
     ModelCallStats,
     PaperReference,
@@ -25,6 +26,7 @@ from .schemas import (
     QualityIssue,
     RankedPaper,
     SelectedPaper,
+    SubdirectionDetail,
 )
 
 
@@ -63,11 +65,26 @@ class SimpleStagePathPlanner:
     ) -> list[LearningStep]:
         provided = raw_steps if isinstance(raw_steps, list) else []
         results: list[LearningStep] = []
+        week_windows = self._week_windows(profile.time_budget_weeks, len(self.stage_names))
+        paper_by_id = {paper.paper_id: paper for paper in papers}
         for index, stage_name in enumerate(self.stage_names, start=1):
             raw = provided[index - 1] if index - 1 < len(provided) and isinstance(provided[index - 1], dict) else {}
             ids = self._valid_ids(raw.get("paper_ids"), references)
+            if index <= 2:
+                ids = [
+                    paper_id
+                    for paper_id in ids
+                    if paper_by_id[paper_id].paper_role not in {"application", "frontier"}
+                ]
             if not ids and papers:
-                ids = [papers[min(index - 1, len(papers) - 1)].paper_id]
+                eligible = [
+                    paper
+                    for paper in papers
+                    if index > 2
+                    or paper.paper_role not in {"application", "frontier"}
+                ]
+                chosen = eligible or papers
+                ids = [chosen[min(index - 1, len(chosen) - 1)].paper_id]
             activities = self._strings(raw.get("activities"))
             if profile.preference == "experiment_first" and index >= 3:
                 activities.append("复现一个公开基线并记录实验配置与结果")
@@ -82,6 +99,10 @@ class SimpleStagePathPlanner:
             goal = str(raw.get("goal") or f"完成{stage_name}并建立与下一阶段的连接")
             topics = self._strings(raw.get("topics")) or [stage_name]
             outcome = str(raw.get("expected_outcome") or criteria[0])
+            start_week, end_week = week_windows[index - 1]
+            estimated_hours = self._positive_int(raw.get("estimated_hours"))
+            if estimated_hours is None and start_week is not None and end_week is not None:
+                estimated_hours = max(4, (end_week - start_week + 1) * 6)
             results.append(
                 LearningStep(
                     step=str(index),
@@ -92,9 +113,35 @@ class SimpleStagePathPlanner:
                     activities=list(dict.fromkeys(activities)),
                     completion_criteria=criteria,
                     expected_outcome=outcome,
+                    start_week=start_week,
+                    end_week=end_week,
+                    estimated_hours=estimated_hours,
+                    milestone=str(raw.get("milestone") or criteria[0]),
                 )
             )
         return results
+
+    @staticmethod
+    def _week_windows(
+        total_weeks: int | None,
+        step_count: int,
+    ) -> list[tuple[int | None, int | None]]:
+        if total_weeks is None:
+            return [(None, None)] * step_count
+        windows = []
+        for index in range(step_count):
+            start = index * total_weeks // step_count + 1
+            end = max(start, (index + 1) * total_weeks // step_count)
+            windows.append((start, min(total_weeks, end)))
+        return windows
+
+    @staticmethod
+    def _positive_int(value: object) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
     @staticmethod
     def _strings(value: object) -> list[str]:
@@ -170,17 +217,28 @@ class StructuredOnboardingGenerator:
             "You MUST use only paper_id values from allowed_papers; never invent or modify paper metadata. "
             "Output fields: domain, text, prerequisites, development_stages, current_landscape, learning_path. "
             "Each prerequisite has name, why_needed, key_points, related_paper_ids. Each development stage has "
-            "name, summary, motivation, related_paper_ids, prerequisite_ids, core_concepts, main_techniques, open_problems. "
-            "current_landscape has problems:list[str] and subdirections:list[str]; never put objects in either list. "
+            "stage_id, name, period, summary, motivation, transition_from_previous, related_paper_ids, prerequisite_ids, "
+            "core_concepts, main_techniques, open_problems. Use short stable stage_id values such as stage_1. "
+            "current_landscape has problems:list[str], subdirections:list[str], problem_details and subdirection_details. "
+            "Each problem detail has name, description, related_paper_ids and related_stage_ids. Each subdirection detail "
+            "has name, description, why_it_matters, research_questions, related_paper_ids and related_stage_ids. "
+            "Ground every landscape detail in allowed paper IDs and stage IDs. "
             "Each learning step has step, goal, topics, paper_ids, "
             "activities, completion_criteria, expected_outcome. Produce 3 development stages and 3-5 subdirections. "
             "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
             "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
+            "Evidence claims must collectively cover every development stage and every current-landscape problem/subdirection. "
             "Use abstract_explicit only when every cited paper has a non-empty abstract and directly supports the claim; "
             "metadata_inference and background_synthesis are weak evidence and must not be phrased as proven facts. "
+            "Prefer concise abstract_explicit claims copied faithfully from a paper abstract, and retain the paper's exact "
+            "English technical terms in parentheses so cross-language evidence can be reproduced. Use one paper per claim "
+            "unless the claim truly synthesizes multiple papers. "
             "Also output paper_guidance:[{paper_id,contribution,reading_focus:list[str]}] for every core or recommended paper. "
             "contribution explains why the paper belongs at this learning stage; reading_focus contains 1-3 concrete reading targets. "
+            "Development stages must be chronological. Each stage includes period and transition_from_previous, and every "
+            "stage after the first must explain how the earlier limitation motivated the next stage. "
             "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
+            "Each learning step includes estimated_hours and milestone; its content must fit the learner time budget. "
             "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
             "at most 3 items in each explanatory list, and at most 6 evidence claims. "
             "Return paper IDs only inside generated sections; paper metadata is attached by code."
@@ -254,8 +312,12 @@ class StructuredOnboardingGenerator:
         prerequisites = self._normalize_prerequisites(payload.get("prerequisites"), references)
         stages = self._normalize_stages(payload.get("development_stages"), references, prerequisites, papers)
         landscape_raw = payload.get("current_landscape") if isinstance(payload.get("current_landscape"), dict) else {}
-        problems = self._strings(landscape_raw.get("problems"))
-        subdirections = self._strings(landscape_raw.get("subdirections")) or plan.expected_subdirections
+        landscape = self._normalize_landscape(
+            landscape_raw,
+            plan,
+            stages,
+            references,
+        )
         learning_path = self.path_planner.normalize(
             payload.get("learning_path"), profile=profile, papers=papers, references=references
         )
@@ -265,16 +327,19 @@ class StructuredOnboardingGenerator:
             stages,
         )
         try:
+            text = str(payload.get("text") or "").strip()
+            if len(text) < 40:
+                text = (
+                    f"本方案面向{profile.preference}学习偏好，按领域演进、当前全景和实践路径"
+                    f"系统介绍{plan.normalized_domain}，并为目标“{profile.goal}”绑定可验证论文与里程碑。"
+                )
             return DomainOnboardingOutput(
                 domain=str(payload.get("domain") or plan.normalized_domain or request.query),
-                text=str(payload.get("text") or f"{plan.normalized_domain} 领域入门方案。"),
+                text=text,
                 learner_profile=profile,
                 prerequisites=prerequisites,
                 development_stages=stages,
-                current_landscape=CurrentLandscape(
-                    problems=problems,
-                    subdirections=subdirections,
-                ),
+                current_landscape=landscape,
                 learning_path=learning_path,
                 papers=[SelectedPaper.from_ranked(paper) for paper in papers],
                 evidence_claims=evidence_claims,
@@ -346,6 +411,130 @@ class StructuredOnboardingGenerator:
             )
         return results
 
+    def _normalize_landscape(
+        self,
+        value: dict[str, Any],
+        plan: DomainResearchPlan,
+        stages: list[DevelopmentStage],
+        references: dict[str, PaperReference],
+    ) -> CurrentLandscape:
+        problem_names = self._strings(value.get("problems"))
+        subdirection_names = (
+            self._strings(value.get("subdirections"))
+            or list(plan.expected_subdirections)
+        )
+        stage_aliases: dict[str, str] = {}
+        for stage in stages:
+            if not stage.stage_id:
+                continue
+            canonical = str(stage.stage_id)
+            for alias in (
+                canonical,
+                stage.name,
+                str(stage.sequence),
+                f"stage_{stage.sequence}",
+                f"stage-{stage.sequence}",
+                f"阶段 {stage.sequence}",
+            ):
+                stage_aliases[alias.strip().lower()] = canonical
+        problem_details = self._landscape_problems(
+            value.get("problem_details"),
+            problem_names,
+            references,
+            stage_aliases,
+        )
+        subdirection_details = self._subdirection_details(
+            value.get("subdirection_details"),
+            subdirection_names,
+            references,
+            stage_aliases,
+        )
+        return CurrentLandscape(
+            problems=problem_names or [item.name for item in problem_details],
+            subdirections=(
+                subdirection_names or [item.name for item in subdirection_details]
+            ),
+            problem_details=problem_details,
+            subdirection_details=subdirection_details,
+        )
+
+    def _landscape_problems(
+        self,
+        value: object,
+        names: list[str],
+        references: dict[str, PaperReference],
+        stage_aliases: dict[str, str],
+    ) -> list[LandscapeProblem]:
+        raw_items = value if isinstance(value, list) else []
+        by_name = {
+            str(item.get("name") or "").strip(): item
+            for item in raw_items
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        }
+        ordered_names = list(dict.fromkeys([*names, *by_name]))
+        results = []
+        for name in ordered_names:
+            raw = by_name.get(name, {})
+            paper_ids = self._valid_ids(raw.get("related_paper_ids"), references)
+            results.append(
+                LandscapeProblem(
+                    problem_id=raw.get("problem_id"),
+                    name=name,
+                    description=str(raw.get("description") or ""),
+                    related_paper_ids=paper_ids,
+                    related_stage_ids=self._valid_stage_ids(
+                        raw.get("related_stage_ids"), stage_aliases
+                    ),
+                )
+            )
+        return results
+
+    def _subdirection_details(
+        self,
+        value: object,
+        names: list[str],
+        references: dict[str, PaperReference],
+        stage_aliases: dict[str, str],
+    ) -> list[SubdirectionDetail]:
+        raw_items = value if isinstance(value, list) else []
+        by_name = {
+            str(item.get("name") or "").strip(): item
+            for item in raw_items
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        }
+        ordered_names = list(dict.fromkeys([*names, *by_name]))
+        results = []
+        for name in ordered_names:
+            raw = by_name.get(name, {})
+            paper_ids = self._valid_ids(raw.get("related_paper_ids"), references)
+            results.append(
+                SubdirectionDetail(
+                    subdirection_id=raw.get("subdirection_id"),
+                    name=name,
+                    description=str(raw.get("description") or ""),
+                    why_it_matters=str(raw.get("why_it_matters") or ""),
+                    research_questions=self._strings(raw.get("research_questions")),
+                    related_paper_ids=paper_ids,
+                    related_stage_ids=self._valid_stage_ids(
+                        raw.get("related_stage_ids"), stage_aliases
+                    ),
+                )
+            )
+        return results
+
+    def _valid_stage_ids(
+        self,
+        value: object,
+        stage_aliases: dict[str, str],
+    ) -> list[str]:
+        return list(
+            dict.fromkeys(
+                stage_aliases[str(item).strip().lower()]
+                for item in self._as_list(value)
+                if str(item).strip().lower() in stage_aliases
+            )
+        )
+
     @staticmethod
     def _paper_guidance(value: object) -> dict[str, dict[str, object]]:
         items = value if isinstance(value, list) else []
@@ -401,9 +590,14 @@ class StructuredOnboardingGenerator:
             results.append(
                 DevelopmentStage(
                     stage_id=item.get("stage_id"),
+                    sequence=index + 1,
                     name=str(item["name"]),
+                    period=str(item.get("period") or "阶段顺序 " + str(index + 1)),
                     summary=str(item.get("summary") or ""),
                     motivation=str(item.get("motivation") or ""),
+                    transition_from_previous=str(
+                        item.get("transition_from_previous") or ""
+                    ),
                     representative_papers=refs,
                     core_concepts=self._strings(item.get("core_concepts")),
                     main_techniques=self._strings(item.get("main_techniques")),
@@ -412,6 +606,16 @@ class StructuredOnboardingGenerator:
                     prerequisite_ids=stage_prereqs,
                 )
             )
+        for index, stage in enumerate(results):
+            if index == 0:
+                stage.previous_stage_id = None
+                continue
+            previous = results[index - 1]
+            stage.previous_stage_id = previous.stage_id
+            if not stage.transition_from_previous:
+                stage.transition_from_previous = (
+                    f"在“{previous.name}”的基础上，研究进一步转向“{stage.name}”。"
+                )
         return results
 
     @staticmethod
