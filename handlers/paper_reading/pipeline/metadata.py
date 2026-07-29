@@ -69,8 +69,51 @@ class PaperTable(BaseModel):
     table_id: str = ""
     caption: str = ""
     page: int | None = Field(default=None, ge=1)
+    section_id: str = ""
+    asset_name: str = ""
+    bbox: list[float] = Field(default_factory=list)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
     data: list[list[str]] = Field(default_factory=list)
     headers: list[str] = Field(default_factory=list)
+    image_data: bytes = Field(default=b"", exclude=True, repr=False)
+
+
+class PaperLayoutElement(BaseModel):
+    """论文重排视图使用的版面元素。
+
+    该结构保留 page/bbox/reading_order，用于前端按 PDF 原始阅读顺序渲染，
+    避免把图表公式猜测性地插入段落。
+    """
+
+    element_id: str = ""
+    element_type: Literal[
+        "heading",
+        "paragraph",
+        "formula",
+        "figure",
+        "table",
+        "caption",
+        "footnote",
+        "reference",
+    ] = "paragraph"
+    page: int | None = Field(default=None, ge=1)
+    bbox: list[float] = Field(default_factory=list)
+    reading_order: int = 0
+    section_id: str = ""
+    parent_section_id: str = ""
+    level: int = 1
+    text: str = ""
+    raw_text: str = ""
+    caption: str = ""
+    asset_name: str = ""
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    latex: str = ""
+    html: str = ""
+    table_data: list[list[str]] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    image_data: bytes = Field(default=b"", exclude=True, repr=False)
 
 
 class PaperReference(BaseModel):
@@ -129,6 +172,7 @@ class PaperMetadata(BaseModel):
     sections: list[PaperSection] = Field(default_factory=list)
     figures: list[PaperFigure] = Field(default_factory=list)
     tables: list[PaperTable] = Field(default_factory=list)
+    layout_elements: list[PaperLayoutElement] = Field(default_factory=list)
     references: list[PaperReference] = Field(default_factory=list)
     full_text: str = Field(default="", description="解析后的全文文本")
 
