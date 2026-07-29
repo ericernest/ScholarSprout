@@ -29,6 +29,7 @@ from handlers.paper_reading.pipeline.parser import PDFParser
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
+LAYOUT_PARSER_VERSION = "section-first-v7-bbox-text"
 
 
 # ── 主入口 ──
@@ -175,8 +176,12 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     # 持久化
     if storage:
         _persist_figure_assets(storage, metadata.paper_id, metadata.figures)
+        _persist_table_assets(storage, metadata.paper_id, metadata.tables)
+        _persist_layout_assets(storage, metadata.paper_id, metadata.layout_elements)
         paper_payload = metadata.model_dump()
         paper_payload["figure_extraction_status"] = "done"
+        paper_payload["layout_extraction_status"] = "done"
+        paper_payload["layout_parser_version"] = LAYOUT_PARSER_VERSION
         storage.save_paper(metadata.paper_id, paper_payload)
         if 'pdf_bytes' in dir():
             storage.save_upload(metadata.paper_id, pdf_bytes)
@@ -206,6 +211,8 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
         "sections_count": len(metadata.sections),
         "sections": sections_summary,
         "figures_count": len(metadata.figures),
+        "tables_count": len(metadata.tables),
+        "layout_elements_count": len(metadata.layout_elements),
         "parse_status": metadata.parse_status,
     }
     if kg_result is not None:
@@ -564,6 +571,10 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
         pipeline=getattr(app_state, "paper_pipeline", None),
     )
     paper_detail = _paper_detail_for_response(paper)
+    paper_index = _build_paper_index(paper)
+    paper_detail["paper_index"] = paper_index
+    parse_quality = _parse_quality_for_paper(paper)
+    text_layer_available = bool(str(paper.get("full_text", "")).strip())
     initial_kg: dict[str, Any] = {}
     kg_engine = getattr(app_state, "kg_engine", None)
     kg_builder = getattr(app_state, "kg_builder", None)
@@ -588,6 +599,9 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
                 }
     return _ok("get_paper_detail", {
         "paper": paper_detail,
+        "paper_index": paper_index,
+        "text_layer_available": text_layer_available,
+        "parse_quality": parse_quality,
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf" if upload_path else "",
         "has_pdf": upload_path is not None,
         "initial_kg": initial_kg,
@@ -664,6 +678,8 @@ def _build_start_reading_context(
 
     sections = paper_data.get("sections", []) or []
     current = _find_section(sections, current_section)
+    current_text = _section_text_for_prompt(sections, current)
+    selection_context = _selection_context_for_prompt(request, paper_data, current)
     section_index = _section_index_for_prompt(sections)
     kg_summary = _kg_summary_for_prompt(revealed_kg)
     active_skills = ", ".join(session.active_skills) if session.active_skills else "auto"
@@ -680,14 +696,16 @@ def _build_start_reading_context(
         f"- progress: {json.dumps(session.progress, ensure_ascii=False)}\n\n"
         "[论文目录]\n"
         f"{section_index}\n\n"
+        "[用户选区 / PDF 定位]\n"
+        f"{selection_context}\n\n"
         "[当前章节正文]\n"
         f"标题: {current.get('title', current_section)}\n"
-        f"{(current.get('content') or '')[:9000]}\n\n"
+        f"{current_text[:9000]}\n\n"
         "[已展开知识图谱摘要]\n"
         f"{kg_summary}\n\n"
         "[用户问题]\n"
         f"{user_question}\n\n"
-        "请基于当前章节正文、论文元信息和已展开 KG 回答。"
+        "请优先基于用户选区回答；如果选区不足，再使用同页附近文本、当前章节正文、论文元信息和已展开 KG。"
         "如果输出某个 Skill 的结构化结果，请优先输出该 Skill 约定的 JSON。"
     )
 
@@ -701,6 +719,162 @@ def _find_section(sections: list[dict[str, Any]], section_id: str) -> dict[str, 
         if section_id.lower() and section_id.lower() in title:
             return section
     return sections[0] if sections else {}
+
+
+def _section_text_for_prompt(
+    sections: list[dict[str, Any]],
+    current: dict[str, Any],
+) -> str:
+    if not current:
+        return ""
+    try:
+        current_index = sections.index(current)
+    except ValueError:
+        current_index = next(
+            (
+                index
+                for index, section in enumerate(sections)
+                if section.get("section_id") == current.get("section_id")
+            ),
+            -1,
+        )
+    chunks: list[str] = []
+    own_content = str(current.get("content") or "").strip()
+    if own_content:
+        chunks.append(own_content)
+
+    current_level = int(current.get("level") or 1)
+    if current_index >= 0:
+        for section in sections[current_index + 1:]:
+            level = int(section.get("level") or 1)
+            if level <= current_level:
+                break
+            content = str(section.get("content") or "").strip()
+            if not content:
+                continue
+            title = str(section.get("title") or section.get("section_id") or "").strip()
+            chunks.append(f"### {title}\n{content}")
+            if sum(len(chunk) for chunk in chunks) >= 9000:
+                break
+
+    return "\n\n".join(chunks).strip()
+
+
+def _selection_context_for_prompt(
+    request: PaperReadingRequest,
+    paper_data: dict[str, Any],
+    current: dict[str, Any],
+) -> str:
+    metadata = request.metadata or {}
+    selected_text = str(metadata.get("selected_text") or "").strip()
+    selected_page = metadata.get("selected_page")
+    selected_rect = metadata.get("selected_rect")
+    source_view = str(metadata.get("source_view") or "index")
+    source_section_id = str(metadata.get("source_section_id") or current.get("section_id") or "")
+    page_context = _page_context_for_prompt(
+        paper_data=paper_data,
+        selected_page=selected_page,
+        source_section_id=source_section_id,
+    )
+    lines = [
+        f"- source_view: {source_view}",
+        f"- source_section_id: {source_section_id}",
+        f"- selected_page: {selected_page or ''}",
+        f"- selected_rect: {json.dumps(selected_rect, ensure_ascii=False) if selected_rect else ''}",
+    ]
+    if selected_text:
+        lines.append(f"\n[选中文本]\n{selected_text[:6000]}")
+    if page_context:
+        lines.append(f"\n[同页/相邻索引文本]\n{page_context[:3000]}")
+    if not selected_text and not page_context:
+        lines.append("(无选区，使用当前章节上下文。)")
+    return "\n".join(lines)
+
+
+def _page_context_for_prompt(
+    *,
+    paper_data: dict[str, Any],
+    selected_page: Any,
+    source_section_id: str,
+) -> str:
+    try:
+        page = int(selected_page)
+    except (TypeError, ValueError):
+        page = 0
+    sections = paper_data.get("sections", []) or []
+    if page > 0:
+        chunks = []
+        for section in sections:
+            start = int(section.get("start_page") or 0)
+            end = int(section.get("end_page") or start or 0)
+            if start and start <= page <= max(start, end):
+                title = str(section.get("title") or section.get("section_id") or "")
+                content = str(section.get("content") or "")
+                chunks.append(f"### {title}\n{content[:1800]}")
+        if chunks:
+            return "\n\n".join(chunks)
+    if source_section_id:
+        section = _find_section(sections, source_section_id)
+        return str(section.get("content") or "")[:2400]
+    return ""
+
+
+def _build_paper_index(paper: dict[str, Any]) -> dict[str, Any]:
+    sections = []
+    for section in paper.get("sections", []) or []:
+        content = str(section.get("content") or "")
+        paragraphs = section.get("paragraphs") or [
+            paragraph.strip()
+            for paragraph in content.split("\n\n")
+            if paragraph.strip()
+        ]
+        text_chunks = []
+        for index, paragraph in enumerate(paragraphs[:8], start=1):
+            text = str(paragraph).strip()
+            if not text:
+                continue
+            text_chunks.append({
+                "chunk_id": f"{section.get('section_id', 'sec')}::chunk:{index}",
+                "text": text[:1200],
+                "page_refs": [
+                    page for page in (
+                        section.get("start_page"),
+                        section.get("end_page"),
+                    )
+                    if page
+                ],
+            })
+        sections.append({
+            "section_id": section.get("section_id", ""),
+            "title": section.get("title", ""),
+            "level": section.get("level", 1),
+            "start_page": section.get("start_page"),
+            "end_page": section.get("end_page"),
+            "text_chunks": text_chunks,
+            "page_refs": [
+                page for page in (
+                    section.get("start_page"),
+                    section.get("end_page"),
+                )
+                if page
+            ],
+        })
+    return {
+        "version": "pdf-first-index-v1",
+        "sections": sections,
+        "sections_count": len(sections),
+        "full_text_length": len(str(paper.get("full_text") or "")),
+    }
+
+
+def _parse_quality_for_paper(paper: dict[str, Any]) -> str:
+    full_text_length = len(str(paper.get("full_text") or "").strip())
+    sections_count = len(paper.get("sections", []) or [])
+    if full_text_length < 500:
+        return "scanned_or_ocr_needed"
+    if sections_count < 2 or full_text_length < 3000:
+        return "degraded"
+    return "good"
 
 
 def _section_index_for_prompt(sections: list[dict[str, Any]]) -> str:
@@ -798,6 +972,38 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         )
         figures.append(item)
 
+    tables = []
+    for table in paper.get("tables", []) or []:
+        item = {
+            key: value
+            for key, value in table.items()
+            if key != "image_data"
+        }
+        asset_name = str(item.get("asset_name", ""))
+        item["image_url"] = (
+            f"/paper_reading/figures/{paper_id}/{asset_name}"
+            if paper_id and asset_name
+            else ""
+        )
+        tables.append(item)
+
+    layout_elements = []
+    for element in paper.get("layout_elements", []) or []:
+        item = {
+            key: value
+            for key, value in element.items()
+            if key != "image_data"
+        }
+        asset_name = str(item.get("asset_name", ""))
+        asset_url = (
+            f"/paper_reading/figures/{paper_id}/{asset_name}"
+            if paper_id and asset_name
+            else ""
+        )
+        item["asset_url"] = asset_url
+        item["image_url"] = asset_url
+        layout_elements.append(item)
+
     return {
         "paper_id": paper.get("paper_id", ""),
         "source": paper.get("source", ""),
@@ -818,7 +1024,8 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "sections": sections,
         "sections_count": len(sections),
         "figures": figures,
-        "tables": paper.get("tables", []),
+        "tables": tables,
+        "layout_elements": layout_elements,
         "references": paper.get("references", []),
         "full_text": paper.get("full_text", ""),
         "parse_status": paper.get("parse_status", ""),
@@ -838,6 +1045,30 @@ def _persist_figure_assets(
             storage.save_figure(paper_id, asset_name, image_data)
 
 
+def _persist_table_assets(
+    storage: Any,
+    paper_id: str,
+    tables: list[Any],
+) -> None:
+    for table in tables:
+        image_data = getattr(table, "image_data", b"")
+        asset_name = getattr(table, "asset_name", "")
+        if image_data and asset_name:
+            storage.save_figure(paper_id, asset_name, image_data)
+
+
+def _persist_layout_assets(
+    storage: Any,
+    paper_id: str,
+    elements: list[Any],
+) -> None:
+    for element in elements:
+        image_data = getattr(element, "image_data", b"")
+        asset_name = getattr(element, "asset_name", "")
+        if image_data and asset_name:
+            storage.save_figure(paper_id, asset_name, image_data)
+
+
 def _ensure_paper_figures(
     *,
     paper: dict[str, Any],
@@ -850,20 +1081,40 @@ def _ensure_paper_figures(
         return paper
 
     figures = paper.get("figures", []) or []
+    layout_elements = paper.get("layout_elements", []) or []
     assets_available = bool(figures) and all(
         figure.get("asset_name")
         and storage.get_figure_path(paper.get("paper_id", ""), figure["asset_name"])
         for figure in figures
     )
-    if paper.get("figure_extraction_status") == "done" and (not figures or assets_available):
+    layout_assets_available = all(
+        not element.get("asset_name")
+        or storage.get_figure_path(paper.get("paper_id", ""), element["asset_name"])
+        for element in layout_elements
+    )
+    if (
+        paper.get("figure_extraction_status") == "done"
+        and paper.get("layout_extraction_status") == "done"
+        and paper.get("layout_parser_version") == LAYOUT_PARSER_VERSION
+        and (not figures or assets_available)
+        and layout_assets_available
+    ):
         return paper
 
     try:
         reparsed = pipeline.parse_pdf(upload_path)
         paper_id = paper.get("paper_id", "")
         _persist_figure_assets(storage, paper_id, reparsed.figures)
+        _persist_table_assets(storage, paper_id, reparsed.tables)
+        _persist_layout_assets(storage, paper_id, reparsed.layout_elements)
         paper["figures"] = [figure.model_dump() for figure in reparsed.figures]
+        paper["tables"] = [table.model_dump() for table in reparsed.tables]
+        paper["layout_elements"] = [
+            element.model_dump() for element in reparsed.layout_elements
+        ]
         paper["figure_extraction_status"] = "done"
+        paper["layout_extraction_status"] = "done"
+        paper["layout_parser_version"] = LAYOUT_PARSER_VERSION
         paper["sections"] = [
             section.model_dump(mode="json")
             for section in reparsed.sections
