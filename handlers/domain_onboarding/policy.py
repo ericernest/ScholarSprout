@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.3.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.4.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:
@@ -54,8 +54,6 @@ def default_llm_repair_issue_types() -> list[QualityIssueType]:
         "structure_error",
         "missing_evidence",
         "unsupported_claim",
-        "low_paper_relevance",
-        "paper_context_mismatch",
     ]
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from copy import deepcopy
 from typing import Any
 
 from .schemas import DomainOnboardingOutput
@@ -45,6 +47,50 @@ def paths_outside_targets(
         for path in changed_paths
         if not any(_is_within(path, target) for target in normalized_targets)
     ]
+
+
+def apply_targeted_changes(
+    before: DomainOnboardingOutput,
+    candidate: DomainOnboardingOutput,
+    target_paths: list[str],
+) -> DomainOnboardingOutput:
+    """Copy only explicitly authorized candidate subtrees into the prior output."""
+    merged = before.model_dump(mode="json")
+    source = candidate.model_dump(mode="json")
+    for target in target_paths:
+        tokens = _path_tokens(_normalize_target(target))
+        if not tokens:
+            merged = deepcopy(source)
+            continue
+        try:
+            value = deepcopy(_get_path(source, tokens))
+            _set_path(merged, tokens, value)
+        except (IndexError, KeyError, TypeError):
+            continue
+    return DomainOnboardingOutput.model_validate(merged)
+
+
+def _path_tokens(path: str) -> list[str | int]:
+    if path == "$":
+        return []
+    return [
+        int(index) if index else name
+        for name, index in re.findall(r"(?:^\$\.|\.)([^.\[]+)|\[(\d+)\]", path)
+    ]
+
+
+def _get_path(value: Any, tokens: list[str | int]) -> Any:
+    current = value
+    for token in tokens:
+        current = current[token]
+    return current
+
+
+def _set_path(value: Any, tokens: list[str | int], replacement: Any) -> None:
+    current = value
+    for token in tokens[:-1]:
+        current = current[token]
+    current[tokens[-1]] = replacement
 
 
 def _collect_changes(before: Any, after: Any, path: str, changed: set[str]) -> None:

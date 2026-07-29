@@ -15,6 +15,7 @@ from handlers.domain_onboarding.schemas import (
     ContentQuality,
     CurrentLandscape,
     DomainOnboardingOutput,
+    QualityAttempt,
     LearnerProfile,
     PipelineResult,
     QualityIssue,
@@ -82,6 +83,9 @@ class FakeOnlinePipeline:
             query=request.query,
             output=output,
             quality=quality,
+            quality_attempts=[
+                QualityAttempt(attempt_number=1, source="initial", quality=quality)
+            ],
         )
 
 
@@ -146,7 +150,7 @@ class OnlineEvaluationTests(unittest.TestCase):
             report.cases[0].quality.issues[0].target_path,
             "evidence_claims[0]",
         )
-        self.assertEqual(report.cases[0].quality_attempts, [])
+        self.assertEqual(len(report.cases[0].quality_attempts), 1)
         self.assertIsNone(report.cases[0].repair_record)
 
 

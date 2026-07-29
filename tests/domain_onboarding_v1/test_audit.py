@@ -45,6 +45,7 @@ class AuditTests(unittest.TestCase):
             policy_fingerprint=trace.policy_fingerprint,
         )
         result = PipelineResult(
+            policy_fingerprint=trace.policy_fingerprint,
             status="quality_warning",
             query="private query",
             quality=quality,

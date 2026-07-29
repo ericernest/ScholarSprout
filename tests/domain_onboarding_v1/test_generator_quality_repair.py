@@ -96,6 +96,52 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(any("复现" in activity for step in output.learning_path[2:] for activity in step.activities))
         self.assertTrue(all(step.completion_criteria for step in output.learning_path))
 
+    def test_generator_expands_too_short_summary_deterministically(self) -> None:
+        payload = make_generation_payload([paper.paper_id for paper in self.ranked])
+        payload["text"] = "RAG 入门计划"
+
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            self.ranked,
+        ).output
+
+        self.assertGreaterEqual(len(output.text), 40)
+        self.assertIn(make_plan().normalized_domain, output.text)
+
+    def test_learning_path_keeps_application_and_frontier_papers_out_of_first_two_steps(self) -> None:
+        ranked = [paper.model_copy(deep=True) for paper in self.ranked]
+        ranked[0].paper_role = "application"
+        ranked[0].reading_priority = "optional"
+        ranked[1].paper_role = "survey"
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        for step in payload["learning_path"][:2]:
+            step["paper_ids"] = [ranked[0].paper_id]
+
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+        ).output
+        role_by_id = {paper.paper_id: paper.paper_role for paper in ranked}
+
+        self.assertTrue(output.learning_path[0].paper_ids)
+        self.assertTrue(output.learning_path[1].paper_ids)
+        self.assertFalse(
+            {
+                role_by_id[paper_id]
+                for step in output.learning_path[:2]
+                for paper_id in step.paper_ids
+            }
+            & {"application", "frontier"}
+        )
+
     def test_evidence_claims_keep_only_allowed_paper_ids(self) -> None:
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])
         payload["evidence_claims"] = [
@@ -185,6 +231,54 @@ class QualityTests(unittest.TestCase):
             },
         )
 
+    def test_development_stages_are_ordered_and_linked_for_frontend(self) -> None:
+        stages = self.output.development_stages
+
+        self.assertEqual([stage.sequence for stage in stages], [1, 2, 3])
+        self.assertIsNone(stages[0].previous_stage_id)
+        self.assertTrue(all(stage.period for stage in stages))
+        for previous, current in zip(stages, stages[1:]):
+            self.assertEqual(current.previous_stage_id, previous.stage_id)
+            self.assertTrue(current.transition_from_previous)
+
+    def test_landscape_is_structured_and_grounded(self) -> None:
+        landscape = self.output.current_landscape
+
+        self.assertEqual(
+            [item.name for item in landscape.problem_details],
+            landscape.problems,
+        )
+        self.assertEqual(
+            [item.name for item in landscape.subdirection_details],
+            landscape.subdirections,
+        )
+        self.assertTrue(
+            all(item.related_paper_ids and item.related_stage_ids for item in landscape.problem_details)
+        )
+        self.assertTrue(
+            all(
+                item.description
+                and item.why_it_matters
+                and item.research_questions
+                and item.related_paper_ids
+                and item.related_stage_ids
+                for item in landscape.subdirection_details
+            )
+        )
+
+    def test_learning_path_uses_complete_time_budget(self) -> None:
+        steps = self.output.learning_path
+
+        self.assertEqual(steps[0].start_week, 1)
+        self.assertEqual(steps[-1].end_week, 6)
+        self.assertTrue(all(step.milestone and step.estimated_hours for step in steps))
+        self.assertTrue(
+            all(
+                current.start_week >= previous.start_week
+                and current.end_week >= previous.end_week
+                for previous, current in zip(steps, steps[1:])
+            )
+        )
     def test_modified_paper_metadata_fails_hard_gate(self) -> None:
         self.output.papers[0].title = "Model invented title"
         quality = self.evaluator.evaluate(self.output, self.ranked)

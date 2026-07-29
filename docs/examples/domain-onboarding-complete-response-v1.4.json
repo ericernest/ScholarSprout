@@ -1,0 +1,1266 @@
+{
+  "session_id": "domain-onboarding-rag-v1.4-repro",
+  "channel": "local-controlled-test",
+  "direction": "outbound",
+  "mode": "domain_onboarding",
+  "content": {
+    "domain": "Retrieval-Augmented Generation (RAG) Baseline Implementation",
+    "text": "A structured 6-week plan to master RAG fundamentals, implement a reproducible baseline using open-source tools, and evaluate its performance against standard metrics.",
+    "learner_profile": {
+      "background": [
+        "Python",
+        "Transformer"
+      ],
+      "goal": "六周入门 RAG，并完成一个可复现的基线实验",
+      "time_budget_weeks": 6,
+      "preference": "experiment_first",
+      "known_concepts": []
+    },
+    "prerequisites": [
+      {
+        "prerequisite_id": "pre_python-programming-libraries_046024d147",
+        "name": "Python Programming & Libraries",
+        "why_needed": "Essential for implementing the data pipeline, managing vector stores, and writing evaluation scripts.",
+        "key_points": [
+          "Proficiency in Python 3.8+",
+          "Familiarity with pandas for data manipulation",
+          "Experience with pip/conda for environment management"
+        ],
+        "related_paper_ids": []
+      },
+      {
+        "prerequisite_id": "pre_transformer-architecture_4072ec142c",
+        "name": "Transformer Architecture",
+        "why_needed": "RAG relies on pre-trained seq2seq models and neural retrievers, both built on Transformers.",
+        "key_points": [
+          "Attention mechanism and self-attention",
+          "Encoder-decoder vs decoder-only models",
+          "Fine-tuning concepts (LoRA, full fine-tuning)"
+        ],
+        "related_paper_ids": [
+          "arxiv:2005.11401"
+        ]
+      },
+      {
+        "prerequisite_id": "pre_basic-vector-database-concepts_70c7c21199",
+        "name": "Basic Vector Database Concepts",
+        "why_needed": "Understanding how dense retrieval works is critical for the 'Retrieval' part of RAG.",
+        "key_points": [
+          "Embeddings and semantic similarity",
+          "Vector indexing (e.g., FAISS, HNSW)",
+          "Top-K retrieval logic"
+        ],
+        "related_paper_ids": [
+          "arxiv:2005.11401"
+        ]
+      }
+    ],
+    "development_stages": [
+      {
+        "stage_id": "stage_1",
+        "sequence": 1,
+        "name": "Foundational RAG & Dense Retrieval",
+        "period": "Weeks 1-2",
+        "summary": "Understand the core RAG architecture combining parametric (LLM) and non-parametric (vector index) memory.",
+        "motivation": "Overcome the limitation of LLMs in accessing precise, up-to-date knowledge by integrating an explicit memory mechanism.",
+        "previous_stage_id": null,
+        "transition_from_previous": "Start from zero, establishing the baseline 'Naive RAG' pipeline.",
+        "representative_papers": [
+          {
+            "paper_id": "arxiv:2005.11401",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "authors": [
+              "Patrick Lewis",
+              "Ethan Perez",
+              "Aleksandra Piktus",
+              "Fabio Petroni",
+              "Vladimir Karpukhin",
+              "Naman Goyal",
+              "Heinrich Küttler",
+              "Mike Lewis",
+              "Wen-tau Yih",
+              "Tim Rocktäschel",
+              "Sebastian Riedel",
+              "Douwe Kiela"
+            ],
+            "year": 2020,
+            "url": "https://arxiv.org/abs/2005.11401v4",
+            "contribution": "Foundational paper defining RAG architecture with parametric and non-parametric memory.",
+            "reading_focus": [
+              "RAG formulation and conditioning mechanisms",
+              "Dense vector index integration",
+              "Performance comparison on knowledge-intensive tasks"
+            ],
+            "reading_priority": "core",
+            "is_canonical": true
+          }
+        ],
+        "core_concepts": [
+          "Parametric vs Non-parametric memory",
+          "Dense vector retrieval",
+          "Seq2seq generation with context"
+        ],
+        "main_techniques": [
+          "Sentence embeddings",
+          "Vector database indexing",
+          "Prompt conditioning on retrieved passages"
+        ],
+        "open_problems": [
+          "Retrieval noise",
+          "Context truncation",
+          "Hallucination when context is missing"
+        ],
+        "related_paper_ids": [
+          "arxiv:2005.11401"
+        ],
+        "prerequisite_ids": []
+      },
+      {
+        "stage_id": "stage_2",
+        "sequence": 2,
+        "name": "Reproducible Baseline Implementation",
+        "period": "Weeks 3-4",
+        "summary": "Implement a transparent, open-source RAG pipeline using frameworks like LangChain or LlamaIndex.",
+        "motivation": "Ensure the experiment is reproducible and not reliant on black-box APIs, allowing for detailed debugging.",
+        "previous_stage_id": "stage_1",
+        "transition_from_previous": "Move from theoretical understanding to a working codebase that handles ingestion, chunking, and generation.",
+        "representative_papers": [
+          {
+            "paper_id": "doi:10.1109/icoct64433.2025.11118753",
+            "title": "Survey of Interactive Document Query Systems Using RAG and LangChain",
+            "authors": [
+              "Govinda B. Sambare",
+              "Srinivas Ambala",
+              "Ganesh Kadam",
+              "Vedant Sonawane"
+            ],
+            "year": 2025,
+            "url": "https://doi.org/10.1109/icoct64433.2025.11118753",
+            "contribution": "Survey of RAG systems using LangChain, providing practical framework insights.",
+            "reading_focus": [
+              "LangChain integration patterns",
+              "Interactive document query system architecture",
+              "Best practices for reproducibility"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "core_concepts": [
+          "Data ingestion and chunking strategies",
+          "Vector store integration (FAISS/Chroma)",
+          "Open-source LLM integration (e.g., Llama3, Qwen)"
+        ],
+        "main_techniques": [
+          "LangChain/LlamaIndex orchestration",
+          "Modular pipeline design",
+          "Reproducible environment setup"
+        ],
+        "open_problems": [
+          "Chunk size optimization",
+          "Overlap handling",
+          "Latency vs quality trade-offs"
+        ],
+        "related_paper_ids": [
+          "doi:10.1109/icoct64433.2025.11118753"
+        ],
+        "prerequisite_ids": []
+      },
+      {
+        "stage_id": "stage_3",
+        "sequence": 3,
+        "name": "Evaluation & Advanced Refinement",
+        "period": "Weeks 5-6",
+        "summary": "Evaluate the baseline using metrics like Faithfulness and Answer Relevance, and explore advanced refinements.",
+        "motivation": "Quantify performance and identify failure modes to guide further improvements (e.g., re-ranking, agentic approaches).",
+        "previous_stage_id": "stage_2",
+        "transition_from_previous": "Shift from building to measuring, using established benchmarks and evaluation frameworks.",
+        "representative_papers": [
+          {
+            "paper_id": "arxiv:2510.25518",
+            "title": "Retrieval Augmented Generation (RAG) for Fintech: Agentic Design and Evaluation",
+            "authors": [
+              "Thomas Cook",
+              "Richard Osuagwu",
+              "Liman Tsatiashvili",
+              "Vrynsia Vrynsia",
+              "Koustav Ghosal",
+              "Maraim Masoud",
+              "Riccardo Mattivi"
+            ],
+            "year": 2025,
+            "url": "https://arxiv.org/abs/2510.25518v1",
+            "contribution": "Introduces agentic RAG for fintech, demonstrating advanced retrieval techniques.",
+            "reading_focus": [
+              "Agentic architecture design",
+              "Query reformulation and sub-query decomposition",
+              "Evaluation metrics for agentic systems"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          },
+          {
+            "paper_id": "arxiv:2504.01346",
+            "title": "RAG over Tables: Hierarchical Memory Index, Multi-Stage Retrieval, and Benchmarking",
+            "authors": [
+              "Jiaru Zou",
+              "Dongqi Fu",
+              "Sirui Chen",
+              "Xinrui He",
+              "Zihao Li",
+              "Yada Zhu",
+              "Jiawei Han",
+              "Jingrui He"
+            ],
+            "year": 2025,
+            "url": "https://arxiv.org/abs/2504.01346v4",
+            "contribution": "Addresses RAG over tables, introducing T-RAG framework and MultiTableQA benchmark.",
+            "reading_focus": [
+              "Hierarchical memory index design",
+              "Multi-stage retrieval for table corpora",
+              "Graph-aware prompting strategies"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "core_concepts": [
+          "Faithfulness and Answer Relevance",
+          "Retrieval precision and recall",
+          "Agentic RAG architectures"
+        ],
+        "main_techniques": [
+          "RAGAS/TruLens evaluation",
+          "Cross-encoder re-ranking",
+          "Iterative query decomposition"
+        ],
+        "open_problems": [
+          "Context compliance under conflict",
+          "Handling specialized ontologies",
+          "Multi-table knowledge retrieval"
+        ],
+        "related_paper_ids": [
+          "arxiv:2510.25518",
+          "arxiv:2504.01346"
+        ],
+        "prerequisite_ids": []
+      }
+    ],
+    "current_landscape": {
+      "problems": [
+        "Retrieval Noise and Conflict",
+        "Evaluation of Faithfulness",
+        "Specialized Domain Adaptation"
+      ],
+      "subdirections": [
+        "Agentic RAG Architectures",
+        "Fine-Grained Document Refinement",
+        "Structured Data Retrieval (Tables)"
+      ],
+      "subdirection_ids": {
+        "Agentic RAG Architectures": "sub_agentic-rag-architectures_e980408a74",
+        "Fine-Grained Document Refinement": "sub_fine-grained-document-refinement_6f4b042906",
+        "Structured Data Retrieval (Tables)": "sub_structured-data-retrieval-tables_0e4aafde4c"
+      },
+      "problem_details": [
+        {
+          "problem_id": "problem_retrieval-noise-and-conflict_25566b2d8a",
+          "name": "Retrieval Noise and Conflict",
+          "description": "Misleading retrieval can severely degrade accuracy, and models may rely on parametric priors instead of context.",
+          "related_paper_ids": [
+            "arxiv:2605.14473"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        },
+        {
+          "problem_id": "problem_evaluation-of-faithfulness_15914fcea9",
+          "name": "Evaluation of Faithfulness",
+          "description": "Standard metrics often fail to capture hallucinations or the model's ability to abstain when evidence is insufficient.",
+          "related_paper_ids": [
+            "arxiv:2601.07528"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        },
+        {
+          "problem_id": "problem_specialized-domain-adaptation_e722086fa9",
+          "name": "Specialized Domain Adaptation",
+          "description": "Domains like fintech or legal require handling dense terminology, ontologies, and strict compliance norms.",
+          "related_paper_ids": [
+            "arxiv:2510.25518",
+            "arxiv:2511.22858"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        }
+      ],
+      "subdirection_details": [
+        {
+          "subdirection_id": "sub_agentic-rag-architectures_e980408a74",
+          "name": "Agentic RAG Architectures",
+          "description": "Using multi-agent systems for iterative sub-query decomposition and evidence seeking to improve robustness.",
+          "why_it_matters": "Addresses complex queries that single-step retrieval cannot handle effectively.",
+          "research_questions": [
+            "How to structure tool calls for iterative evidence seeking?",
+            "What is the latency cost of agentic approaches?"
+          ],
+          "related_paper_ids": [
+            "arxiv:2510.25518",
+            "arxiv:2601.07528"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        },
+        {
+          "subdirection_id": "sub_fine-grained-document-refinement_6f4b042906",
+          "name": "Fine-Grained Document Refinement",
+          "description": "Enhancing RAG with sentence-level re-ranking and reconstruction to reduce noise.",
+          "why_it_matters": "Improves precision by filtering out irrelevant chunks before generation.",
+          "research_questions": [
+            "How does re-ranking impact generation fidelity?",
+            "What are efficient re-ranking strategies?"
+          ],
+          "related_paper_ids": [
+            "doi:10.18653/v1/2024.knowledgenlp-1.6"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        },
+        {
+          "subdirection_id": "sub_structured-data-retrieval-tables_0e4aafde4c",
+          "name": "Structured Data Retrieval (Tables)",
+          "description": "Extending RAG to handle table corpora with hierarchical memory indices and multi-stage retrieval.",
+          "why_it_matters": "Real-world knowledge is often stored in tables, requiring specific retrieval and prompting strategies.",
+          "research_questions": [
+            "How to effectively filter unnecessary tables?",
+            "How to prompt LLMs to infer over retrieved table structures?"
+          ],
+          "related_paper_ids": [
+            "arxiv:2504.01346"
+          ],
+          "related_stage_ids": [
+            "stage_3"
+          ]
+        }
+      ]
+    },
+    "learning_path": [
+      {
+        "step": "1",
+        "goal": "Set up the development environment and understand the RAG paradigm.",
+        "topics": [
+          "RAG vs Fine-tuning",
+          "Python environment setup",
+          "Vector database basics"
+        ],
+        "papers": [
+          {
+            "paper_id": "arxiv:2005.11401",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "authors": [
+              "Patrick Lewis",
+              "Ethan Perez",
+              "Aleksandra Piktus",
+              "Fabio Petroni",
+              "Vladimir Karpukhin",
+              "Naman Goyal",
+              "Heinrich Küttler",
+              "Mike Lewis",
+              "Wen-tau Yih",
+              "Tim Rocktäschel",
+              "Sebastian Riedel",
+              "Douwe Kiela"
+            ],
+            "year": 2020,
+            "url": "https://arxiv.org/abs/2005.11401v4",
+            "contribution": "Foundational paper defining RAG architecture with parametric and non-parametric memory.",
+            "reading_focus": [
+              "RAG formulation and conditioning mechanisms",
+              "Dense vector index integration",
+              "Performance comparison on knowledge-intensive tasks"
+            ],
+            "reading_priority": "core",
+            "is_canonical": true
+          }
+        ],
+        "paper_ids": [
+          "arxiv:2005.11401"
+        ],
+        "activities": [
+          "Install LangChain, FAISS, and Transformers",
+          "Run a simple embedding and retrieval script",
+          "Read the RAG foundational paper abstract"
+        ],
+        "completion_criteria": [
+          "Environment is ready, and a simple vector search works."
+        ],
+        "expected_outcome": "Clear understanding of parametric vs non-parametric memory.",
+        "start_week": 1,
+        "end_week": 1,
+        "estimated_hours": 8,
+        "milestone": "Environment Setup Complete"
+      },
+      {
+        "step": "2",
+        "goal": "Master the components of the RAG pipeline.",
+        "topics": [
+          "Chunking strategies",
+          "Embedding models",
+          "Prompt templates"
+        ],
+        "papers": [
+          {
+            "paper_id": "arxiv:2005.11401",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "authors": [
+              "Patrick Lewis",
+              "Ethan Perez",
+              "Aleksandra Piktus",
+              "Fabio Petroni",
+              "Vladimir Karpukhin",
+              "Naman Goyal",
+              "Heinrich Küttler",
+              "Mike Lewis",
+              "Wen-tau Yih",
+              "Tim Rocktäschel",
+              "Sebastian Riedel",
+              "Douwe Kiela"
+            ],
+            "year": 2020,
+            "url": "https://arxiv.org/abs/2005.11401v4",
+            "contribution": "Foundational paper defining RAG architecture with parametric and non-parametric memory.",
+            "reading_focus": [
+              "RAG formulation and conditioning mechanisms",
+              "Dense vector index integration",
+              "Performance comparison on knowledge-intensive tasks"
+            ],
+            "reading_priority": "core",
+            "is_canonical": true
+          },
+          {
+            "paper_id": "doi:10.1109/icoct64433.2025.11118753",
+            "title": "Survey of Interactive Document Query Systems Using RAG and LangChain",
+            "authors": [
+              "Govinda B. Sambare",
+              "Srinivas Ambala",
+              "Ganesh Kadam",
+              "Vedant Sonawane"
+            ],
+            "year": 2025,
+            "url": "https://doi.org/10.1109/icoct64433.2025.11118753",
+            "contribution": "Survey of RAG systems using LangChain, providing practical framework insights.",
+            "reading_focus": [
+              "LangChain integration patterns",
+              "Interactive document query system architecture",
+              "Best practices for reproducibility"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "paper_ids": [
+          "arxiv:2005.11401",
+          "doi:10.1109/icoct64433.2025.11118753"
+        ],
+        "activities": [
+          "Experiment with different chunk sizes",
+          "Compare different embedding models",
+          "Design a prompt template for context injection"
+        ],
+        "completion_criteria": [
+          "Pipeline can ingest text, create chunks, and store embeddings."
+        ],
+        "expected_outcome": "Ability to build a functional data ingestion pipeline.",
+        "start_week": 2,
+        "end_week": 2,
+        "estimated_hours": 10,
+        "milestone": "Data Pipeline Functional"
+      },
+      {
+        "step": "3",
+        "goal": "Implement a naive RAG baseline and understand evaluation metrics.",
+        "topics": [
+          "Naive RAG implementation",
+          "Faithfulness and Answer Relevance",
+          "Baseline evaluation"
+        ],
+        "papers": [
+          {
+            "paper_id": "arxiv:2510.25518",
+            "title": "Retrieval Augmented Generation (RAG) for Fintech: Agentic Design and Evaluation",
+            "authors": [
+              "Thomas Cook",
+              "Richard Osuagwu",
+              "Liman Tsatiashvili",
+              "Vrynsia Vrynsia",
+              "Koustav Ghosal",
+              "Maraim Masoud",
+              "Riccardo Mattivi"
+            ],
+            "year": 2025,
+            "url": "https://arxiv.org/abs/2510.25518v1",
+            "contribution": "Introduces agentic RAG for fintech, demonstrating advanced retrieval techniques.",
+            "reading_focus": [
+              "Agentic architecture design",
+              "Query reformulation and sub-query decomposition",
+              "Evaluation metrics for agentic systems"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          },
+          {
+            "paper_id": "arxiv:2601.07528",
+            "title": "From RAG to Agentic RAG for Faithful Islamic Question Answering",
+            "authors": [
+              "Gagan Bhatia",
+              "Hamdy Mubarak",
+              "Mustafa Jarrar",
+              "George Mikros",
+              "Fadi Zaraket",
+              "Mahmoud Alhirthani",
+              "Mutaz Al-Khatib",
+              "Logan Cochrane",
+              "Kareem Darwish",
+              "Rashid Yahiaoui",
+              "Firoj Alam"
+            ],
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2601.07528v2",
+            "contribution": "作为评测阅读，帮助理解《From RAG to Agentic RAG for Faithful Islamic Question Answering》所代表的研究位置与技术路线。",
+            "reading_focus": [
+              "论文解决的核心问题",
+              "实验设置、指标与适用边界"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "paper_ids": [
+          "arxiv:2510.25518",
+          "arxiv:2601.07528"
+        ],
+        "activities": [
+          "Build a complete RAG chain using LangChain/LlamaIndex",
+          "Run the baseline on a small dataset (e.g., HotpotQA subset)",
+          "Calculate basic metrics using RAGAS",
+          "复现一个公开基线并记录实验配置与结果"
+        ],
+        "completion_criteria": [
+          "Baseline system runs end-to-end and produces metrics."
+        ],
+        "expected_outcome": "A reproducible baseline experiment with quantifiable results.",
+        "start_week": 3,
+        "end_week": 3,
+        "estimated_hours": 15,
+        "milestone": "Baseline Experiment Complete"
+      },
+      {
+        "step": "4",
+        "goal": "Refine the experiment and explore advanced techniques.",
+        "topics": [
+          "Re-ranking",
+          "Agentic workflows",
+          "Error analysis"
+        ],
+        "papers": [
+          {
+            "paper_id": "doi:10.18653/v1/2024.knowledgenlp-1.6",
+            "title": "DSLR: Document Refinement with Sentence-Level Re-ranking and Reconstruction to Enhance Retrieval-Augmented Generation",
+            "authors": [
+              "Taeho Hwang",
+              "Soyeong Jeong",
+              "Sukmin Cho",
+              "SeungYoon Han",
+              "Jong Park"
+            ],
+            "year": 2024,
+            "url": "https://doi.org/10.18653/v1/2024.knowledgenlp-1.6",
+            "contribution": "Proposes DSLR for document refinement via sentence-level re-ranking.",
+            "reading_focus": [
+              "Re-ranking mechanisms",
+              "Document reconstruction techniques",
+              "Impact on generation fidelity"
+            ],
+            "reading_priority": "optional",
+            "is_canonical": false
+          },
+          {
+            "paper_id": "arxiv:2510.25518",
+            "title": "Retrieval Augmented Generation (RAG) for Fintech: Agentic Design and Evaluation",
+            "authors": [
+              "Thomas Cook",
+              "Richard Osuagwu",
+              "Liman Tsatiashvili",
+              "Vrynsia Vrynsia",
+              "Koustav Ghosal",
+              "Maraim Masoud",
+              "Riccardo Mattivi"
+            ],
+            "year": 2025,
+            "url": "https://arxiv.org/abs/2510.25518v1",
+            "contribution": "Introduces agentic RAG for fintech, demonstrating advanced retrieval techniques.",
+            "reading_focus": [
+              "Agentic architecture design",
+              "Query reformulation and sub-query decomposition",
+              "Evaluation metrics for agentic systems"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "paper_ids": [
+          "doi:10.18653/v1/2024.knowledgenlp-1.6",
+          "arxiv:2510.25518"
+        ],
+        "activities": [
+          "Add a cross-encoder re-ranker to the pipeline",
+          "Analyze failure cases from the baseline",
+          "Read about agentic RAG for inspiration",
+          "复现一个公开基线并记录实验配置与结果"
+        ],
+        "completion_criteria": [
+          "Refined system shows improvement over baseline."
+        ],
+        "expected_outcome": "Understanding of how to improve retrieval precision.",
+        "start_week": 4,
+        "end_week": 4,
+        "estimated_hours": 12,
+        "milestone": "Refinement Implemented"
+      },
+      {
+        "step": "5",
+        "goal": "Identify research gaps and plan next steps.",
+        "topics": [
+          "Context compliance",
+          "Specialized domains",
+          "Table retrieval"
+        ],
+        "papers": [
+          {
+            "paper_id": "arxiv:2605.14473",
+            "title": "Does RAG Know When Retrieval Is Wrong? Diagnosing Context Compliance under Knowledge Conflict",
+            "authors": [
+              "Yihang Chen",
+              "Pin Qian",
+              "Su Wang",
+              "Sipeng Zhang",
+              "Huan Xu",
+              "Shuhuai Lin",
+              "Xinpeng Wei"
+            ],
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.14473v4",
+            "contribution": "Analyzes context compliance and knowledge conflict in RAG systems.",
+            "reading_focus": [
+              "Context-Driven Decomposition (CDD) methodology",
+              "Impact of misleading retrieval on accuracy",
+              "Diagnostic interventions for context conflict"
+            ],
+            "reading_priority": "optional",
+            "is_canonical": false
+          },
+          {
+            "paper_id": "arxiv:2504.01346",
+            "title": "RAG over Tables: Hierarchical Memory Index, Multi-Stage Retrieval, and Benchmarking",
+            "authors": [
+              "Jiaru Zou",
+              "Dongqi Fu",
+              "Sirui Chen",
+              "Xinrui He",
+              "Zihao Li",
+              "Yada Zhu",
+              "Jiawei Han",
+              "Jingrui He"
+            ],
+            "year": 2025,
+            "url": "https://arxiv.org/abs/2504.01346v4",
+            "contribution": "Addresses RAG over tables, introducing T-RAG framework and MultiTableQA benchmark.",
+            "reading_focus": [
+              "Hierarchical memory index design",
+              "Multi-stage retrieval for table corpora",
+              "Graph-aware prompting strategies"
+            ],
+            "reading_priority": "recommended",
+            "is_canonical": false
+          }
+        ],
+        "paper_ids": [
+          "arxiv:2605.14473",
+          "arxiv:2504.01346"
+        ],
+        "activities": [
+          "Review recent papers on RAG limitations",
+          "Design a small experiment to test context compliance",
+          "Explore multi-table RAG benchmarks",
+          "复现一个公开基线并记录实验配置与结果"
+        ],
+        "completion_criteria": [
+          "A clear research proposal or advanced experiment plan."
+        ],
+        "expected_outcome": "Insight into current open problems and potential contributions.",
+        "start_week": 5,
+        "end_week": 6,
+        "estimated_hours": 8,
+        "milestone": "Research Plan Defined"
+      }
+    ],
+    "papers": [
+      {
+        "paper_id": "arxiv:2005.11401",
+        "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+        "authors": [
+          "Patrick Lewis",
+          "Ethan Perez",
+          "Aleksandra Piktus",
+          "Fabio Petroni",
+          "Vladimir Karpukhin",
+          "Naman Goyal",
+          "Heinrich Küttler",
+          "Mike Lewis",
+          "Wen-tau Yih",
+          "Tim Rocktäschel",
+          "Sebastian Riedel",
+          "Douwe Kiela"
+        ],
+        "abstract": "Large pre-trained language models have been shown to store factual knowledge in their parameters, and achieve state-of-the-art results when fine-tuned on downstream NLP tasks. However, their ability to access and precisely manipulate knowledge is still limited, and hence on knowledge-intensive tasks, their performance lags behind task-specific architectures. Additionally, providing provenance for their decisions and updating their world knowledge remain open research problems. Pre-trained models with a differentiable access mechanism to explicit non-parametric memory can overcome this issue, but have so far been only investigated for extractive downstream tasks. We explore a general-purpose fine-tuning recipe for retrieval-augmented generation (RAG) -- models which combine pre-trained parametric and non-parametric memory for language generation. We introduce RAG models where the parametric memory is a pre-trained seq2seq model and the non-parametric memory is a dense vector index of Wikipedia, accessed with a pre-trained neural retriever. We compare two RAG formulations, one which conditions on the same retrieved passages across the whole generated sequence, the other can use different passages per token. We fine-tune and evaluate our models on a wide range of knowledge-intensive NLP tasks and set the state-of-the-art on three open domain QA tasks, outperforming parametric seq2seq models and task-specific retrieve-and-extract architectures. For language generation tasks, we find that RAG models generate more specific, diverse and factual language than a state-of-the-art parametric-only seq2seq baseline.",
+        "year": 2020,
+        "url": "https://arxiv.org/abs/2005.11401v4",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2005.11401",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "foundational",
+        "reading_priority": "core",
+        "is_canonical": true,
+        "relevance_score": 0.162356,
+        "context_score": 1.0,
+        "final_score": 0.254055
+      },
+      {
+        "paper_id": "doi:10.1109/icoct64433.2025.11118753",
+        "title": "Survey of Interactive Document Query Systems Using RAG and LangChain",
+        "authors": [
+          "Govinda B. Sambare",
+          "Srinivas Ambala",
+          "Ganesh Kadam",
+          "Vedant Sonawane"
+        ],
+        "abstract": null,
+        "year": 2025,
+        "url": "https://doi.org/10.1109/icoct64433.2025.11118753",
+        "citation_count": 3,
+        "source": "crossref",
+        "doi": "10.1109/icoct64433.2025.11118753",
+        "arxiv_id": null,
+        "publication_types": [
+          "proceedings-article"
+        ],
+        "paper_role": "survey",
+        "reading_priority": "recommended",
+        "is_canonical": false,
+        "relevance_score": 0.103346,
+        "context_score": 1.0,
+        "final_score": 0.357385
+      },
+      {
+        "paper_id": "doi:10.18653/v1/2024.knowledgenlp-1.6",
+        "title": "DSLR: Document Refinement with Sentence-Level Re-ranking and Reconstruction to Enhance Retrieval-Augmented Generation",
+        "authors": [
+          "Taeho Hwang",
+          "Soyeong Jeong",
+          "Sukmin Cho",
+          "SeungYoon Han",
+          "Jong Park"
+        ],
+        "abstract": null,
+        "year": 2024,
+        "url": "https://doi.org/10.18653/v1/2024.knowledgenlp-1.6",
+        "citation_count": 4,
+        "source": "crossref",
+        "doi": "10.18653/v1/2024.knowledgenlp-1.6",
+        "arxiv_id": null,
+        "publication_types": [
+          "proceedings-article"
+        ],
+        "paper_role": "frontier",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.053976,
+        "context_score": 1.0,
+        "final_score": 0.342575
+      },
+      {
+        "paper_id": "doi:10.61453/intij.202522",
+        "title": "The Application of RAG in Langchain Framework in Classical Chinese",
+        "authors": [
+          "Liu Zhi Hao",
+          "Leong Wai Yie"
+        ],
+        "abstract": "<jats:p>Currently, the world's mainstream Large Language Models (LLMs) offer significantly less support for Chinese than for English, resulting in challenges when utilizing generative LLMs to produce high-quality Chinese traditional literature works. This paper proposes a data source creation method, this method interprets words according to their extended meanings, which means one meaning of a word produces another or several meanings related to it in the process of language development, then use a word segmentation tool to divide the different meanings of a word, which re-quantifies the nouns, verbs, stories and histories in classical Chinese, the advantage of quantifying in this way is that it can effectively solve the problem of polysemy of words, and enhances the logical correlation between contexts. From the results, the correlation between the generated classical Chinese and the real results has been greatly improved. We use the Retrieval Augmented Generation (RAG) method to get the results at the least cost without retraining the new LLM</jats:p>",
+        "year": 2025,
+        "url": "https://doi.org/10.61453/intij.202522",
+        "citation_count": 1,
+        "source": "crossref",
+        "doi": "10.61453/intij.202522",
+        "arxiv_id": null,
+        "publication_types": [
+          "journal-article"
+        ],
+        "paper_role": "application",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.116175,
+        "context_score": 1.0,
+        "final_score": 0.327862
+      },
+      {
+        "paper_id": "arxiv:2510.25518",
+        "title": "Retrieval Augmented Generation (RAG) for Fintech: Agentic Design and Evaluation",
+        "authors": [
+          "Thomas Cook",
+          "Richard Osuagwu",
+          "Liman Tsatiashvili",
+          "Vrynsia Vrynsia",
+          "Koustav Ghosal",
+          "Maraim Masoud",
+          "Riccardo Mattivi"
+        ],
+        "abstract": "Retrieval-Augmented Generation (RAG) systems often face limitations in specialized domains such as fintech, where domain-specific ontologies, dense terminology, and acronyms complicate effective retrieval and synthesis. This paper introduces an agentic RAG architecture designed to address these challenges through a modular pipeline of specialized agents. The proposed system supports intelligent query reformulation, iterative sub-query decomposition guided by keyphrase extraction, contextual acronym resolution, and cross-encoder-based context re-ranking. We evaluate our approach against a standard RAG baseline using a curated dataset of 85 question--answer--reference triples derived from an enterprise fintech knowledge base. Experimental results demonstrate that the agentic RAG system outperforms the baseline in retrieval precision and relevance, albeit with increased latency. These findings suggest that structured, multi-agent methodologies offer a promising direction for enhancing retrieval robustness in complex, domain-specific settings.",
+        "year": 2025,
+        "url": "https://arxiv.org/abs/2510.25518v1",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2510.25518",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "evaluation",
+        "reading_priority": "recommended",
+        "is_canonical": false,
+        "relevance_score": 0.17892,
+        "context_score": 1.0,
+        "final_score": 0.313461
+      },
+      {
+        "paper_id": "doi:10.18653/v1/2026.findings-eacl.35",
+        "title": "Multilingual Retrieval-Augmented Generation for Knowledge-Intensive Question Answering Task",
+        "authors": [
+          "Leonardo Ranaldi"
+        ],
+        "abstract": null,
+        "year": 2026,
+        "url": "https://doi.org/10.18653/v1/2026.findings-eacl.35",
+        "citation_count": 2,
+        "source": "crossref",
+        "doi": "10.18653/v1/2026.findings-eacl.35",
+        "arxiv_id": null,
+        "publication_types": [
+          "proceedings-article"
+        ],
+        "paper_role": "frontier",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.116502,
+        "context_score": 1.0,
+        "final_score": 0.353449
+      },
+      {
+        "paper_id": "arxiv:2504.01346",
+        "title": "RAG over Tables: Hierarchical Memory Index, Multi-Stage Retrieval, and Benchmarking",
+        "authors": [
+          "Jiaru Zou",
+          "Dongqi Fu",
+          "Sirui Chen",
+          "Xinrui He",
+          "Zihao Li",
+          "Yada Zhu",
+          "Jiawei Han",
+          "Jingrui He"
+        ],
+        "abstract": "Retrieval-Augmented Generation (RAG) enhances Large Language Models (LLMs) by integrating them with an external knowledge base to improve the answer relevance and accuracy. In real-world scenarios, beyond pure text, a substantial amount of knowledge is stored in tables, and user questions often require retrieving answers that are distributed across multiple tables. Retrieving knowledge from a table corpora (i.e., various individual tables) for a question remains nascent, at least, for (i) how to understand intra- and inter-table knowledge effectively, (ii) how to filter unnecessary tables and how to retrieve the most relevant tables efficiently, (iii) how to prompt LLMs to infer over the retrieval, (iv) how to evaluate the corresponding performance in a realistic setting. Facing the above challenges, in this paper, we first propose a table-corpora-aware RAG framework, named T-RAG, which consists of the hierarchical memory index, multi-stage retrieval, and graph-aware prompting for effective and efficient table knowledge retrieval and inference. Further, we first develop a multi-table question answering benchmark named MultiTableQA, which spans 3 different task types, 57,193 tables, and 23,758 questions in total, and the sources are all from real-world scenarios. Based on MultiTableQA, we did the holistic comparison over table retrieval methods, RAG methods, and table-to-graph representation learning methods, where T-RAG shows the leading accuracy, recall, and running time performance. Also, under T-RAG, we evaluate the inference ability upgrade of different LLMs. Code and Data are available at https://github.com/jiaruzouu/T-RAG",
+        "year": 2025,
+        "url": "https://arxiv.org/abs/2504.01346v4",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2504.01346",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "evaluation",
+        "reading_priority": "recommended",
+        "is_canonical": false,
+        "relevance_score": 0.193847,
+        "context_score": 1.0,
+        "final_score": 0.321043
+      },
+      {
+        "paper_id": "doi:10.18653/v1/2025.arabicnlp-sharedtasks.123",
+        "title": "QU-NLP at QIAS 2025 Shared Task: A Two-Phase LLM Fine-Tuning and Retrieval-Augmented Generation Approach for Islamic Inheritance Reasoning",
+        "authors": [
+          "Mohammad AL-Smadi"
+        ],
+        "abstract": null,
+        "year": 2025,
+        "url": "https://doi.org/10.18653/v1/2025.arabicnlp-sharedtasks.123",
+        "citation_count": 1,
+        "source": "crossref",
+        "doi": "10.18653/v1/2025.arabicnlp-sharedtasks.123",
+        "arxiv_id": null,
+        "publication_types": [
+          "proceedings-article"
+        ],
+        "paper_role": "frontier",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.099748,
+        "context_score": 1.0,
+        "final_score": 0.32051
+      },
+      {
+        "paper_id": "arxiv:2605.14473",
+        "title": "Does RAG Know When Retrieval Is Wrong? Diagnosing Context Compliance under Knowledge Conflict",
+        "authors": [
+          "Yihang Chen",
+          "Pin Qian",
+          "Su Wang",
+          "Sipeng Zhang",
+          "Huan Xu",
+          "Shuhuai Lin",
+          "Xinpeng Wei"
+        ],
+        "abstract": "Retrieval-Augmented Generation (RAG) is usually evaluated by whether the final answer is correct. Under knowledge conflict, this hides a key question: did the model follow retrieved evidence, rely on its parametric prior, or produce a post-hoc rationale? We study this as context compliance, the regime in which retrieved context controls the answer even when it conflicts with the model's prior knowledge. We introduce Context-Driven Decomposition (CDD), an inference-time diagnostic intervention that elicits contextual and prior answers, isolates the conflicting premise, and records a resolution trace that can be perturbed. Across Epi-Scale stress tests, TruthfulQA misconception injection, and cross-model reruns, CDD makes three behaviors visible. First, misleading retrieval can severely degrade accuracy: under a worst-case TruthfulQA misconception-injection probe, Standard RAG reaches only 15.0%. Second, better answers need not share the same mechanism: CDD improves adversarial accuracy on Gemini-2.5-Flash and shows directional gains across Claude variants, yet trace-perturbation sensitivity is high only on Gemini. Third, explicit decomposition improves controlled-conflict robustness over a conflict-aware instruction baseline on localized factual conflicts, with the clearest margins on Entity Swap (88.0% vs 79.3%) and Logical Contradiction (83.2% vs 75.4%). We frame RAG conflict handling as an observability problem.",
+        "year": 2026,
+        "url": "https://arxiv.org/abs/2605.14473v4",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2605.14473",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "frontier",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.107541,
+        "context_score": 1.0,
+        "final_score": 0.293067
+      },
+      {
+        "paper_id": "doi:10.21275/sr25519041742",
+        "title": "An Advanced RAG - Based Pipeline for Precise Legal Information Retrieval",
+        "authors": [
+          "Sarath Babu Poovassery Krishnan"
+        ],
+        "abstract": null,
+        "year": 2025,
+        "url": "https://doi.org/10.21275/sr25519041742",
+        "citation_count": 0,
+        "source": "crossref",
+        "doi": "10.21275/sr25519041742",
+        "arxiv_id": null,
+        "publication_types": [
+          "journal-article"
+        ],
+        "paper_role": "frontier",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.08808,
+        "context_score": 1.0,
+        "final_score": 0.27304
+      },
+      {
+        "paper_id": "arxiv:2601.07528",
+        "title": "From RAG to Agentic RAG for Faithful Islamic Question Answering",
+        "authors": [
+          "Gagan Bhatia",
+          "Hamdy Mubarak",
+          "Mustafa Jarrar",
+          "George Mikros",
+          "Fadi Zaraket",
+          "Mahmoud Alhirthani",
+          "Mutaz Al-Khatib",
+          "Logan Cochrane",
+          "Kareem Darwish",
+          "Rashid Yahiaoui",
+          "Firoj Alam"
+        ],
+        "abstract": "Large Language Models (LLMs) are increasingly used for Islamic question answering, where ungrounded responses may carry serious religious consequences. Yet standard MCQ/MRC-style evaluations (MCQ: Multiple choice questions, MRC: Machine Reading Comprehension) do not capture key real-world failure modes, notably free-form hallucinations and the ability to abstain when evidence is insufficient. To address this gap, we introduce IslamicFaithQA, a 3,810-item bilingual (Arabic/English) generative benchmark with atomic single-gold answers, which enables direct measurement of hallucination and abstention. We additionally developed an end-to-end grounded Islamic modeling suite consisting of (i) 25K Arabic text-grounded SFT reasoning pairs, (ii) 5K bilingual preference samples for reward-guided alignment, and (iii) a verse-level Qur'an retrieval corpus of ~6k atomic verses (ayat). Building on these resources, we develop an agentic Quran-grounding framework (agentic RAG) that uses structured tool calls for iterative evidence seeking and answer revision. Experiments across Arabic-centric and multilingual LLMs show that retrieval improves correctness and that agentic RAG yields the largest gains beyond standard RAG, achieving state-of-the-art performance and stronger Arabic-English robustness even with a small model (i.e., Qwen3 4B). We made the datasets are publicly available. https://huggingface.co/datasets/QCRI/IslamicFaithQA",
+        "year": 2026,
+        "url": "https://arxiv.org/abs/2601.07528v2",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2601.07528",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "evaluation",
+        "reading_priority": "recommended",
+        "is_canonical": false,
+        "relevance_score": 0.132569,
+        "context_score": 1.0,
+        "final_score": 0.303066
+      },
+      {
+        "paper_id": "arxiv:2511.22858",
+        "title": "RAG System for Supporting Japanese Litigation Procedures: Faithful Response Generation Complying with Legal Norms",
+        "authors": [
+          "Yuya Ishihara",
+          "Atsushi Keyaki",
+          "Hiroaki Yamada",
+          "Ryutaro Ohara",
+          "Mihoko Sumida"
+        ],
+        "abstract": "This study discusses the essential components that a Retrieval-Augmented Generation (RAG)-based LLM system should possess in order to support Japanese medical litigation procedures complying with legal norms. In litigation, expert commissioners, such as physicians, architects, accountants, and engineers, provide specialized knowledge to help judges clarify points of dispute. When considering the substitution of these expert roles with a RAG-based LLM system, the constraint of strict adherence to legal norms is imposed. Specifically, three requirements arise: (1) the retrieval module must retrieve appropriate external knowledge relevant to the disputed issues in accordance with the principle prohibiting the use of private knowledge, (2) the responses generated must originate from the context provided by the RAG and remain faithful to that context, and (3) the retrieval module must reference external knowledge with appropriate timestamps corresponding to the issues at hand. This paper discusses the design of a RAG-based LLM system that satisfies these requirements.",
+        "year": 2025,
+        "url": "https://arxiv.org/abs/2511.22858v1",
+        "citation_count": null,
+        "source": "arxiv",
+        "doi": null,
+        "arxiv_id": "2511.22858",
+        "publication_types": [
+          "Preprint"
+        ],
+        "paper_role": "application",
+        "reading_priority": "optional",
+        "is_canonical": false,
+        "relevance_score": 0.122972,
+        "context_score": 1.0,
+        "final_score": 0.288415
+      }
+    ],
+    "evidence_claims": [
+      {
+        "claim_id": "claim_rag-models-combine-pre-trained-param_04a649e8b5",
+        "claim": "RAG models combine pre-trained parametric and non-parametric memory for language generation to overcome limitations in accessing precise knowledge.",
+        "supporting_paper_ids": [
+          "arxiv:2005.11401"
+        ],
+        "support_type": "abstract_explicit"
+      },
+      {
+        "claim_id": "claim_agentic-rag-architectures-use-modula_a29d7b32b3",
+        "claim": "Agentic RAG architectures use modular pipelines with specialized agents for query reformulation and iterative sub-query decomposition.",
+        "supporting_paper_ids": [
+          "arxiv:2510.25518"
+        ],
+        "support_type": "abstract_explicit"
+      },
+      {
+        "claim_id": "claim_misleading-retrieval-can-severely-de_0ad83b1349",
+        "claim": "Misleading retrieval can severely degrade accuracy, and standard RAG may rely on parametric priors under knowledge conflict.",
+        "supporting_paper_ids": [
+          "arxiv:2605.14473"
+        ],
+        "support_type": "abstract_explicit"
+      },
+      {
+        "claim_id": "claim_document-refinement-with-sentence-le_8a3e3ddd2a",
+        "claim": "Document refinement with sentence-level re-ranking enhances RAG by reducing noise and improving precision.",
+        "supporting_paper_ids": [
+          "doi:10.18653/v1/2024.knowledgenlp-1.6"
+        ],
+        "support_type": "metadata_inference"
+      },
+      {
+        "claim_id": "claim_table-corpora-aware-rag-frameworks-r_4c232a0554",
+        "claim": "Table-corpora-aware RAG frameworks require hierarchical memory indices and multi-stage retrieval to handle intra- and inter-table knowledge.",
+        "supporting_paper_ids": [
+          "arxiv:2504.01346"
+        ],
+        "support_type": "abstract_explicit"
+      },
+      {
+        "claim_id": "claim_islamicfaithqa-benchmark-enables-dir_3bec16f0fe",
+        "claim": "IslamicFaithQA benchmark enables direct measurement of hallucination and abstention, showing agentic RAG yields the largest gains in correctness.",
+        "supporting_paper_ids": [
+          "arxiv:2601.07528"
+        ],
+        "support_type": "abstract_explicit"
+      }
+    ],
+    "status": "ok",
+    "mode": "domain_onboarding",
+    "query": "我已经学过 Transformer，希望六周入门 RAG，并完成一个可复现的基线实验",
+    "policy_version": "domain-quality-v1.4.0",
+    "policy_fingerprint": "fe166848522b7a3a",
+    "quality": {
+      "policy_version": "domain-quality-v1.4.0",
+      "policy_fingerprint": "fe166848522b7a3a",
+      "score": 0.949008,
+      "threshold": 0.75,
+      "passed_hard_gates": true,
+      "dimensions": {
+        "structure": 1.0,
+        "paper_validity": 1.0,
+        "paper_relevance": 0.73848,
+        "evidence_grounding": 0.915972,
+        "topic_coverage": 1.0,
+        "development_coherence": 1.0,
+        "learning_path": 1.0,
+        "goal_alignment": 1.0
+      },
+      "issues": [
+        {
+          "issue_id": "issue_missing-evidence-development-stages-_cd4ede198a",
+          "issue_type": "missing_evidence",
+          "severity": "warning",
+          "dimension": "evidence_grounding",
+          "hard_gate": false,
+          "repairability": "llm",
+          "target_path": "development_stages[1]",
+          "message": "该发展阶段没有对应的证据论述。",
+          "recommended_action": "增加一条绑定该阶段代表论文的证据论述。"
+        }
+      ],
+      "attempts": 1,
+      "selected_attempt": 1,
+      "retry_status": "not_needed",
+      "state": "passed",
+      "hard_gates": [
+        {
+          "gate": "required_structure",
+          "status": "passed",
+          "issue_ids": [],
+          "score": 1.0,
+          "threshold": 1.0
+        },
+        {
+          "gate": "paper_identity",
+          "status": "passed",
+          "issue_ids": [],
+          "score": 1.0,
+          "threshold": 1.0
+        },
+        {
+          "gate": "paper_relevance",
+          "status": "passed",
+          "issue_ids": [],
+          "score": 0.73848,
+          "threshold": 0.6
+        },
+        {
+          "gate": "evidence_support",
+          "status": "passed",
+          "issue_ids": [],
+          "score": 0.915972,
+          "threshold": 0.7
+        }
+      ],
+      "evidence_validation_modes": {
+        "multilingual_tfidf": 6
+      }
+    },
+    "quality_attempts": [
+      {
+        "attempt_number": 1,
+        "source": "initial",
+        "quality": {
+          "policy_version": "domain-quality-v1.4.0",
+          "policy_fingerprint": "fe166848522b7a3a",
+          "score": 0.949008,
+          "threshold": 0.75,
+          "passed_hard_gates": true,
+          "dimensions": {
+            "structure": 1.0,
+            "paper_validity": 1.0,
+            "paper_relevance": 0.73848,
+            "evidence_grounding": 0.915972,
+            "topic_coverage": 1.0,
+            "development_coherence": 1.0,
+            "learning_path": 1.0,
+            "goal_alignment": 1.0
+          },
+          "issues": [
+            {
+              "issue_id": "issue_missing-evidence-development-stages-_cd4ede198a",
+              "issue_type": "missing_evidence",
+              "severity": "warning",
+              "dimension": "evidence_grounding",
+              "hard_gate": false,
+              "repairability": "llm",
+              "target_path": "development_stages[1]",
+              "message": "该发展阶段没有对应的证据论述。",
+              "recommended_action": "增加一条绑定该阶段代表论文的证据论述。"
+            }
+          ],
+          "attempts": 1,
+          "selected_attempt": 1,
+          "retry_status": "not_needed",
+          "state": "passed",
+          "hard_gates": [
+            {
+              "gate": "required_structure",
+              "status": "passed",
+              "issue_ids": [],
+              "score": 1.0,
+              "threshold": 1.0
+            },
+            {
+              "gate": "paper_identity",
+              "status": "passed",
+              "issue_ids": [],
+              "score": 1.0,
+              "threshold": 1.0
+            },
+            {
+              "gate": "paper_relevance",
+              "status": "passed",
+              "issue_ids": [],
+              "score": 0.73848,
+              "threshold": 0.6
+            },
+            {
+              "gate": "evidence_support",
+              "status": "passed",
+              "issue_ids": [],
+              "score": 0.915972,
+              "threshold": 0.7
+            }
+          ],
+          "evidence_validation_modes": {
+            "multilingual_tfidf": 6
+          }
+        },
+        "duration_ms": 4.233
+      }
+    ],
+    "repair_record": {
+      "policy_version": "domain-quality-v1.4.0",
+      "policy_fingerprint": "fe166848522b7a3a",
+      "adaptive_policy_version": null,
+      "shadow_recommendations": {},
+      "triggered": false,
+      "actions": [],
+      "decision": {
+        "selected_attempt": 1,
+        "decision": "initial_selected",
+        "reasons": [
+          "quality_threshold_met"
+        ],
+        "score_delta": 0.0,
+        "dimension_deltas": {
+          "structure": 0.0,
+          "paper_validity": 0.0,
+          "paper_relevance": 0.0,
+          "evidence_grounding": 0.0,
+          "topic_coverage": 0.0,
+          "development_coherence": 0.0,
+          "learning_path": 0.0,
+          "goal_alignment": 0.0
+        }
+      }
+    }
+  }
+}

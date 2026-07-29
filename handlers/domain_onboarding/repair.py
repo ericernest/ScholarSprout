@@ -7,7 +7,12 @@ from typing import Protocol
 from .config import DomainOnboardingConfig
 from .generator import GenerationError, StructuredOnboardingGenerator
 from .repair_code import CodeRepairExecutor
-from .repair_diff import changed_output_paths, fingerprint_output, paths_outside_targets
+from .repair_diff import (
+    apply_targeted_changes,
+    changed_output_paths,
+    fingerprint_output,
+    paths_outside_targets,
+)
 from .repair_llm import LLMRepairExecutor
 from .repair_planning import RepairPlanner
 from .schemas import (
@@ -59,11 +64,11 @@ class TargetedRepairer:
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
     ) -> RepairResult:
-        plan = self.planner.plan(
+        repair_plan = self.planner.plan(
             quality,
             max_content_repairs=self.config.max_content_repairs,
         )
-        actions = [action.model_copy(deep=True) for action in plan.actions]
+        actions = [action.model_copy(deep=True) for action in repair_plan.actions]
         normalized = self.code_executor.execute(previous_output, allowed_papers)
         code_action = next(
             (action for action in actions if action.action_type == "code"),
@@ -103,11 +108,21 @@ class TargetedRepairer:
                 normalized,
                 selected_issues,
             )
-            candidate = self.code_executor.execute(generation.output, allowed_papers)
+            full_candidate = self.code_executor.execute(generation.output, allowed_papers)
+            repair_targets = self._repair_scope_targets(
+                llm_action.target_paths if llm_action else []
+            )
+            if llm_action is not None:
+                llm_action.target_paths = repair_targets
+            candidate = apply_targeted_changes(
+                normalized,
+                full_candidate,
+                repair_targets,
+            )
             changed_paths = changed_output_paths(normalized, candidate)
             outside_targets = paths_outside_targets(
                 changed_paths,
-                llm_action.target_paths if llm_action else [],
+                repair_targets,
             )
             if outside_targets:
                 message = f"repair changed fields outside target paths: {outside_targets}"
@@ -151,6 +166,16 @@ class TargetedRepairer:
                     error=str(error),
                 ),
             )
+
+    @staticmethod
+    def _repair_scope_targets(target_paths: list[str]) -> list[str]:
+        expanded = []
+        for path in target_paths:
+            if path.startswith("evidence_claims["):
+                expanded.append(path.split("]", 1)[0] + "]")
+            else:
+                expanded.append(path)
+        return list(dict.fromkeys(expanded))
 
     @staticmethod
     def _with_action_status(

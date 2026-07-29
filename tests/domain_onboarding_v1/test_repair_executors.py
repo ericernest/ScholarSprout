@@ -63,7 +63,7 @@ class RepairDiffTests(unittest.TestCase):
             paths,
         )
 
-    def test_llm_changes_outside_issue_targets_are_rejected(self) -> None:
+    def test_llm_changes_outside_issue_targets_are_discarded(self) -> None:
         repair_payload = copy.deepcopy(self.payload)
         repair_payload["domain"] = "unexpected domain rewrite"
         generator = StructuredOnboardingGenerator(
@@ -96,11 +96,11 @@ class RepairDiffTests(unittest.TestCase):
         llm_action = next(
             action for action in result.record.actions if action.action_type == "llm"
         )
-        self.assertEqual(result.action, "llm_repair_failed")
+        self.assertEqual(result.action, "llm_targeted_repair")
         self.assertEqual(result.output.domain, self.output.domain)
-        self.assertEqual(llm_action.status, "failed")
-        self.assertIn("$.domain", llm_action.changed_paths)
-        self.assertIn("outside target paths", str(llm_action.error))
+        self.assertEqual(llm_action.status, "skipped")
+        self.assertEqual(llm_action.changed_paths, [])
+        self.assertIsNone(llm_action.error)
 
     def test_code_repair_merges_duplicate_claim_evidence_without_losing_ids(self) -> None:
         expected_ids = {

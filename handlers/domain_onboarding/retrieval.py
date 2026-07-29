@@ -109,6 +109,7 @@ class _ResilientRetriever:
 class SemanticScholarRetriever(_ResilientRetriever):
     source_name = "semantic_scholar"
     endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
+    paper_endpoint = "https://api.semanticscholar.org/graph/v1/paper"
 
     def __init__(
         self,
@@ -151,15 +152,29 @@ class SemanticScholarRetriever(_ResilientRetriever):
                     continue
                 query_results: list[PaperCandidate] = []
                 try:
-                    response = self._http.get(
-                        self.endpoint,
-                        params={
-                            "query": query,
-                            "limit": limit_per_query,
-                            "fields": "paperId,title,abstract,year,url,citationCount,authors,externalIds,publicationTypes",
-                        },
+                    exact_arxiv = re.fullmatch(
+                        r"\s*arxiv\s*:\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*",
+                        query,
+                        re.IGNORECASE,
                     )
-                    data = response.json().get("data", [])
+                    fields = "paperId,title,abstract,year,url,citationCount,authors,externalIds,publicationTypes"
+                    if exact_arxiv:
+                        response = self._http.get(
+                            f"{self.paper_endpoint}/ARXIV:{exact_arxiv.group(1)}",
+                            params={"fields": fields},
+                        )
+                        payload = response.json()
+                        data = [payload] if payload else []
+                    else:
+                        response = self._http.get(
+                            self.endpoint,
+                            params={
+                                "query": query,
+                                "limit": limit_per_query,
+                                "fields": fields,
+                            },
+                        )
+                        data = response.json().get("data", [])
                     for item in data:
                         paper = self._parse_paper(item, query)
                         if paper is not None:
@@ -250,15 +265,29 @@ class ArxivRetriever(_ResilientRetriever):
                     results.extend(cached)
                     continue
                 try:
-                    response = self._http.get(
-                        self.endpoint,
-                        params={
+                    exact_arxiv = re.fullmatch(
+                        r"\s*arxiv\s*:\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    params: dict[str, Any]
+                    if exact_arxiv:
+                        params = {
+                            "id_list": exact_arxiv.group(1),
+                            "start": 0,
+                            "max_results": 1,
+                        }
+                    else:
+                        params = {
                             "search_query": f"all:{query}",
                             "start": 0,
                             "max_results": limit_per_query,
                             "sortBy": "relevance",
                             "sortOrder": "descending",
-                        },
+                        }
+                    response = self._http.get(
+                        self.endpoint,
+                        params=params,
                     )
                     query_results = self._parse_feed(response.text, query)
                     self._store(query, limit_per_query, query_results)

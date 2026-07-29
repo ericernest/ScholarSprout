@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from .canonical_papers import CanonicalPaperRegistry
 from .config import DomainOnboardingConfig
 from .llm import StructuredLLMError, invoke_json
 from .schemas import (
@@ -37,6 +38,7 @@ class StormLitePlanner:
     def __init__(self, model: Any, config: DomainOnboardingConfig):
         self.model = model
         self.config = config
+        self.canonical_registry = CanonicalPaperRegistry()
 
     def plan(self, query: str, profile: LearnerProfile) -> PlanningResult:
         system_prompt = (
@@ -61,7 +63,7 @@ class StormLitePlanner:
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
-            plan.search_queries = plan.search_queries[: self.config.search_queries_limit]
+            plan.search_queries = self._with_canonical_query(plan)
             return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
             return PlanningResult(plan=self._fallback_plan(query), stats=error.stats)
@@ -97,9 +99,29 @@ class StormLitePlanner:
             f'"{english}" methods benchmark evaluation',
             f'"{english}" recent advances 2024 2025 2026',
         ]
-        return DomainResearchPlan(
+        plan = DomainResearchPlan(
             normalized_domain=domain,
             perspectives=perspectives,
             search_queries=queries[: self.config.search_queries_limit],
             expected_subdirections=["理论与基础", "核心方法", "评测与应用", "开放问题与前沿"],
         )
+        plan.search_queries = self._with_canonical_query(plan)
+        return plan
+
+    def _with_canonical_query(self, plan: DomainResearchPlan) -> list[str]:
+        specs = self.canonical_registry.specs(plan.normalized_domain)
+        exact = (
+            [
+                *(
+                    [f"ARXIV:{specs[0].arxiv_id}"]
+                    if specs[0].arxiv_id
+                    else []
+                ),
+                f'"{specs[0].title}"',
+            ]
+            if specs
+            else []
+        )
+        return list(dict.fromkeys([*exact, *plan.search_queries]))[
+            : self.config.search_queries_limit
+        ]

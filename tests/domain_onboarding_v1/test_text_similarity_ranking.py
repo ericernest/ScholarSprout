@@ -148,6 +148,28 @@ class MMRRankingTests(unittest.TestCase):
         self.assertEqual(paper.paper_role, "foundational")
         self.assertEqual(paper.reading_priority, "core")
 
+    def test_canonical_arxiv_id_survives_low_relevance_filter(self) -> None:
+        config = DomainOnboardingConfig(ranking_min_relevance_score=0.99)
+        result = WeightedPaperRanker(config).rank(
+            [
+                PaperCandidate(
+                    paper_id="semantic-rag",
+                    title="Title spelling returned by provider",
+                    abstract="retrieval augmented generation",
+                    year=2020,
+                    url="https://example.org/semantic-rag",
+                    source="semantic_scholar",
+                    arxiv_id="2005.11401",
+                )
+            ],
+            make_plan(),
+            limit=1,
+        )
+
+        self.assertEqual([paper.paper_id for paper in result.papers], ["semantic-rag"])
+        self.assertTrue(result.papers[0].is_canonical)
+        self.assertEqual(result.papers[0].paper_role, "foundational")
+
     def test_recent_vertical_use_case_is_application_not_frontier(self) -> None:
         result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
             [
@@ -167,6 +189,48 @@ class MMRRankingTests(unittest.TestCase):
         paper = result.papers[0]
         self.assertEqual(paper.paper_role, "application")
         self.assertEqual(paper.reading_priority, "optional")
+
+    def test_rag_context_guard_filters_keyword_noise_without_rag_anchor(self) -> None:
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="rag-paper",
+                    title="A Retrieval-Augmented Generation Evaluation Framework",
+                    abstract="RAG retrieval generation evaluation",
+                    year=2025,
+                    url="https://example.org/rag-paper",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="mission-math",
+                    title="Doing the Math of Mission",
+                    abstract=None,
+                    year=2014,
+                    url="https://example.org/mission-math",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="rag-disease",
+                    title="RAG Deficiencies: Recent Advances in Disease Pathogenesis",
+                    abstract="therapeutic approaches in immunology",
+                    year=2024,
+                    url="https://example.org/rag-disease",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="rag-doll",
+                    title="Evaluation of Rag Doll Making Methods for Visual Arts",
+                    abstract="craft and textile education",
+                    year=2025,
+                    url="https://example.org/rag-doll",
+                    source="test",
+                ),
+            ],
+            make_plan(),
+            limit=2,
+        )
+
+        self.assertEqual([paper.paper_id for paper in result.papers], ["rag-paper"])
 
     def test_diffusion_context_guard_filters_same_word_wrong_field_papers(self) -> None:
         plan = DomainResearchPlan(
