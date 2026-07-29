@@ -1,0 +1,86 @@
+{
+  "task_id": "8f4a2d31-64a8-4fc7-93c8-7704bf12c201",
+  "state": "completed",
+  "revision": 8,
+  "current_stage": "completed",
+  "progress": 1.0,
+  "retryable": false,
+  "error": null,
+  "partial_result": {},
+  "result": {
+    "status": "ok",
+    "mode": "domain_onboarding",
+    "query": "我已经学过 Transformer，希望六周入门检索增强生成并复现一个基线，偏向实践",
+    "learner_profile": {
+      "background": ["Python", "Transformer"],
+      "goal": "六周内复现 RAG 基线并能正确评测",
+      "time_budget_weeks": 6,
+      "preference": "experiment_first",
+      "known_concepts": ["Transformer"]
+    },
+    "research_plan": {
+      "normalized_domain": "检索增强生成",
+      "perspectives": [
+        {"name": "理论与问题", "description": "明确检索如何改变生成过程。", "questions": ["RAG 解决什么问题？"]},
+        {"name": "方法演进", "description": "从静态检索到自反思检索。", "questions": ["方法如何演进？"]},
+        {"name": "评测与实践", "description": "关注可复现基线和评测指标。", "questions": ["如何区分检索和生成错误？"]}
+      ],
+      "search_queries": ["ARXIV:2309.15217", "ARXIV:2310.11511", "ARXIV:2005.11401", "retrieval augmented generation survey", "RAG benchmark evaluation"],
+      "expected_subdirections": ["检索优化", "生成约束", "端到端评测"]
+    },
+    "domain": "检索增强生成",
+    "text": "检索增强生成将外部知识检索与语言模型生成结合。本路线先理解基本范式，再学习自反思方法，最后以可复现评测完成六周基线实验。",
+    "prerequisites": [
+      {"prerequisite_id": "pre_ir", "name": "信息检索", "why_needed": "理解召回与排序。", "key_points": ["BM25", "向量检索"], "related_paper_ids": ["arxiv:2005.11401"]},
+      {"prerequisite_id": "pre_lm", "name": "生成模型", "why_needed": "理解条件生成。", "key_points": ["Transformer", "prompt"], "related_paper_ids": ["arxiv:2005.11401"]},
+      {"prerequisite_id": "pre_eval", "name": "机器学习评测", "why_needed": "避免只看单一指标。", "key_points": ["对照实验", "误差分析"], "related_paper_ids": ["arxiv:2309.15217"]}
+    ],
+    "development_stages": [
+      {"stage_id": "stage_1", "sequence": 1, "name": "检索与生成联合建模", "period": "2020–2022", "historical_period": "2020–2022", "start_year": 2020, "end_year": 2022, "summary": "RAG 建立了参数化与非参数化知识协同的基本范式。", "motivation": "缓解知识更新与来源追溯问题。", "previous_stage_id": null, "transition_from_previous": "", "representative_papers": [{"paper_id": "arxiv:2005.11401", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": ["Patrick Lewis et al."], "year": 2020, "url": "https://arxiv.org/abs/2005.11401", "contribution": "建立 RAG 基本范式。", "reading_focus": ["检索器与生成器的接口"], "reading_priority": "core", "is_canonical": true}], "core_concepts": ["非参数化记忆"], "main_techniques": ["稠密检索"], "open_problems": ["检索噪声"], "related_paper_ids": ["arxiv:2005.11401"], "prerequisite_ids": ["pre_ir", "pre_lm"]},
+      {"stage_id": "stage_2", "sequence": 2, "name": "自反思与自适应检索", "period": "2023–2024", "historical_period": "2023–2024", "start_year": 2023, "end_year": 2024, "summary": "模型开始学习何时检索并对证据和答案进行自评。", "motivation": "静态检索会引入无关证据。", "previous_stage_id": "stage_1", "transition_from_previous": "固定检索策略的噪声推动了自适应检索和自反思生成。", "representative_papers": [{"paper_id": "arxiv:2310.11511", "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection", "authors": ["Akari Asai et al."], "year": 2023, "url": "https://arxiv.org/abs/2310.11511", "contribution": "将检索和自评信号纳入生成。", "reading_focus": ["reflection tokens"], "reading_priority": "recommended", "is_canonical": true}], "core_concepts": ["自反思"], "main_techniques": ["按需检索"], "open_problems": ["自评偏差"], "related_paper_ids": ["arxiv:2310.11511"], "prerequisite_ids": ["pre_lm"]},
+      {"stage_id": "stage_3", "sequence": 3, "name": "可评测与工程化", "period": "2023–至今", "historical_period": "2023–至今", "start_year": 2023, "end_year": null, "summary": "研究转向检索、忠实性和答案质量的分层评测。", "motivation": "仅用答案正确率无法定位 RAG 故障。", "previous_stage_id": "stage_2", "transition_from_previous": "方法复杂化后，需要分层指标判断改进来自检索还是生成。", "representative_papers": [{"paper_id": "arxiv:2309.15217", "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation", "authors": ["Shahul Es et al."], "year": 2023, "url": "https://arxiv.org/abs/2309.15217", "contribution": "提供 RAG 自动评测视角。", "reading_focus": ["忠实性和上下文相关性"], "reading_priority": "recommended", "is_canonical": true}], "core_concepts": ["分层评测"], "main_techniques": ["LLM-as-judge"], "open_problems": ["评测偏差"], "related_paper_ids": ["arxiv:2309.15217"], "prerequisite_ids": ["pre_eval"]}
+    ],
+    "current_landscape": {
+      "problems": ["检索噪声", "证据冲突", "评测偏差"],
+      "subdirections": ["检索优化", "生成约束", "自动评测"],
+      "subdirection_ids": {"检索优化": "sub_retrieval", "生成约束": "sub_generation", "自动评测": "sub_evaluation"},
+      "problem_details": [
+        {"problem_id": "problem_noise", "name": "检索噪声", "description": "无关文档会误导生成。", "related_paper_ids": ["arxiv:2310.11511"], "related_stage_ids": ["stage_1", "stage_2"], "emerged_in_stage_id": "stage_1", "affected_stage_ids": ["stage_1", "stage_2"], "related_subdirection_ids": ["sub_retrieval"]},
+        {"problem_id": "problem_conflict", "name": "证据冲突", "description": "多条证据可能相互矛盾。", "related_paper_ids": ["arxiv:2310.11511"], "related_stage_ids": ["stage_2"], "emerged_in_stage_id": "stage_2", "affected_stage_ids": ["stage_2", "stage_3"], "related_subdirection_ids": ["sub_generation"]},
+        {"problem_id": "problem_eval", "name": "评测偏差", "description": "自动评测器也可能不稳定。", "related_paper_ids": ["arxiv:2309.15217"], "related_stage_ids": ["stage_3"], "emerged_in_stage_id": "stage_3", "affected_stage_ids": ["stage_3"], "related_subdirection_ids": ["sub_evaluation"]}
+      ],
+      "subdirection_details": [
+        {"subdirection_id": "sub_retrieval", "name": "检索优化", "description": "优化查询、召回和重排。", "why_it_matters": "决定可用证据上限。", "research_questions": ["如何按需检索？"], "related_paper_ids": ["arxiv:2310.11511"], "related_stage_ids": ["stage_2"], "emerged_in_stage_id": "stage_2", "addresses_problem_ids": ["problem_noise"]},
+        {"subdirection_id": "sub_generation", "name": "生成约束", "description": "将回答约束在可引用证据上。", "why_it_matters": "降低无证据断言。", "research_questions": ["如何处理冲突证据？"], "related_paper_ids": ["arxiv:2005.11401"], "related_stage_ids": ["stage_1", "stage_2"], "emerged_in_stage_id": "stage_1", "addresses_problem_ids": ["problem_conflict"]},
+        {"subdirection_id": "sub_evaluation", "name": "自动评测", "description": "分别评测证据、忠实性和答案。", "why_it_matters": "支持定向调试。", "research_questions": ["自动指标如何与人工判断对齐？"], "related_paper_ids": ["arxiv:2309.15217"], "related_stage_ids": ["stage_3"], "emerged_in_stage_id": "stage_3", "addresses_problem_ids": ["problem_eval"]}
+      ]
+    },
+    "learning_path": [
+      {"step": "1", "goal": "补齐检索与评测基础", "topics": ["BM25", "向量检索"], "paper_ids": ["arxiv:2005.11401"], "papers": [], "activities": ["实现一个最小检索器"], "completion_criteria": ["能解释召回和排序差异"], "expected_outcome": "具备 RAG 必要基础", "start_week": 1, "end_week": 1, "estimated_hours": 6, "milestone": "检索笔记", "deliverables": ["检索 demo"], "reproducibility_checklist": [], "evaluation_metrics": []},
+      {"step": "2", "goal": "理解 RAG 核心概念", "topics": ["检索器-生成器接口"], "paper_ids": ["arxiv:2005.11401"], "papers": [], "activities": ["画出数据流"], "completion_criteria": ["能说明每个模块的输入输出"], "expected_outcome": "建立系统视角", "start_week": 2, "end_week": 2, "estimated_hours": 6, "milestone": "RAG 架构图", "deliverables": ["架构图与一页笔记"], "reproducibility_checklist": [], "evaluation_metrics": []},
+      {"step": "3", "goal": "阅读代表方法", "topics": ["Self-RAG"], "paper_ids": ["arxiv:2310.11511"], "papers": [], "activities": ["对比静态与自适应检索"], "completion_criteria": ["完成方法对比表"], "expected_outcome": "理解方法演进", "start_week": 3, "end_week": 3, "estimated_hours": 8, "milestone": "方法对比表", "deliverables": ["方法对比表"], "reproducibility_checklist": [], "evaluation_metrics": []},
+      {"step": "4", "goal": "复现一个公开基线", "topics": ["数据集", "检索", "RAGAS"], "paper_ids": ["arxiv:2309.15217"], "papers": [], "activities": ["复现基线并保存原始结果"], "completion_criteria": ["他人能根据 README 复现"], "expected_outcome": "得到可对比基线", "start_week": 4, "end_week": 5, "estimated_hours": 16, "milestone": "基线实验报告", "deliverables": ["代码", "配置", "结果表"], "reproducibility_checklist": ["固定数据集版本与随机种子", "记录依赖和模型版本"], "evaluation_metrics": ["忠实性", "上下文相关性", "延迟"]},
+      {"step": "5", "goal": "定位失败并选择改进点", "topics": ["错误分析", "前沿方法"], "paper_ids": ["arxiv:2310.11511", "arxiv:2309.15217"], "papers": [], "activities": ["对失败样本分类"], "completion_criteria": ["提出一个有对照组的改进假设"], "expected_outcome": "形成可执行研究切入点", "start_week": 6, "end_week": 6, "estimated_hours": 8, "milestone": "小型研究计划", "deliverables": ["错误分析和消融计划"], "reproducibility_checklist": [], "evaluation_metrics": []}
+    ],
+    "papers": [
+      {"paper_id": "arxiv:2005.11401", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": ["Patrick Lewis et al."], "abstract": "...", "year": 2020, "url": "https://arxiv.org/abs/2005.11401", "citation_count": 6000, "source": "arxiv", "doi": null, "arxiv_id": "2005.11401", "publication_types": ["JournalArticle"], "paper_role": "foundational", "reading_priority": "core", "is_canonical": true, "relevance_score": 0.93, "context_score": 1.0, "final_score": 0.91, "citation_score": 1.0, "recency_score": 0.6, "diversity_score": 0.7},
+      {"paper_id": "arxiv:2310.11511", "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection", "authors": ["Akari Asai et al."], "abstract": "...", "year": 2023, "url": "https://arxiv.org/abs/2310.11511", "citation_count": 1800, "source": "arxiv", "doi": null, "arxiv_id": "2310.11511", "publication_types": ["JournalArticle"], "paper_role": "method", "reading_priority": "recommended", "is_canonical": true, "relevance_score": 0.91, "context_score": 1.0, "final_score": 0.87, "citation_score": 0.82, "recency_score": 0.8, "diversity_score": 0.72},
+      {"paper_id": "arxiv:2309.15217", "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation", "authors": ["Shahul Es et al."], "abstract": "...", "year": 2023, "url": "https://arxiv.org/abs/2309.15217", "citation_count": 900, "source": "arxiv", "doi": null, "arxiv_id": "2309.15217", "publication_types": ["JournalArticle"], "paper_role": "evaluation", "reading_priority": "recommended", "is_canonical": true, "relevance_score": 0.89, "context_score": 1.0, "final_score": 0.84, "citation_score": 0.73, "recency_score": 0.8, "diversity_score": 0.75}
+    ],
+    "evidence_claims": [
+      {"claim_id": "claim_rag", "claim": "RAG 将参数化生成模型与非参数化记忆结合。", "supporting_paper_ids": ["arxiv:2005.11401"], "support_type": "abstract_explicit"},
+      {"claim_id": "claim_self_rag", "claim": "Self-RAG 通过 reflection tokens 学习检索与自评。", "supporting_paper_ids": ["arxiv:2310.11511"], "support_type": "abstract_explicit"},
+      {"claim_id": "claim_ragas", "claim": "RAGAS 从多个维度评测 RAG 输出。", "supporting_paper_ids": ["arxiv:2309.15217"], "support_type": "abstract_explicit"}
+    ],
+    "schema_version": "domain-onboarding-output-v1.5",
+    "language": "zh-CN",
+    "reproducibility": {"policy_version": "domain-quality-v1.5.0", "search_queries": ["ARXIV:2309.15217", "ARXIV:2310.11511", "ARXIV:2005.11401"], "retrieval_sources": ["arxiv"], "selected_paper_ids": ["arxiv:2005.11401", "arxiv:2310.11511", "arxiv:2309.15217"]},
+    "policy_version": "domain-quality-v1.5.0",
+    "policy_fingerprint": "f1234567890abcde",
+    "quality": {"policy_version": "domain-quality-v1.5.0", "policy_fingerprint": "f1234567890abcde", "score": 0.91, "threshold": 0.75, "passed_hard_gates": true, "dimensions": {"structure": 1.0, "paper_validity": 1.0, "paper_relevance": 0.92, "evidence_grounding": 0.88, "topic_coverage": 1.0, "development_coherence": 0.94, "learning_path": 1.0, "goal_alignment": 1.0, "language_alignment": 1.0}, "issues": [], "attempts": 1, "selected_attempt": 1, "retry_status": "not_needed", "state": "passed", "hard_gates": [], "evidence_validation_modes": {"multilingual_embedding": 3}},
+    "quality_attempts": [{"attempt_number": 1, "source": "initial", "duration_ms": 23.4, "quality": {"policy_version": "domain-quality-v1.5.0", "policy_fingerprint": "f1234567890abcde", "score": 0.91, "threshold": 0.75, "passed_hard_gates": true, "dimensions": {"structure": 1.0, "paper_validity": 1.0, "paper_relevance": 0.92, "evidence_grounding": 0.88, "topic_coverage": 1.0, "development_coherence": 0.94, "learning_path": 1.0, "goal_alignment": 1.0, "language_alignment": 1.0}, "issues": [], "attempts": 1, "selected_attempt": 1, "retry_status": "not_needed", "state": "passed", "hard_gates": [], "evidence_validation_modes": {"multilingual_embedding": 3}}}],
+    "repair_record": {"policy_version": "domain-quality-v1.5.0", "policy_fingerprint": "f1234567890abcde", "triggered": false, "actions": [], "shadow_recommendations": {}, "decision": {"selected_attempt": 1, "decision": "initial_selected", "reasons": ["quality_threshold_met"], "score_delta": 0.0, "dimension_deltas": {}}}
+  },
+  "created_at": "2026-07-29 10:00:00",
+  "updated_at": "2026-07-29 10:01:42"
+}

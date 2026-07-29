@@ -22,6 +22,7 @@ QualityDimension = Literal[
     "development_coherence",
     "learning_path",
     "goal_alignment",
+    "language_alignment",
 ]
 QualityState = Literal["passed", "warning", "failed"]
 QualityGateStatus = Literal["passed", "failed", "not_evaluated"]
@@ -52,6 +53,7 @@ QualityIssueType = Literal[
     "low_paper_relevance",
     "paper_context_mismatch",
     "missing_core_paper",
+    "language_mismatch",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -80,6 +82,7 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "low_paper_relevance": "paper_relevance",
     "paper_context_mismatch": "paper_relevance",
     "missing_core_paper": "paper_relevance",
+    "language_mismatch": "language_alignment",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -97,6 +100,7 @@ _HARD_GATE_ISSUES = {
     "low_paper_relevance",
     "paper_context_mismatch",
     "missing_core_paper",
+    "language_mismatch",
 }
 _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "structure_error": "llm",
@@ -111,6 +115,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "low_paper_relevance": "retrieval",
     "paper_context_mismatch": "retrieval",
     "missing_core_paper": "retrieval",
+    "language_mismatch": "llm",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
@@ -135,6 +140,7 @@ class DomainOnboardingRequest(OnboardingModel):
     session_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    language: Literal["zh-CN", "en-US"] = "zh-CN"
 
     @field_validator("query")
     @classmethod
@@ -143,6 +149,15 @@ class DomainOnboardingRequest(OnboardingModel):
         if not query:
             raise ValueError("query must not be empty")
         return query
+
+    @model_validator(mode="after")
+    def infer_language(self) -> "DomainOnboardingRequest":
+        configured = str(self.metadata.get("language") or self.metadata.get("locale") or "")
+        if configured.lower().startswith("en"):
+            self.language = "en-US"
+        elif configured.lower().startswith("zh") or re.search(r"[\u4e00-\u9fff]", self.query):
+            self.language = "zh-CN"
+        return self
 
 
 class LearnerProfile(OnboardingModel):
@@ -278,6 +293,9 @@ class SelectedPaper(OnboardingModel):
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
     context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    citation_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    recency_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    diversity_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @classmethod
     def from_ranked(cls, paper: RankedPaper) -> "SelectedPaper":
@@ -314,6 +332,9 @@ class DevelopmentStage(OnboardingModel):
     sequence: int = Field(default=1, ge=1)
     name: str
     period: str = ""
+    historical_period: str = ""
+    start_year: int | None = Field(default=None, ge=1800, le=2100)
+    end_year: int | None = Field(default=None, ge=1800, le=2100)
     summary: str = ""
     motivation: str = ""
     previous_stage_id: str | None = None
@@ -328,6 +349,8 @@ class DevelopmentStage(OnboardingModel):
     @model_validator(mode="after")
     def ensure_id(self) -> "DevelopmentStage":
         self.stage_id = self.stage_id or stable_id("stage", self.name)
+        self.historical_period = self.historical_period or self.period
+        self.period = self.historical_period
         return self
 
 
@@ -337,12 +360,17 @@ class LandscapeProblem(OnboardingModel):
     description: str = ""
     related_paper_ids: list[str] = Field(default_factory=list)
     related_stage_ids: list[str] = Field(default_factory=list)
+    emerged_in_stage_id: str | None = None
+    affected_stage_ids: list[str] = Field(default_factory=list)
+    related_subdirection_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def ensure_id(self) -> "LandscapeProblem":
         self.problem_id = self.problem_id or stable_id("problem", self.name)
         self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
         self.related_stage_ids = list(dict.fromkeys(self.related_stage_ids))
+        self.affected_stage_ids = list(dict.fromkeys(self.affected_stage_ids))
+        self.related_subdirection_ids = list(dict.fromkeys(self.related_subdirection_ids))
         return self
 
 
@@ -354,12 +382,15 @@ class SubdirectionDetail(OnboardingModel):
     research_questions: list[str] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
     related_stage_ids: list[str] = Field(default_factory=list)
+    emerged_in_stage_id: str | None = None
+    addresses_problem_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def ensure_id(self) -> "SubdirectionDetail":
         self.subdirection_id = self.subdirection_id or stable_id("sub", self.name)
         self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
         self.related_stage_ids = list(dict.fromkeys(self.related_stage_ids))
+        self.addresses_problem_ids = list(dict.fromkeys(self.addresses_problem_ids))
         return self
 
 
@@ -404,6 +435,9 @@ class LearningStep(OnboardingModel):
     end_week: int | None = Field(default=None, ge=1)
     estimated_hours: int | None = Field(default=None, ge=1)
     milestone: str = ""
+    deliverables: list[str] = Field(default_factory=list)
+    reproducibility_checklist: list[str] = Field(default_factory=list)
+    evaluation_metrics: list[str] = Field(default_factory=list)
 
     @field_validator("step", mode="before")
     @classmethod
@@ -429,15 +463,19 @@ class EvidenceClaim(OnboardingModel):
 
 
 class DomainOnboardingOutput(OnboardingModel):
+    schema_version: str = "domain-onboarding-output-v1.5"
+    language: Literal["zh-CN", "en-US"] = "zh-CN"
     domain: str
     text: str
     learner_profile: LearnerProfile
+    research_plan: DomainResearchPlan | None = None
     prerequisites: list[Prerequisite]
     development_stages: list[DevelopmentStage]
     current_landscape: CurrentLandscape
     learning_path: list[LearningStep]
     papers: list[SelectedPaper]
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
+    reproducibility: dict[str, Any] = Field(default_factory=dict)
 
 
 class QualityIssue(OnboardingModel):
@@ -479,7 +517,7 @@ class QualityGateResult(OnboardingModel):
 
 
 class ContentQuality(OnboardingModel):
-    policy_version: str = "domain-quality-v1.4.0"
+    policy_version: str = "domain-quality-v1.5.0"
     policy_fingerprint: str | None = None
     score: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -497,7 +535,7 @@ class ContentQuality(OnboardingModel):
     def derive_state(self) -> "ContentQuality":
         if not self.passed_hard_gates:
             self.state = "failed"
-        elif self.score >= self.threshold:
+        elif self.score >= self.threshold and not self.issues:
             self.state = "passed"
         else:
             self.state = "warning"
@@ -532,7 +570,7 @@ class RepairDecision(OnboardingModel):
 
 
 class RepairRecord(OnboardingModel):
-    policy_version: str = "domain-quality-v1.4.0"
+    policy_version: str = "domain-quality-v1.5.0"
     policy_fingerprint: str | None = None
     adaptive_policy_version: str | None = None
     shadow_recommendations: dict[QualityIssueType, RepairActionType] = Field(
@@ -594,7 +632,7 @@ class KnowledgeGraphSnapshot(OnboardingModel):
 
 
 class PipelineResult(OnboardingModel):
-    policy_version: str = "domain-quality-v1.4.0"
+    policy_version: str = "domain-quality-v1.5.0"
     policy_fingerprint: str | None = None
     status: Literal[
         "ok",

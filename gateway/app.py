@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from pydantic import ValidationError
 from fastapi.staticfiles import StaticFiles
 
 from agents.agent import create_agent
@@ -17,6 +21,12 @@ from config.manager import load_config
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
 from handlers.domain_onboarding.pipeline import create_default_pipeline
+from handlers.domain_onboarding.jobs import (
+    TERMINAL_STATES,
+    DomainOnboardingJobManager,
+    create_job_store_from_env,
+)
+from handlers.domain_onboarding.schemas import DomainOnboardingRequest
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
@@ -59,6 +69,9 @@ def readiness(request: Request) -> dict[str, object]:
         ),
         "domain_onboarding_audit": (
             getattr(request.app.state, "domain_onboarding_audit_sink", None) is not None
+        ),
+        "domain_onboarding_jobs": (
+            getattr(request.app.state, "domain_onboarding_job_manager", None) is not None
         ),
     }
     if not all(components.values()):
@@ -174,6 +187,89 @@ async def domain_onboarding(request: Request) -> ChannelMessage:
     )
 
 
+@app.post("/domain_onboarding/jobs", status_code=202)
+async def create_domain_onboarding_job(request: Request) -> JSONResponse:
+    manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Domain onboarding jobs are not initialized.")
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+    query = payload.get("query", payload.get("content", ""))
+    try:
+        job_request = DomainOnboardingRequest(
+            query=query,
+            session_id=payload.get("session_id"),
+            user_id=payload.get("user_id"),
+            metadata=payload.get("metadata") or {},
+            language=payload.get("language", "zh-CN"),
+        )
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors()) from error
+    job = manager.submit(job_request, client_request_id=payload.get("client_request_id"))
+    body = {
+        "task_id": job["task_id"], "state": job["state"], "revision": job["revision"],
+        "poll_url": f"/domain_onboarding/jobs/{job['task_id']}",
+        "events_url": f"/domain_onboarding/jobs/{job['task_id']}/events",
+        "cancel_url": f"/domain_onboarding/jobs/{job['task_id']}",
+    }
+    return JSONResponse(body, status_code=202)
+
+
+@app.get("/domain_onboarding/jobs/{task_id}")
+def get_domain_onboarding_job(task_id: str, request: Request) -> dict[str, object]:
+    store = getattr(request.app.state, "domain_onboarding_job_store", None)
+    job = store.get(task_id) if store is not None else None
+    if job is None:
+        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    return job
+
+
+@app.delete("/domain_onboarding/jobs/{task_id}", status_code=202)
+def cancel_domain_onboarding_job(task_id: str, request: Request) -> JSONResponse:
+    manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    job = manager.cancel(task_id) if manager is not None else None
+    if job is None:
+        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    return JSONResponse({"task_id": task_id, "state": job["state"]}, status_code=202)
+
+
+@app.get("/domain_onboarding/jobs/{task_id}/events")
+async def stream_domain_onboarding_job(task_id: str, request: Request) -> StreamingResponse:
+    store = getattr(request.app.state, "domain_onboarding_job_store", None)
+    if store is None or store.get(task_id) is None:
+        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    header_cursor = request.headers.get("last-event-id")
+    query_cursor = request.query_params.get("after")
+    try:
+        cursor = int(header_cursor or query_cursor or 0)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Last-Event-ID/after must be an integer.")
+
+    async def events():
+        nonlocal cursor
+        idle_ticks = 0
+        while True:
+            if await request.is_disconnected():
+                return
+            rows = store.events_after(task_id, cursor)
+            for event in rows:
+                cursor = int(event["id"])
+                yield f"id: {cursor}\nevent: {event['event']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            snapshot = store.get(task_id)
+            if snapshot is None or snapshot["state"] in TERMINAL_STATES:
+                return
+            idle_ticks += 1
+            if idle_ticks % 30 == 0:
+                yield ": heartbeat\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/metrics/domain_onboarding")
 def domain_onboarding_metrics(request: Request) -> dict:
     metrics = getattr(request.app.state, "domain_onboarding_metrics", None)
@@ -192,6 +288,9 @@ def domain_onboarding_prometheus_metrics(request: Request) -> str:
 
 @app.on_event("shutdown")
 def close_domain_onboarding_resources() -> None:
+    manager = getattr(app.state, "domain_onboarding_job_manager", None)
+    if manager is not None:
+        manager.close()
     pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
     if pipeline is not None:
         pipeline.close()
@@ -261,3 +360,11 @@ def configure_domain_onboarding_runtime(app_state: object, model: object, client
         ),
     )
     app_state.domain_onboarding_audit_sink = create_audit_sink_from_env()
+    app_state.domain_onboarding_job_store = create_job_store_from_env()
+    app_state.domain_onboarding_job_manager = DomainOnboardingJobManager(
+        app_state.domain_onboarding_pipeline,
+        app_state.domain_onboarding_job_store,
+        metrics=app_state.domain_onboarding_metrics,
+        audit_sink=app_state.domain_onboarding_audit_sink,
+        max_workers=int(os.getenv("DOMAIN_ONBOARDING_JOB_WORKERS", "2")),
+    )

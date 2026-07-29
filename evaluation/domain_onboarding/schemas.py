@@ -95,8 +95,12 @@ class OfflineEvaluationReport(EvaluationModel):
 
 def _validate_dimensions(dimensions: dict[QualityDimension, float]) -> None:
     expected = set(default_dimension_weights())
-    legacy = expected - {"paper_relevance"}
-    if frozenset(dimensions) not in {frozenset(expected), frozenset(legacy)}:
+    supported = {
+        frozenset(expected),
+        frozenset(expected - {"language_alignment"}),
+        frozenset(expected - {"paper_relevance", "language_alignment"}),
+    }
+    if frozenset(dimensions) not in supported:
         raise ValueError("all quality dimensions for the declared policy must be present")
     if any(value < 0.0 or value > 1.0 for value in dimensions.values()):
         raise ValueError("quality dimension values must be between 0 and 1")

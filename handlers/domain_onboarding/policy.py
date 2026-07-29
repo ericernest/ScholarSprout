@@ -11,19 +11,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.4.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.5.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:
     return {
-        "structure": 0.15,
-        "paper_validity": 0.15,
-        "paper_relevance": 0.15,
-        "evidence_grounding": 0.14,
-        "topic_coverage": 0.13,
-        "development_coherence": 0.11,
-        "learning_path": 0.10,
+        "structure": 0.13,
+        "paper_validity": 0.14,
+        "paper_relevance": 0.14,
+        "evidence_grounding": 0.13,
+        "topic_coverage": 0.12,
+        "development_coherence": 0.10,
+        "learning_path": 0.09,
         "goal_alignment": 0.07,
+        "language_alignment": 0.08,
     }
 
 

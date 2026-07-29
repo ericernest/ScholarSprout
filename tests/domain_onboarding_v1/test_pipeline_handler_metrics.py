@@ -193,8 +193,8 @@ class PipelineTests(unittest.TestCase):
             result_a, trace_a = future_a.result(timeout=5)
             result_b, trace_b = future_b.result(timeout=5)
 
-        self.assertEqual(result_a.status, "ok", result_a.error)
-        self.assertEqual(result_b.status, "ok", result_b.error)
+        self.assertEqual(result_a.status, "quality_warning", result_a.error)
+        self.assertEqual(result_b.status, "quality_warning", result_b.error)
         self.assertEqual(trace_a.first_usage.total_tokens, 112)
         self.assertEqual(trace_b.first_usage.total_tokens, 224)
         self.assertEqual(trace_a.retrieval_cache_hit_count, 3)
@@ -580,9 +580,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(
             snapshot["policies"]["versions"],
-            {"domain-quality-v1.4.0": 1},
+            {"domain-quality-v1.5.0": 1},
         )
-        self.assertEqual(response["policy_version"], "domain-quality-v1.4.0")
+        self.assertEqual(response["policy_version"], "domain-quality-v1.5.0")
         self.assertEqual(
             response["quality"]["policy_fingerprint"],
             response["policy_fingerprint"],

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import json
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -11,6 +13,7 @@ from handlers.domain_onboarding.schemas import (
     ContentQuality,
     CurrentLandscape,
     DomainOnboardingRequest,
+    DomainOnboardingOutput,
     PaperCandidate,
     PipelineResult,
     Prerequisite,
@@ -24,13 +27,35 @@ from handlers.domain_onboarding.schemas import (
 
 
 class ConfigAndSchemaTests(unittest.TestCase):
+    def test_v15_complete_example_matches_output_and_audit_contracts(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        snapshot = json.loads(
+            (root / "docs/examples/domain-onboarding-incremental-response-v1.5.json").read_text(encoding="utf-8")
+        )
+        raw = snapshot["result"]
+        output = DomainOnboardingOutput.model_validate(raw)
+        result = PipelineResult(
+            status=raw["status"],
+            query=raw["query"],
+            output=output,
+            policy_version=raw["policy_version"],
+            policy_fingerprint=raw["policy_fingerprint"],
+            quality=raw["quality"],
+            quality_attempts=raw["quality_attempts"],
+            repair_record=raw["repair_record"],
+        )
+
+        self.assertEqual(result.output.schema_version, "domain-onboarding-output-v1.5")
+        self.assertEqual(len(result.output.development_stages), 3)
+        self.assertEqual(len(result.output.learning_path), 5)
+
     def test_quality_policy_snapshot_has_stable_version_and_fingerprint(self) -> None:
         config = DomainOnboardingConfig()
 
         first = config.to_policy()
         second = config.to_policy()
 
-        self.assertEqual(first.policy_version, "domain-quality-v1.4.0")
+        self.assertEqual(first.policy_version, "domain-quality-v1.5.0")
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertEqual(sum(first.dimension_weights.values()), 1.0)
         self.assertGreater(config.planning_timeout_seconds, 60.0)
@@ -50,7 +75,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(DomainOnboardingPolicy(quality_threshold=0.8))
 
-        self.assertEqual(registry.versions(), ["domain-quality-v1.4.0"])
+        self.assertEqual(registry.versions(), ["domain-quality-v1.5.0"])
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):

@@ -1,0 +1,13 @@
+{
+  "query": "我已经学过 Transformer，希望六周入门检索增强生成并复现一个基线，偏向实践",
+  "session_id": "session-rag-001",
+  "user_id": "user-001",
+  "client_request_id": "domain-rag-20260729-001",
+  "language": "zh-CN",
+  "metadata": {
+    "background": ["Python", "Transformer"],
+    "goal": "六周内复现 RAG 基线并能正确评测",
+    "time_budget_weeks": 6,
+    "preference": "experiment_first"
+  }
+}

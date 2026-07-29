@@ -25,6 +25,29 @@ from .fakes import (
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_incremental_generation_emits_validated_sections_in_display_order(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        model = FakeJSONModel([payload, payload, payload])
+        events = []
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="检索增强生成"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda event, data, paths: events.append((event, data, paths)),
+        )
+
+        self.assertEqual(
+            [item[0] for item in events],
+            ["development_ready", "landscape_ready", "learning_path_ready"],
+        )
+        self.assertEqual(result.stats.model_calls, 3)
+        self.assertEqual(result.output.language, "zh-CN")
+        self.assertTrue(result.output.learning_path[3].reproducibility_checklist)
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
@@ -218,9 +241,10 @@ class QualityTests(unittest.TestCase):
                 "development_coherence",
                 "learning_path",
                 "goal_alignment",
+                "language_alignment",
             },
         )
-        self.assertEqual(quality.state, "passed")
+        self.assertEqual(quality.state, "warning")
         self.assertEqual(
             {gate.gate: gate.status for gate in quality.hard_gates},
             {

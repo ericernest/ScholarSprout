@@ -7,13 +7,16 @@ services:
     environment:
       DOMAIN_ONBOARDING_AUDIT_DIR: /var/lib/novicesynapse/audit
       DOMAIN_ONBOARDING_AUDIT_FSYNC: "1"
+      DOMAIN_ONBOARDING_JOB_DB: /var/lib/novicesynapse/jobs/domain_onboarding.sqlite3
       DOMAIN_ONBOARDING_EMBEDDING_MODEL: ${DOMAIN_ONBOARDING_EMBEDDING_MODEL:-}
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
     volumes:
       - ${NOVICESYNAPSE_CONFIG_DIR:?set NOVICESYNAPSE_CONFIG_DIR}:/home/novicesynapse/.novicesynapse:ro
       - domain_onboarding_audit:/var/lib/novicesynapse/audit
+      - domain_onboarding_jobs:/var/lib/novicesynapse/jobs
     restart: unless-stopped
 
 volumes:
   domain_onboarding_audit:
+  domain_onboarding_jobs:
