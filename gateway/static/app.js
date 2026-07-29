@@ -118,7 +118,7 @@ function bindChatPage() {
   });
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
-  setMode(initialMode in modeLabels ? initialMode : currentMode);
+  setMode(initialMode === "paper_reading" ? "paper_reading" : currentMode);
 }
 
 // Close mode menu and sync accessibility state.
@@ -162,12 +162,6 @@ async function sendMessage() {
 
   const content = input.value.trim();
   if (!content) {
-    return;
-  }
-
-  if (currentMode === "domain_onboarding") {
-    localStorage.setItem("domain_onboarding_draft_query", content);
-    window.location.href = `/app/domain-onboarding?query=${encodeURIComponent(content)}`;
     return;
   }
 
