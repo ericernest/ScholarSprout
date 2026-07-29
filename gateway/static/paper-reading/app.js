@@ -7,6 +7,7 @@ const STORAGE = {
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
   copilotWidth: "paper_reading_copilot_width",
+  pdfMarks: "paper_reading_pdf_marks",
 };
 
 const SKILLS = [
@@ -27,14 +28,20 @@ const NODE_COLORS = {
 };
 
 const KG_STAGE_ORDER = ["abstract", "introduction", "method", "experiment", "conclusion", "general"];
+const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
+  paperIndex: null, parseQuality: "", textLayerAvailable: false,
+  parseStatus: "", readingMapStatus: "", readingMap: null, parsePollTimer: null,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   revealedKgElements: [], queryKgElements: [], selectedNode: null,
-  selectedText: "", uploadSummary: null,
+  selectedText: "", selectedPage: null, selectedRect: null, sourceView: "pdf", uploadSummary: null,
   sessionState: "", restored: false, busy: false, kgLayout: "force",
   forks: [], activeFeedId: "main", kgMaxStageIndex: 0,
+  readerMode: "pdf", pdfDoc: null, pdfDocUrl: "", pdfRenderedKey: "", pdfjsLoading: null,
+  pdfZoom: null, pdfMarks: [], pdfMarkColor: "yellow", pdfMarkHistory: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +55,7 @@ const create = (tag, className = "", text = "") => {
 boot();
 
 function boot() {
+  setupPdfFirstReaderDom();
   if (isDedicatedWorkspace) {
     $("paper-intake").hidden = true;
     $("paper-workbench").hidden = true;
@@ -105,7 +113,7 @@ function bindWorkbench() {
   $("pause-button").addEventListener("click", pauseReading);
   $("resume-button").addEventListener("click", resumeReading);
   $("progress-button").addEventListener("click", refreshProgress);
-  $("regenerate-button").addEventListener("click", regenerateAnalysis);
+  $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -125,19 +133,148 @@ function bindReader() {
   document.querySelectorAll("[data-reader-mode]").forEach((button) => {
     button.addEventListener("click", () => setReaderMode(button.dataset.readerMode));
   });
-  $("analyze-section-button").addEventListener("click", () => startReading("请深入分析当前章节的核心问题、方法、证据和潜在局限。"));
-  $("fork-explore-button").addEventListener("click", () => openFork("reading.math_verifier", ""));
+  $("analyze-section-button").addEventListener("click", analyzeCurrentSection);
+  $("fork-explore-button").addEventListener("click", () => openFork(""));
   $("previous-section-button").addEventListener("click", () => moveSection(-1));
   $("next-section-button").addEventListener("click", () => moveSection(1));
-  $("pdf-fit-select").addEventListener("change", renderPdf);
+  $("pdf-fit-select").addEventListener("change", () => {
+    const value = $("pdf-fit-select").value;
+    state.pdfZoom = /^\d+$/.test(value) ? Number(value) : null;
+    syncPdfZoomInput();
+    renderPdf(true, { preserveViewport: true });
+  });
   $("structured-reader").addEventListener("mouseup", captureSelection);
+  $("pdf-reader").addEventListener("mouseup", captureSelection);
   bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader")) {
+    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#pdf-reader")) {
       $("selection-toolbar").hidden = true;
     }
   });
+}
+
+function setupPdfFirstReaderDom() {
+  const pdfTab = document.querySelector('[data-reader-mode="pdf"]');
+  const indexTab = document.querySelector('[data-reader-mode="structured"]');
+  if (pdfTab) {
+    pdfTab.textContent = "PDF 原文";
+    pdfTab.classList.add("is-active");
+  }
+  if (indexTab) {
+    indexTab.textContent = "智能索引";
+    indexTab.classList.remove("is-active");
+  }
+  const hint = $("pdf-mode-hint");
+  if (hint) {
+    hint.textContent = "PDF 原文支持直接划选并让右侧 Agent 分析；智能索引只提供章节锚点和摘要，不再作为版面还原视图。";
+    hint.hidden = false;
+  }
+  const reader = $("pdf-reader");
+  if (reader && !$("pdf-document")) {
+    const frame = $("pdf-frame");
+    const empty = $("pdf-empty");
+    const tools = createPdfToolbar();
+    const documentHost = create("div", "pdf-document");
+    documentHost.id = "pdf-document";
+    reader.replaceChildren(tools, documentHost);
+    if (frame) {
+      frame.hidden = true;
+      reader.append(frame);
+    }
+    if (empty) reader.append(empty);
+  }
+  ensureSelectionPdfActions();
+  const kgPanelLabel = document.querySelector(".kg-header .panel-label");
+  if (kgPanelLabel) kgPanelLabel.textContent = "Reading Map";
+  const kgTitle = document.querySelector(".kg-header h2");
+  if (kgTitle) kgTitle.textContent = "论文阅读地图";
+  const kgQuestion = $("kg-question-input");
+  if (kgQuestion) kgQuestion.placeholder = "围绕阅读地图或章节提问…";
+  const kgButton = document.querySelector("#kg-query-form .accent-button");
+  if (kgButton) kgButton.textContent = "提问";
+  const kgForm = $("kg-query-form");
+  if (kgForm) kgForm.hidden = true;
+  const kgPathFields = $("kg-path-fields");
+  if (kgPathFields) kgPathFields.hidden = true;
+  const graphToolbar = document.querySelector(".graph-toolbar");
+  if (graphToolbar) graphToolbar.hidden = true;
+  $("structured-reader").hidden = true;
+  $("pdf-reader").hidden = false;
+}
+
+function createPdfToolbar() {
+  const toolbar = create("div", "pdf-toolbar");
+  toolbar.id = "pdf-toolbar";
+  const zoomOut = create("button", "pdf-tool-button", "−");
+  zoomOut.type = "button";
+  zoomOut.title = "缩小";
+  zoomOut.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) - 10));
+  const zoomInput = create("input", "pdf-zoom-input");
+  zoomInput.id = "pdf-zoom-input";
+  zoomInput.type = "number";
+  zoomInput.min = "40";
+  zoomInput.max = "240";
+  zoomInput.step = "5";
+  zoomInput.value = String(state.pdfZoom || 100);
+  zoomInput.title = "自由缩放百分比";
+  zoomInput.addEventListener("change", () => setPdfZoom(Number(zoomInput.value || 100)));
+  const zoomUnit = create("span", "pdf-tool-label", "%");
+  const zoomIn = create("button", "pdf-tool-button", "+");
+  zoomIn.type = "button";
+  zoomIn.title = "放大";
+  zoomIn.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) + 10));
+  const fitWidth = create("button", "pdf-tool-button", "适宽");
+  fitWidth.type = "button";
+  fitWidth.title = "适应宽度";
+  fitWidth.addEventListener("click", () => setPdfFit("width"));
+  const fitPage = create("button", "pdf-tool-button", "整页");
+  fitPage.type = "button";
+  fitPage.title = "适应整页";
+  fitPage.addEventListener("click", () => setPdfFit("page"));
+  const save = create("button", "pdf-tool-button", "保存");
+  save.type = "button";
+  save.title = "下载原始 PDF";
+  save.addEventListener("click", downloadCurrentPdf);
+  const colors = create("div", "pdf-color-picker");
+  [
+    ["yellow", "黄"],
+    ["green", "绿"],
+    ["blue", "蓝"],
+    ["pink", "粉"],
+  ].forEach(([color, label]) => {
+    const swatch = create("button", `pdf-color-swatch pdf-color-${color}${state.pdfMarkColor === color ? " is-active" : ""}`, "");
+    swatch.type = "button";
+    swatch.title = `高亮颜色：${label}`;
+    swatch.addEventListener("click", () => setPdfMarkColor(color));
+    colors.append(swatch);
+  });
+  const highlight = create("button", "pdf-tool-button", "高亮");
+  highlight.type = "button";
+  highlight.title = "高亮当前选区";
+  highlight.addEventListener("click", () => addPdfMarkFromSelection("highlight"));
+  const note = create("button", "pdf-tool-button", "注释");
+  note.type = "button";
+  note.title = "给当前选区添加注释";
+  note.addEventListener("click", () => addPdfMarkFromSelection("note"));
+  const undo = create("button", "pdf-tool-button", "撤销");
+  undo.type = "button";
+  undo.title = "撤销最近一次高亮或注释";
+  undo.addEventListener("click", undoLastPdfMark);
+  toolbar.append(zoomOut, zoomInput, zoomUnit, zoomIn, fitWidth, fitPage, save, colors, highlight, note, undo);
+  return toolbar;
+}
+
+function ensureSelectionPdfActions() {
+  const toolbar = $("selection-toolbar");
+  if (!toolbar || toolbar.querySelector('[data-selection-action="highlight"]')) return;
+  const highlight = create("button", "", "高亮");
+  highlight.type = "button";
+  highlight.dataset.selectionAction = "highlight";
+  const note = create("button", "", "注释");
+  note.type = "button";
+  note.dataset.selectionAction = "note";
+  toolbar.append(highlight, note);
 }
 
 function bindKg() {
@@ -155,17 +292,11 @@ function bindKg() {
     state.queryKgElements = [];
     $("kg-answer").hidden = true;
     $("kg-reasoning").replaceChildren();
-    renderKg(state.revealedKgElements);
+    renderReadingMap();
   });
 }
 
 function bindFork() {
-  SKILLS.forEach((skill) => {
-    const option = create("option", "", skill.label);
-    option.value = skill.id;
-    $("fork-skill-select").append(option);
-  });
-  $("fork-skill-select").value = "reading.math_verifier";
   $("fork-create-button").addEventListener("click", createFork);
   $("fork-close-button").addEventListener("click", closeFork);
   document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
@@ -346,6 +477,9 @@ async function acceptUploadedPaper(payload, sourceLabel) {
   state.paperId = data.paper_id || "";
   state.sessionId = "";
   state.currentSection = data.sections?.[0]?.section_id || "";
+  state.parseStatus = data.parse_status || "";
+  state.readingMapStatus = data.reading_map_status || "";
+  state.readingMap = null;
   state.activeSkills = [];
   state.progress = {};
   state.uploadSummary = data.kg_build || {};
@@ -353,33 +487,73 @@ async function acceptUploadedPaper(payload, sourceLabel) {
   if (!state.paperId) throw new Error("上传成功响应中缺少 paper_id。");
   persistState();
   await loadPaperDetail();
-  renderReadyCard(sourceLabel);
   $("search-results-section").hidden = true;
-  $("paper-ready-section").hidden = false;
-  $("paper-ready-section").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("paper-ready-section").hidden = true;
+  await enterWorkbench();
+  startParsePolling();
 }
 
 async function loadPaperDetail() {
   const { payload } = await callPaperReading({ action: "get_paper_detail", paper_id: state.paperId });
   const data = payload.data || {};
   state.paper = data.paper || null;
+  state.paperIndex = data.paper_index || state.paper?.paper_index || null;
+  state.readingMap = data.reading_map || state.paper?.reading_map || null;
+  state.parseStatus = data.parse_status || state.paper?.parse_status || "";
+  state.readingMapStatus = data.reading_map_status || state.paper?.reading_map_status || state.readingMap?.status || "";
+  state.textLayerAvailable = Boolean(data.text_layer_available);
+  state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
+  loadPdfMarks();
   const initialKg = data.initial_kg || {};
   if (initialKg.cytoscape_elements?.length) {
     state.revealedKgElements = initialKg.cytoscape_elements;
     state.kgMaxStageIndex = Math.max(0, KG_STAGE_ORDER.indexOf(initialKg.current_stage || "abstract"));
-    $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex]} 阶段 · 累计 ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系（随阅读只增不减）`;
+    $("kg-stage-copy").textContent = `完整图谱 · ${initialKg.node_count ?? 0} 节点 / ${initialKg.edge_count ?? 0} 关系`;
   }
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
+}
+
+function startParsePolling() {
+  stopParsePolling();
+  if (!state.paperId || !shouldPollPaperDetail()) return;
+  state.parsePollTimer = window.setInterval(async () => {
+    try {
+      await loadPaperDetail();
+      if (!$("paper-workbench").hidden) {
+        renderOutline();
+        renderSections();
+        renderProgress();
+        renderReadingMap();
+        if (!state.currentSection) {
+          state.currentSection = state.paper?.sections?.[0]?.section_id || "";
+          syncComposerContext();
+        }
+      }
+      if (!shouldPollPaperDetail()) stopParsePolling();
+    } catch (error) {
+      console.warn("Parse polling failed", error);
+    }
+  }, 2500);
+}
+
+function shouldPollPaperDetail() {
+  return ["queued", "pending", "parsing"].includes(state.parseStatus)
+    || state.readingMapStatus === "llm_running";
+}
+
+function stopParsePolling() {
+  if (state.parsePollTimer) window.clearInterval(state.parsePollTimer);
+  state.parsePollTimer = null;
 }
 
 function renderReadyCard(sourceLabel = "已保存论文") {
   if (!state.paper) return;
   $("ready-title").textContent = state.paper.title || "未命名论文";
   $("ready-authors").textContent = (state.paper.authors || []).join("、") || "作者信息暂无";
-  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看论文重排。";
+  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看 PDF 原文与智能索引。";
   $("ready-sections").textContent = state.paper.sections?.length || 0;
   $("ready-nodes").textContent = state.uploadSummary?.new_nodes ?? "—";
   $("ready-edges").textContent = state.uploadSummary?.new_edges ?? "—";
@@ -399,12 +573,6 @@ async function enterWorkbench() {
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
   window.scrollTo({ top: 0, behavior: "auto" });
-  if (state.restored && state.sessionId) {
-    if (state.sessionState === "paused") await resumeReading(false);
-    await startReading("请继续上次的阅读，并概括当前章节接下来的理解重点。");
-  } else if (!state.sessionId) {
-    await startReading("请先给出这篇论文的阅读导览，并分析当前章节的核心结构。");
-  }
 }
 
 function showIntake() {
@@ -436,8 +604,10 @@ function renderPaperWorkspace() {
   renderSections();
   renderProgress();
   syncSkillControls();
+  setReaderMode(state.readerMode || "pdf");
   renderPdf();
-  renderKg(state.revealedKgElements);
+  renderReadingMap();
+  startParsePolling();
   updateSessionBadge();
 }
 
@@ -445,6 +615,12 @@ function renderOutline() {
   const container = $("paper-outline");
   container.replaceChildren();
   const sections = state.paper?.sections || [];
+  if (!sections.length && ["queued", "pending", "parsing"].includes(state.parseStatus)) {
+    const pending = create("div", "outline-pending", "正在生成章节索引…");
+    container.append(pending);
+    $("outline-count").textContent = "0";
+    return;
+  }
   const statuses = state.progress?.section_statuses || {};
   sections.forEach((section, index) => {
     const button = create("button", `outline-item${section.section_id === state.currentSection ? " is-active" : ""}`);
@@ -452,7 +628,7 @@ function renderOutline() {
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", statuses[section.section_id] === "completed" ? "●" : String(index + 1).padStart(2, "0"));
     button.append(icon, create("span", "outline-title", section.title || `Section ${index + 1}`));
-    button.addEventListener("click", () => selectSection(section.section_id, true));
+    button.addEventListener("click", () => selectSection(section.section_id, false));
     container.append(button);
   });
   $("outline-count").textContent = String(sections.length);
@@ -462,50 +638,130 @@ function renderSections() {
   const reader = $("structured-reader");
   reader.replaceChildren();
   const sections = state.paper?.sections || [];
-  const figures = state.paper?.figures || [];
   if (!sections.length) {
-    reader.append(create("div", "empty-state", "没有解析到结构化章节，可切换到 PDF 原文。"));
+    reader.append(create("div", "empty-state", "没有解析到章节索引，请在 PDF 原文中阅读并划选。"));
     return;
   }
+  const indexSections = state.paperIndex?.sections || [];
   sections.forEach((section, index) => {
+    const indexed = indexSections.find((item) => item.section_id === section.section_id) || {};
+    const guide = sectionGuide(section.section_id);
     const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
-    const article = create("section", `paper-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
+    const article = create("section", `paper-section index-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
     article.id = domSectionId(section.section_id);
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
     meta.append(create("span", "", `Section ${String(index + 1).padStart(2, "0")}`));
     if (section.start_page) meta.append(create("span", "", `Page ${section.start_page}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
-    const paragraphs = section.paragraphs?.length ? section.paragraphs : splitParagraphs(section.content || "");
+
     const body = create("div", "paper-section-body");
-    const sectionFigures = figures.filter((figure) => (
-      figure.section_id === section.section_id
-      || (!figure.section_id
-        && figure.page
-        && section.start_page
-        && figure.page >= section.start_page
-        && figure.page <= (section.end_page || section.start_page))
-    ));
-    const figuresByParagraph = new Map();
-    sectionFigures.forEach((figure, figureIndex) => {
-      const target = Math.min(
-        Math.max(paragraphs.length - 1, 0),
-        1 + figureIndex * 2,
-      );
-      const bucket = figuresByParagraph.get(target) || [];
-      bucket.push(figure);
-      figuresByParagraph.set(target, bucket);
+    const summary = create("p", "index-section-summary", sectionSummaryText(section, indexed, guide));
+    body.append(summary);
+    body.append(renderSectionGuide(guide, indexed));
+    const actions = create("div", "index-section-actions");
+    const jump = create("button", "figure-source-button", `跳转 PDF 第 ${section.start_page || 1} 页`);
+    jump.type = "button";
+    jump.addEventListener("click", () => jumpToPdfPage(section.start_page || 1, section.section_id));
+    const analyze = create("button", "figure-source-button", "分析本节");
+    analyze.type = "button";
+    analyze.addEventListener("click", () => {
+      state.currentSection = section.section_id;
+      startReading(`请分析“${section.title || section.section_id}”，给出核心内容、论证结构、关键证据与需要重点理解的概念。`);
     });
-    paragraphs.forEach((paragraph, paragraphIndex) => {
-      body.append(renderReflowParagraph(paragraph));
-      (figuresByParagraph.get(paragraphIndex) || []).forEach((figure) => body.append(renderPaperFigure(figure)));
-    });
-    if (!paragraphs.length) {
-      sectionFigures.forEach((figure) => body.append(renderPaperFigure(figure)));
-    }
+    actions.append(jump, analyze);
+    body.append(actions);
     article.append(body);
     reader.append(article);
   });
+  restoreReaderPosition(reader);
+  reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
+}
+
+function sectionSummaryText(section, indexed = {}, guide = null) {
+  const pages = section.start_page
+    ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
+    : "";
+  const chunks = indexed.text_chunks || [];
+  const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
+  if (guide) return `${pages}${quality}下方是面向科研新手的章节导读。`;
+  if (!chunks.length) return `${pages}${quality}此处是 Agent 索引锚点，请以 PDF 原文为准。`;
+  return `${pages}${quality}下方仅展示供 Agent 检索的章节摘要片段，不作为论文版面还原。`;
+}
+
+function sectionGuide(sectionId) {
+  const guides = state.readingMap?.section_guides || state.paper?.reading_map?.section_guides || [];
+  return guides.find((item) => item.section_id === sectionId) || null;
+}
+
+function renderSectionGuide(guide, indexed = {}) {
+  const wrap = create("div", "section-guide");
+  if (guide) {
+    [
+      ["主要内容", guide.main_content],
+      ["核心思想", guide.core_idea],
+      ["技术路线", guide.technical_route],
+      ["实现方案", guide.implementation_plan],
+      ["实验设置", guide.experiment_setting],
+      ["数据格式", guide.dataset_format],
+      ["实验方案", guide.experiment_protocol],
+      ["新手重点", guide.novice_focus],
+    ].forEach(([label, value]) => {
+      if (!value) return;
+      const item = create("section", "section-guide-item");
+      item.append(create("strong", "", label), create("p", "", String(value)));
+      wrap.append(item);
+    });
+    [
+      ["数据集", guide.datasets],
+      ["Baseline", guide.baselines],
+      ["指标", guide.metrics],
+    ].forEach(([label, values]) => {
+      if (!Array.isArray(values) || !values.length) return;
+      const item = create("section", "section-guide-item");
+      item.append(create("strong", "", label), create("p", "", values.slice(0, 10).join(" / ")));
+      wrap.append(item);
+    });
+    return wrap;
+  }
+
+  const chunks = (indexed.text_chunks || []).slice(0, 3);
+  if (!chunks.length) {
+    wrap.append(create("p", "index-chunk", "章节导读正在生成中。你可以先在 PDF 原文中阅读、划选并提问。"));
+    return wrap;
+  }
+  chunks.forEach((chunk) => {
+    wrap.append(create("p", "index-chunk", truncate(chunk.text || "", 260)));
+  });
+  return wrap;
+}
+
+function findFigureInsertionIndex(figure, paragraphs, section, fallbackIndex = 0) {
+  if (!paragraphs.length) return 0;
+  const number = figureNumber(figure);
+  if (number) {
+    const pattern = new RegExp(`\\b(?:Figure|Fig\\.?|图)\\s*${escapeRegExp(number)}\\b`, "i");
+    const referenced = paragraphs.findIndex((paragraph) => pattern.test(String(paragraph || "")));
+    if (referenced >= 0) return referenced;
+  }
+  if (figure.page && section.start_page && section.end_page && section.end_page > section.start_page) {
+    const ratio = (figure.page - section.start_page) / Math.max(1, section.end_page - section.start_page);
+    return Math.min(paragraphs.length - 1, Math.max(0, Math.round(ratio * (paragraphs.length - 1))));
+  }
+  return Math.min(paragraphs.length - 1, Math.max(0, fallbackIndex === 0 ? 1 : 1 + fallbackIndex));
+}
+
+function figureNumber(figure) {
+  const source = `${figure.figure_id || ""} ${figure.caption || ""}`;
+  const match = source.match(/\b(?:fig(?:ure)?[:.\s-]*|figure\s+|图\s*)(\d+[A-Za-z]?)/i);
+  return match ? match[1] : "";
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function restoreReaderPosition(reader) {
   requestAnimationFrame(() => {
     if (!state.restored) return;
     if (state.currentSection && document.getElementById(domSectionId(state.currentSection))) {
@@ -515,22 +771,13 @@ function renderSections() {
       if (savedScroll) reader.scrollTop = savedScroll;
     }
   });
-  reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
 
 function renderReflowParagraph(text) {
   const paragraph = create("p", "reflow-paragraph");
   const value = String(text || "").trim();
   let displayValue = value;
-  if (
-    value.length <= 220
-    && (
-      /^[([]?\d+[)\]]?$/.test(value)
-      || /[=∑∏⊆∈≤≥]/.test(value)
-    )
-  ) {
-    paragraph.classList.add("is-equation");
-  } else if (/^[•·]\s*/.test(value)) {
+  if (/^[•·]\s*/.test(value)) {
     paragraph.classList.add("is-bullet");
     displayValue = value.replace(/^[•·]\s*/, "");
   }
@@ -547,7 +794,7 @@ function renderPaperFigure(figure) {
   const card = create("figure", "paper-figure");
   card.id = `paper-${String(figure.figure_id || figure.asset_name || "figure").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const image = create("img", "paper-figure-image");
-  image.src = figure.image_url || "";
+  image.src = figure.image_url || figure.asset_url || "";
   image.alt = figure.caption || `Figure on page ${figure.page || "unknown"}`;
   image.loading = "lazy";
   image.decoding = "async";
@@ -555,18 +802,17 @@ function renderPaperFigure(figure) {
   const caption = create("figcaption", "paper-figure-caption");
   const copy = create("span", "figure-caption-copy", figure.caption || "论文配图");
   caption.append(copy);
-  if (figure.page) {
-    const sourceButton = create("button", "figure-source-button", `原文第 ${figure.page} 页`);
-    sourceButton.type = "button";
-    sourceButton.addEventListener("click", () => {
-      const baseUrl = state.pdfUrl.split("#", 1)[0];
-      $("pdf-frame").src = `${baseUrl}#${pdfFragment(figure.page, $("pdf-fit-select").value || "width")}`;
-      setReaderMode("pdf");
-    });
-    caption.append(sourceButton);
-  }
+  appendSourceButton(caption, figure.page);
   card.append(image, caption);
   return card;
+}
+
+function appendSourceButton(container, page) {
+  if (!page) return;
+  const sourceButton = create("button", "figure-source-button", `原文第 ${page} 页`);
+  sourceButton.type = "button";
+  sourceButton.addEventListener("click", () => jumpToPdfPage(page));
+  container.append(sourceButton);
 }
 
 function pdfFragment(page, fit) {
@@ -579,13 +825,114 @@ function currentPdfPage() {
   return section?.start_page || 1;
 }
 
-function renderPdf() {
-  const fit = $("pdf-fit-select").value || "width";
+async function renderPdf(force = false, options = {}) {
+  setupPdfFirstReaderDom();
+  const host = $("pdf-document");
+  const fit = state.pdfZoom ? String(state.pdfZoom) : ($("pdf-fit-select").value || "width");
   const baseUrl = state.pdfUrl.split("#", 1)[0];
-  const nextUrl = state.hasPdf ? `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}` : "about:blank";
-  if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
-  $("pdf-frame").hidden = !state.hasPdf;
+  const anchor = options.preserveViewport ? capturePdfViewportAnchor() : null;
+  const preserveViewport = Boolean(options.preserveViewport && anchor);
   $("pdf-empty").hidden = state.hasPdf;
+  if (!state.hasPdf || !host) {
+    if (host) host.replaceChildren();
+    return;
+  }
+  const renderKey = `${baseUrl}::${fit}::${host.clientWidth}`;
+  if (!force && state.pdfRenderedKey === renderKey && host.childElementCount) {
+    return;
+  }
+  if (!preserveViewport) host.replaceChildren(create("div", "pdf-loading", "正在加载 PDF 原文…"));
+  try {
+    const pdfjsLib = await ensurePdfJs();
+    if (!state.pdfDoc || state.pdfDocUrl !== baseUrl) {
+      state.pdfDoc = await pdfjsLib.getDocument(baseUrl).promise;
+      state.pdfDocUrl = baseUrl;
+    }
+    const target = document.createDocumentFragment();
+    for (let pageNumber = 1; pageNumber <= state.pdfDoc.numPages; pageNumber += 1) {
+      await renderPdfPage(pdfjsLib, state.pdfDoc, pageNumber, fit, host, target);
+    }
+    host.replaceChildren(target);
+    state.pdfRenderedKey = renderKey;
+    $("pdf-frame").hidden = true;
+    if (preserveViewport) restorePdfViewportAnchor(anchor);
+    else scrollPdfToPage(currentPdfPage(), false);
+  } catch (error) {
+    console.warn("PDF.js render failed, fallback to iframe.", error);
+    host.replaceChildren(create("div", "pdf-loading", "PDF.js 加载失败，已切换到浏览器原生 PDF 预览。"));
+    const nextUrl = `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}`;
+    if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
+    $("pdf-frame").hidden = false;
+  }
+}
+
+function setPdfZoom(value) {
+  state.pdfZoom = Math.min(240, Math.max(40, Math.round(Number(value) || 100)));
+  syncPdfZoomInput();
+  renderPdf(true, { preserveViewport: true });
+}
+
+function setPdfFit(value) {
+  state.pdfZoom = null;
+  $("pdf-fit-select").value = value;
+  syncPdfZoomInput();
+  renderPdf(true, { preserveViewport: true });
+}
+
+function currentZoomValue() {
+  if (state.pdfZoom) return state.pdfZoom;
+  const value = $("pdf-fit-select")?.value;
+  return /^\d+$/.test(value || "") ? Number(value) : 100;
+}
+
+function syncPdfZoomInput() {
+  const input = $("pdf-zoom-input");
+  if (input) input.value = String(state.pdfZoom || currentZoomValue());
+}
+
+function capturePdfViewportAnchor() {
+  const host = $("pdf-document");
+  if (!host) return null;
+  const hostRect = host.getBoundingClientRect();
+  const pages = Array.from(host.querySelectorAll(".pdf-page"));
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  pages.forEach((page) => {
+    const rect = page.getBoundingClientRect();
+    const distance = Math.abs(rect.top - hostRect.top);
+    if (rect.bottom >= hostRect.top && rect.top <= hostRect.bottom && distance < bestDistance) {
+      bestDistance = distance;
+      best = page;
+    }
+  });
+  if (!best) return { page: currentPdfPage(), ratio: 0 };
+  const rect = best.getBoundingClientRect();
+  return {
+    page: Number(best.dataset.pageNumber || 1),
+    ratio: Math.min(1, Math.max(0, (hostRect.top - rect.top) / Math.max(1, rect.height))),
+  };
+}
+
+function restorePdfViewportAnchor(anchor) {
+  const host = $("pdf-document");
+  const page = host?.querySelector(`[data-page-number="${Number(anchor?.page) || 1}"]`);
+  if (!host || !page) return;
+  const pageTop = page.offsetTop;
+  host.scrollTo({ top: Math.max(0, pageTop + page.offsetHeight * (anchor.ratio || 0)), behavior: "auto" });
+}
+
+function visiblePdfPage() {
+  return capturePdfViewportAnchor()?.page || currentPdfPage();
+}
+
+function downloadCurrentPdf() {
+  if (!state.pdfUrl) return toast("当前论文没有可保存的 PDF。", true);
+  const link = document.createElement("a");
+  link.href = state.pdfUrl.split("#", 1)[0];
+  link.download = `${sanitizeFileName(state.paper?.title || "paper")}.pdf`;
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
 function syncPdfToSection(sectionId) {
@@ -593,28 +940,121 @@ function syncPdfToSection(sectionId) {
   const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
   const page = section?.start_page;
   if (!page) return;
-  const fit = $("pdf-fit-select").value || "width";
-  const baseUrl = state.pdfUrl.split("#", 1)[0];
-  const nextUrl = `${baseUrl}#${pdfFragment(page, fit)}`;
-  if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
+  scrollPdfToPage(page);
+  if (!$("pdf-frame").hidden) {
+    const fit = $("pdf-fit-select").value || "width";
+    const baseUrl = state.pdfUrl.split("#", 1)[0];
+    const nextUrl = `${baseUrl}#${pdfFragment(page, fit)}`;
+    if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
+  }
 }
 
 function setReaderMode(mode) {
   const isPdf = mode === "pdf";
+  state.readerMode = isPdf ? "pdf" : "structured";
   $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
-  $("pdf-mode-hint").hidden = !isPdf;
+  $("pdf-mode-hint").hidden = false;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
-  if (isPdf) syncPdfToSection(state.currentSection);
+  if (isPdf) {
+    renderPdf();
+    syncPdfToSection(state.currentSection);
+  }
+}
+
+function ensurePdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (state.pdfjsLoading) return state.pdfjsLoading;
+  state.pdfjsLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = PDFJS_SRC;
+    script.async = true;
+    script.onload = () => {
+      if (!window.pdfjsLib) {
+        reject(new Error("PDF.js 未暴露 pdfjsLib。"));
+        return;
+      }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
+      resolve(window.pdfjsLib);
+    };
+    script.onerror = () => reject(new Error("无法加载 PDF.js。"));
+    document.head.append(script);
+  });
+  return state.pdfjsLoading;
+}
+
+async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, appendTarget = measureHost) {
+  const page = await pdfDoc.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const availableWidth = Math.max(360, measureHost.clientWidth - 34);
+  const widthScale = availableWidth / baseViewport.width;
+  const numericZoom = /^\d+$/.test(String(fit)) ? Number(fit) : 0;
+  const scale = numericZoom
+    ? numericZoom / 100 * 1.35
+    : fit === "100"
+    ? 1.35
+    : fit === "page"
+      ? Math.min(widthScale, Math.max(0.7, (measureHost.clientHeight - 42) / baseViewport.height))
+      : widthScale;
+  const viewport = page.getViewport({ scale });
+  const pageShell = create("section", "pdf-page");
+  pageShell.dataset.pageNumber = String(pageNumber);
+  pageShell.style.width = `${viewport.width}px`;
+  pageShell.style.height = `${viewport.height}px`;
+  const canvas = create("canvas", "pdf-canvas");
+  const context = canvas.getContext("2d");
+  const outputScale = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(viewport.width * outputScale);
+  canvas.height = Math.floor(viewport.height * outputScale);
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
+  const textLayer = create("div", "textLayer");
+  textLayer.style.width = `${viewport.width}px`;
+  textLayer.style.height = `${viewport.height}px`;
+  const markLayer = create("div", "pdf-mark-layer");
+  pageShell.append(canvas, textLayer, markLayer);
+  appendTarget.append(pageShell);
+  await page.render({
+    canvasContext: context,
+    viewport,
+    transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null,
+  }).promise;
+  const textContent = await page.getTextContent();
+  const task = pdfjsLib.renderTextLayer({
+    textContentSource: textContent,
+    container: textLayer,
+    viewport,
+    textDivs: [],
+    enhanceTextSelection: true,
+  });
+  await (task.promise || task);
+  renderPdfMarks(pageShell, pageNumber);
+}
+
+function scrollPdfToPage(page, smooth = true) {
+  const host = $("pdf-document");
+  const target = host?.querySelector(`[data-page-number="${Number(page) || 1}"]`);
+  if (!host || !target) return;
+  const top = target.getBoundingClientRect().top - host.getBoundingClientRect().top + host.scrollTop - 10;
+  host.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+}
+
+function jumpToPdfPage(page, sectionId = "") {
+  if (sectionId) state.currentSection = sectionId;
+  setReaderMode("pdf");
+  renderOutline();
+  syncComposerContext();
+  requestAnimationFrame(() => scrollPdfToPage(page || currentPdfPage()));
 }
 
 async function selectSection(sectionId, analyze) {
   state.currentSection = sectionId;
+  state.sourceView = state.readerMode || "pdf";
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
-  if ($("structured-reader").hidden) syncPdfToSection(sectionId);
+  if (state.readerMode === "pdf" || $("structured-reader").hidden) syncPdfToSection(sectionId);
   else scrollReaderToSection(sectionId);
   syncComposerContext();
   if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
@@ -625,7 +1065,7 @@ function moveSection(offset) {
   if (!sections.length) return;
   const current = Math.max(0, sections.findIndex((item) => item.section_id === state.currentSection));
   const target = sections[Math.min(sections.length - 1, Math.max(0, current + offset))];
-  if (target) selectSection(target.section_id, true);
+  if (target) selectSection(target.section_id, false);
 }
 
 async function startReading(content, sessionId = state.sessionId) {
@@ -636,7 +1076,7 @@ async function startReading(content, sessionId = state.sessionId) {
     const { payload } = await callPaperReading({
       action: "start_reading", session_id: sessionId || "", paper_id: state.paperId,
       target_section: state.currentSection || "", content,
-      metadata: { viewport_section: state.currentSection, selected_text: state.selectedText },
+      metadata: selectionMetadata(),
     });
     thinking.remove();
     applyReadingPayload(payload);
@@ -663,9 +1103,8 @@ function showThinkingCard(detail, target = $("analysis-feed")) {
   return card;
 }
 
-async function regenerateAnalysis() {
-  if (!state.sessionId) return toast("请先开始章节阅读，再重新生成分析。", true);
-  await startReading(`请重新分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出更深入的核心内容、论证结构与重点概念解读。`);
+async function analyzeCurrentSection() {
+  await startReading(`请分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出核心内容、论证结构、关键证据与需要重点理解的概念。`);
 }
 
 function applyReadingPayload(payload) {
@@ -690,8 +1129,8 @@ function applyReadingPayload(payload) {
   updateSessionBadge();
   const revealedNodes = state.revealedKgElements.filter((item) => !item.data?.source).length;
   const revealedEdges = state.revealedKgElements.length - revealedNodes;
-  $("kg-stage-copy").textContent = `已展开至 ${KG_STAGE_ORDER[state.kgMaxStageIndex] || "general"} 阶段 · 累计 ${revealedNodes} 节点 / ${revealedEdges} 关系（随阅读只增不减）`;
-  renderKg(state.revealedKgElements);
+  $("kg-stage-copy").textContent = `完整图谱 · ${revealedNodes} 节点 / ${revealedEdges} 关系`;
+  renderReadingMap();
 }
 
 function mergeKgElements(existing, incoming) {
@@ -728,10 +1167,6 @@ function renderSkillOutputs(outputs, target) {
     const hasStructured = output.parse_status === "parsed" && content && typeof content === "object" && Object.keys(content).length;
     if (hasStructured) card.append(renderSkillContent(output));
     else card.append(renderMarkdown(output.rendered || "Skill 已执行，但没有返回可展示内容。"));
-    const candidates = output.kg_candidates;
-    if (candidates?.nodes?.length || candidates?.edges?.length) {
-      card.append(create("span", "count-pill", `${candidates.nodes?.length || 0} 个 KG 候选`));
-    }
     target.append(card);
   });
 }
@@ -800,28 +1235,58 @@ function renderStructuredValue(value, depth = 0) {
     return container;
   }
   Object.entries(value || {}).forEach(([key, item]) => {
-    const block = create("div", "value-block");
-    block.append(create("strong", "", humanizeKey(key)));
+    const block = create("section", "value-block");
+    block.append(create("h4", "", humanizeKey(key)));
     if (Array.isArray(item)) {
       if (!item.length) block.append(create("p", "", "暂无"));
-      else {
-        const list = create("ul");
-        item.forEach((entry) => {
-          const li = create("li");
-          if (entry && typeof entry === "object") li.append(renderStructuredValue(entry, depth + 1));
-          else li.textContent = String(entry);
-          list.append(li);
-        });
-        block.append(list);
-      }
+      else block.append(renderStructuredArray(item, depth + 1));
     } else if (item && typeof item === "object") {
-      block.append(renderStructuredValue(item, depth + 1));
+      block.append(renderCompactObject(item, depth + 1));
     } else {
       block.append(create("p", "", item == null || item === "" ? "暂无" : String(item)));
     }
     container.append(block);
   });
   return container;
+}
+
+function renderStructuredArray(items, depth = 0) {
+  if (!items.some((entry) => entry && typeof entry === "object")) {
+    const list = create("ul", "compact-list");
+    items.forEach((entry) => list.append(create("li", "", String(entry))));
+    return list;
+  }
+  const wrap = create("div", "compact-object-list");
+  items.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      wrap.append(create("p", "compact-text", String(entry)));
+      return;
+    }
+    const item = create("article", "compact-object");
+    const title = entry.name || entry.title || entry.label || entry.step_id || entry.id || `Item ${index + 1}`;
+    item.append(create("h5", "", String(title)));
+    item.append(renderCompactObject(entry, depth + 1, new Set(["name", "title", "label"])));
+    wrap.append(item);
+  });
+  return wrap;
+}
+
+function renderCompactObject(value, depth = 0, hiddenKeys = new Set()) {
+  const grid = create("dl", "compact-fields");
+  Object.entries(value || {}).forEach(([key, item]) => {
+    if (hiddenKeys.has(key)) return;
+    const dt = create("dt", "", humanizeKey(key));
+    const dd = create("dd");
+    if (Array.isArray(item)) {
+      dd.append(item.length ? renderStructuredArray(item, depth + 1) : create("span", "", "暂无"));
+    } else if (item && typeof item === "object") {
+      dd.append(depth > 3 ? create("pre", "analysis-text", JSON.stringify(item, null, 2)) : renderCompactObject(item, depth + 1));
+    } else {
+      dd.textContent = item == null || item === "" ? "暂无" : String(item);
+    }
+    grid.append(dt, dd);
+  });
+  return grid;
 }
 
 // Render the Markdown subset used by model answers without injecting raw HTML.
@@ -934,73 +1399,13 @@ function appendInlineMarkdown(target, text) {
 }
 
 function renderSkillControls() {
-  const switches = $("skill-switches");
-  const quick = $("quick-actions");
-  SKILLS.forEach((skill) => {
-    const label = create("label", "skill-toggle");
-    label.append(create("span", "", skill.label));
-    const input = create("input");
-    input.type = "checkbox";
-    input.dataset.skillId = skill.id;
-    input.addEventListener("change", () => toggleSkill(skill.id, input.checked, input));
-    label.append(input, create("span", "toggle-ui"));
-    switches.append(label);
-
-    const button = create("button", "quick-action", skill.short);
-    button.type = "button";
-    button.addEventListener("click", () => runSkill(skill));
-    quick.append(button);
-  });
+  // Skill routing is handled by the backend. The frontend only renders returned outputs.
 }
 
 function renderQuickActions() {}
 
-async function toggleSkill(skillId, active, input) {
-  if (!state.sessionId) {
-    input.checked = false;
-    toast("首次章节分析完成后才能加载 Skill。", true);
-    return;
-  }
-  setBusy(true, active ? "正在加载专家" : "正在卸载专家", skillLabel(skillId));
-  try {
-    const { payload } = await callPaperReading({
-      action: active ? "load_skill" : "unload_skill", session_id: state.sessionId, skill_ids: [skillId],
-    });
-    state.activeSkills = payload.data?.active_skills || [];
-    syncSkillControls();
-    toast(payload.data?.message || "Skill 状态已更新。");
-  } catch (error) {
-    input.checked = !active;
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function runSkill(skill) {
-  if (!state.sessionId) {
-    toast("正在先初始化阅读会话，请稍候。");
-    await startReading("请初始化本篇论文的阅读上下文。");
-  }
-  if (!state.sessionId) return;
-  if (!state.activeSkills.includes(skill.id)) {
-    try {
-      const { payload } = await callPaperReading({ action: "load_skill", session_id: state.sessionId, skill_ids: [skill.id] });
-      state.activeSkills = payload.data?.active_skills || state.activeSkills;
-      syncSkillControls();
-    } catch (error) {
-      toast(error.message, true);
-      return;
-    }
-  }
-  await startReading(skill.prompt);
-}
-
 function syncSkillControls() {
-  document.querySelectorAll("[data-skill-id]").forEach((input) => {
-    input.checked = state.activeSkills.includes(input.dataset.skillId);
-  });
-  $("active-skill-count").textContent = `${state.activeSkills.length} Skills`;
+  // No frontend skill controls are rendered; skill choice is handled server-side.
 }
 
 async function pauseReading(showToast = true) {
@@ -1098,14 +1503,25 @@ function captureSelection() {
   const selection = window.getSelection();
   const text = selection?.toString().trim();
   if (!text || text.length < 2) {
+    state.selectedText = "";
+    state.selectedPage = null;
+    state.selectedRect = null;
     $("selection-toolbar").hidden = true;
     return;
   }
   const anchor = selection.anchorNode?.parentElement;
-  if (!anchor?.closest("#structured-reader")) return;
+  const structured = anchor?.closest("#structured-reader");
+  const pdfPage = anchor?.closest(".pdf-page");
+  if (!structured && !pdfPage) return;
   state.selectedText = text.slice(0, 6000);
+  state.sourceView = pdfPage ? "pdf" : "index";
+  state.selectedPage = pdfPage ? Number(pdfPage.dataset.pageNumber || 0) : null;
+  state.selectedRect = selectionRectForMetadata(selection, pdfPage);
   const section = anchor.closest(".paper-section");
   if (section?.dataset.sectionId) state.currentSection = section.dataset.sectionId;
+  else if (state.selectedPage) state.currentSection = sectionForPage(state.selectedPage)?.section_id || state.currentSection;
+  renderOutline();
+  syncComposerContext();
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   const toolbar = $("selection-toolbar");
   toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - 430, rect.left))}px`;
@@ -1119,17 +1535,155 @@ async function handleSelectionAction(event) {
   $("selection-toolbar").hidden = true;
   const quoted = `\n\n选中内容：\n${state.selectedText}`;
   if (action === "explain") await startReading(`请解释这段内容的直觉、上下文和关键假设。${quoted}`);
-  if (action === "concept") await runSkill({ ...SKILLS.find((item) => item.id === "reading.domain_expert"), prompt: `请解释选中概念的定义、前置知识和领域脉络。${quoted}` });
-  if (action === "formula") openFork("reading.math_verifier", "请对选中公式做直觉、逐步推导和数值例子三层分析。");
-  if (action === "fork") openFork("reading.domain_expert", "请围绕选中内容进行深入探索。");
-  if (action === "candidate") toast("已加入本页 KG 候选区；后端暂未提供确认写入 action。");
+  if (action === "concept") await startReading(`请解释选中概念的定义、前置知识和领域脉络。${quoted}`);
+  if (action === "formula") openFork("请对选中公式做直觉、逐步推导和数值例子三层分析。");
+  if (action === "fork") openFork("请围绕选中内容进行深入探索。");
+  if (action === "highlight") addPdfMarkFromSelection("highlight");
+  if (action === "note") addPdfMarkFromSelection("note");
 }
 
-function openFork(skillId, question) {
+function addPdfMarkFromSelection(type) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !state.selectedText) return toast("请先在 PDF 原文中划选内容。", true);
+  const page = selection.anchorNode?.parentElement?.closest(".pdf-page");
+  if (!page) return toast("高亮和注释目前只支持 PDF 原文选区。", true);
+  const pageRect = page.getBoundingClientRect();
+  const rects = Array.from(selection.getRangeAt(0).getClientRects())
+    .filter((rect) => rect.width > 1 && rect.height > 1)
+    .map((rect) => ({
+      left: round2((rect.left - pageRect.left) / pageRect.width),
+      top: round2((rect.top - pageRect.top) / pageRect.height),
+      width: round2(rect.width / pageRect.width),
+      height: round2(rect.height / pageRect.height),
+    }));
+  if (!rects.length) return;
+  const note = type === "note" ? window.prompt("添加注释", "") || "" : "";
+  const mark = {
+    id: `mark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type,
+    color: state.pdfMarkColor || "yellow",
+    page: Number(page.dataset.pageNumber || 1),
+    rects,
+    text: state.selectedText,
+    note,
+    section_id: state.currentSection,
+    created_at: new Date().toISOString(),
+  };
+  state.pdfMarks.push(mark);
+  state.pdfMarkHistory.push(mark.id);
+  persistPdfMarks();
+  renderPdfMarks(page, mark.page);
+  selection.removeAllRanges();
+  $("selection-toolbar").hidden = true;
+  toast(type === "note" ? "注释已添加。" : "高亮已添加。");
+}
+
+function setPdfMarkColor(color) {
+  state.pdfMarkColor = color || "yellow";
+  document.querySelectorAll(".pdf-color-swatch").forEach((item) => {
+    item.classList.toggle("is-active", item.classList.contains(`pdf-color-${state.pdfMarkColor}`));
+  });
+}
+
+function undoLastPdfMark() {
+  if (!state.pdfMarks.length) return toast("没有可撤销的高亮或注释。", true);
+  let removed = null;
+  while (state.pdfMarkHistory.length && !removed) {
+    const markId = state.pdfMarkHistory.pop();
+    const index = state.pdfMarks.findIndex((mark) => mark.id === markId);
+    if (index >= 0) removed = state.pdfMarks.splice(index, 1)[0];
+  }
+  if (!removed) removed = state.pdfMarks.pop();
+  persistPdfMarks();
+  const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
+  if (page) renderPdfMarks(page, removed.page);
+  toast("已撤销最近一次标注。");
+}
+
+function renderPdfMarks(pageShell, pageNumber) {
+  const layer = pageShell.querySelector(".pdf-mark-layer");
+  if (!layer) return;
+  layer.replaceChildren();
+  state.pdfMarks
+    .filter((mark) => Number(mark.page) === Number(pageNumber))
+    .forEach((mark) => {
+      mark.rects.forEach((rect) => {
+        const item = create("button", `pdf-mark pdf-mark-${mark.type} pdf-mark-${mark.color || "yellow"}`);
+        item.type = "button";
+        item.style.left = `${rect.left * 100}%`;
+        item.style.top = `${rect.top * 100}%`;
+        item.style.width = `${rect.width * 100}%`;
+        item.style.height = `${rect.height * 100}%`;
+        item.title = mark.type === "note" && mark.note ? mark.note : mark.text;
+        item.addEventListener("click", () => showPdfMark(mark));
+        layer.append(item);
+      });
+    });
+}
+
+function showPdfMark(mark) {
+  const detail = mark.type === "note" && mark.note
+    ? `注释：${mark.note}\n\n原文：${mark.text}`
+    : `高亮原文：${mark.text}`;
+  toast(detail);
+}
+
+function persistPdfMarks() {
+  if (!state.paperId) return;
+  const all = loadAllPdfMarks();
+  all[state.paperId] = state.pdfMarks;
+  localStorage.setItem(STORAGE.pdfMarks, JSON.stringify(all));
+}
+
+function loadPdfMarks() {
+  const all = loadAllPdfMarks();
+  state.pdfMarks = Array.isArray(all[state.paperId]) ? all[state.paperId] : [];
+  state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
+}
+
+function loadAllPdfMarks() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE.pdfMarks) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function selectionMetadata() {
+  return {
+    viewport_section: state.currentSection,
+    selected_text: state.selectedText,
+    selected_page: state.selectedPage,
+    selected_rect: state.selectedRect,
+    source_view: state.sourceView || (state.readerMode === "pdf" ? "pdf" : "index"),
+    source_section_id: state.currentSection,
+  };
+}
+
+function selectionRectForMetadata(selection, pdfPage) {
+  if (!selection?.rangeCount) return null;
+  const rect = selection.getRangeAt(0).getBoundingClientRect();
+  if (!pdfPage) {
+    return {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  }
+  const pageRect = pdfPage.getBoundingClientRect();
+  return {
+    left: round2((rect.left - pageRect.left) / pageRect.width),
+    top: round2((rect.top - pageRect.top) / pageRect.height),
+    width: round2(rect.width / pageRect.width),
+    height: round2(rect.height / pageRect.height),
+  };
+}
+
+function openFork(question) {
   if (!state.sessionId) return toast("请先开始章节阅读，再创建 Fork。", true);
   $("fork-context-input").value = state.selectedText || sectionTitle(state.currentSection);
   $("fork-question-input").value = question || "请深入分析这段内容。";
-  $("fork-skill-select").value = skillId || "reading.math_verifier";
   $("fork-modal").hidden = false;
   $("fork-question-input").focus();
 }
@@ -1141,14 +1695,13 @@ function closeFork() {
 async function createFork() {
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
-  const skillId = $("fork-skill-select").value;
   closeFork();
 
   const fork = {
     id: `fork-${Date.now()}`,
     sessionId: "",
-    skillId,
-    label: `${skillShort(skillId)} ${state.forks.length + 1}`,
+    skillId: "",
+    label: `Fork ${state.forks.length + 1}`,
     feedEl: null,
   };
   addForkTab(fork);
@@ -1158,7 +1711,7 @@ async function createFork() {
   try {
     const { payload } = await callPaperReading({
       action: "fork", session_id: state.sessionId, paper_id: state.paperId,
-      fork_context: context, fork_question: question, fork_skills: [skillId],
+      fork_context: context, fork_question: question, fork_skills: [],
       metadata: { selected_text: context, source_section_id: state.currentSection },
     });
     fork.sessionId = payload.data?.fork_session_id || "";
@@ -1338,6 +1891,118 @@ function renderKgQueryResult(data) {
   });
 }
 
+function renderReadingMap() {
+  const map = state.readingMap || state.paper?.reading_map || {};
+  const svg = $("kg-graph");
+  const empty = $("kg-empty");
+  const legend = $("kg-legend");
+  const detail = $("kg-node-detail");
+  const answer = $("kg-answer");
+  const reasoning = $("kg-reasoning");
+  if (svg) svg.replaceChildren();
+  if (legend) legend.replaceChildren();
+  if (answer) answer.hidden = true;
+  if (reasoning) reasoning.replaceChildren();
+  if (detail) {
+    detail.replaceChildren(
+      create("p", "panel-label", "Reading Map"),
+      create("h3", "", "论文阅读地图"),
+      create("p", "muted-copy", "点击卡片可以跳转原文，或让右侧 Agent 解释这一段。")
+    );
+  }
+
+  const shell = svg?.parentElement;
+  if (!shell) return;
+  let grid = $("reading-map-grid");
+  if (!grid) {
+    grid = create("div", "reading-map-grid");
+    grid.id = "reading-map-grid";
+    shell.insertBefore(grid, svg);
+  }
+  grid.hidden = false;
+  grid.replaceChildren();
+  if (svg) svg.hidden = true;
+
+  const status = state.readingMapStatus === "llm_running" ? "llm_running" : (map.status || state.parseStatus || "pending");
+  const mapReady = ["done", "llm_done", "heuristic_done"].includes(status);
+  $("kg-stage-copy").textContent = status === "llm_done"
+    ? "深度阅读地图已生成"
+    : status === "llm_running"
+      ? "基础阅读地图已生成，正在深化导读…"
+    : mapReady
+      ? "五段式阅读地图已生成"
+    : status === "failed"
+      ? "阅读地图生成失败，可先使用 PDF 原文和章节索引阅读"
+      : "正在生成章节索引与五段式阅读地图…";
+
+  const groups = [
+    { key: "research_problem", title: "研究问题", items: map.research_problem ? [map.research_problem] : [] },
+    { key: "core_method", title: "核心方法", items: map.core_method ? [map.core_method] : [] },
+    { key: "method_steps", title: "方法步骤", items: map.method_steps || [] },
+    { key: "experimental_support", title: "实验支撑", items: map.experimental_support || [] },
+    { key: "limitations_and_questions", title: "局限追问", items: map.limitations_and_questions || [] },
+  ];
+
+  const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
+  if (empty) empty.hidden = hasContent || !mapReady;
+  if (!hasContent) {
+    grid.append(create("div", "reading-map-pending", status === "failed" ? "解析失败，暂时无法生成阅读地图。" : "正在解析 PDF。你可以先阅读原文、划选内容并让 Agent 分析。"));
+    return;
+  }
+
+  groups.forEach((group, groupIndex) => {
+    const column = create("section", "reading-map-column");
+    column.append(create("h3", "", group.title));
+    const items = group.items.filter((item) => item && Object.keys(item).length);
+    if (!items.length) {
+      column.append(create("p", "muted-copy", "暂无明确内容"));
+    }
+    items.slice(0, 5).forEach((item, index) => {
+      column.append(renderReadingMapCard(item, group.key, groupIndex, index));
+    });
+    grid.append(column);
+  });
+}
+
+function renderReadingMapCard(item, groupKey, groupIndex, index) {
+  const title = item.title || item.name || item.claim || item.limitation || `Item ${index + 1}`;
+  const summary = item.one_sentence || item.main_idea || item.goal || item.evidence || item.why_it_matters || "";
+  const why = item.why_it_matters || item.why_needed || item.operation || item.novice_question || "";
+  const sources = Array.isArray(item.source_sections) ? item.source_sections : [];
+  const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
+  const card = create("article", `reading-map-card reading-map-${groupKey}`);
+  card.append(create("strong", "", title));
+  if (summary) card.append(create("p", "", summary));
+  if (why && why !== summary) card.append(create("p", "reading-map-why", why));
+
+  if (groupKey === "experimental_support") {
+    const meta = [...(item.datasets || []), ...(item.metrics || []), ...(item.figures_or_tables || [])].filter(Boolean);
+    if (meta.length) card.append(create("small", "", meta.slice(0, 8).join(" · ")));
+  }
+
+  const actions = create("div", "reading-map-actions");
+  const jump = create("button", "mini-button", "跳转 PDF");
+  jump.type = "button";
+  jump.disabled = !source.page && !source.section_id;
+  jump.addEventListener("click", () => {
+    if (source.section_id) selectSection(source.section_id, false);
+    else if (source.page) jumpToPdfPage(source.page);
+  });
+  const ask = create("button", "mini-button is-accent", "让 Agent 解释");
+  ask.type = "button";
+  ask.addEventListener("click", () => {
+    if (source.section_id) state.currentSection = source.section_id;
+    startReading(`请面向科研新手解释阅读地图中的“${title}”：说明它是什么、为什么重要、和论文主线的关系。`);
+  });
+  actions.append(jump, ask);
+  card.append(actions);
+  if (sources.length) {
+    const sourceText = sources.map((entry) => entry.title || entry.section_id || (entry.page ? `Page ${entry.page}` : "")).filter(Boolean).slice(0, 3).join(" · ");
+    if (sourceText) card.append(create("small", "reading-map-source", sourceText));
+  }
+  return card;
+}
+
 function renderLegend() {
   const legend = $("kg-legend");
   ["Problem", "Method", "Module", "Dataset", "Experiment", "Limitation", "Insight"].forEach((type) => {
@@ -1463,7 +2128,10 @@ function stopKgSim() {
 
 function renderKg(elements) {
   stopKgSim();
+  const mapGrid = $("reading-map-grid");
+  if (mapGrid) mapGrid.hidden = true;
   const svg = $("kg-graph");
+  svg.hidden = false;
   svg.replaceChildren();
   const nodes = elements.filter((item) => !item.data?.source && (item.data?.id || item.data?.node_id));
   const edges = elements.filter((item) => item.data?.source && item.data?.target);
@@ -1706,10 +2374,10 @@ function updateCurrentSectionFromScroll() {
 
 function jumpToSection(sectionId) {
   if (!sectionId) return;
-  setReaderMode("structured");
   state.currentSection = sectionId;
   renderOutline();
-  scrollReaderToSection(sectionId);
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  jumpToPdfPage(section?.start_page || 1, sectionId);
 }
 
 async function restoreLocalState() {
@@ -1728,6 +2396,7 @@ async function restoreLocalState() {
       state.restored = true;
       renderReadyCard("继续阅读");
       $("paper-ready-section").hidden = false;
+      startParsePolling();
       toast("已找到上次的阅读记录。");
     }
   } catch {
@@ -1813,10 +2482,21 @@ function svgNode(tag, attributes = {}) {
 function splitParagraphs(content) {
   return String(content || "").split(/\n\s*\n|\n(?=[A-Z0-9])/).map((item) => item.trim()).filter(Boolean);
 }
+function sectionForPage(page) {
+  const value = Number(page) || 0;
+  if (!value) return null;
+  return (state.paper?.sections || []).find((section) => {
+    const start = Number(section.start_page || 0);
+    const end = Number(section.end_page || start || 0);
+    return start && value >= start && value <= Math.max(start, end);
+  }) || null;
+}
 function domSectionId(id) { return `paper-section-${String(id || "").replace(/[^a-zA-Z0-9_-]/g, "-")}`; }
 function sectionTitle(id) { return state.paper?.sections?.find((item) => item.section_id === id)?.title || id || ""; }
 function skillLabel(id) { return SKILLS.find((item) => item.id === id)?.label || id || "Skill"; }
 function humanizeKey(key) { return String(key).replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()); }
 function truncate(value, length) { const text = String(value || ""); return text.length > length ? `${text.slice(0, length - 1)}…` : text; }
+function round2(value) { return Math.round(Number(value || 0) * 10000) / 10000; }
+function sanitizeFileName(value) { return String(value || "paper").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 120) || "paper"; }
 function formatBytes(bytes) { return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
 function delay(ms) { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
