@@ -73,7 +73,7 @@ class KGBuildTool(BaseTool):
                 paper_id=paper_id,
                 paper_data=paper_data,
             )
-            revealed = builder.get_revealed_subgraph(paper_id, section_id)
+            revealed = builder.get_revealed_subgraph(paper_id, "general")
 
             return {
                 "new_nodes": len(result.new_nodes),
@@ -87,7 +87,7 @@ class KGBuildTool(BaseTool):
                     for n in result.new_nodes
                 ],
                 "section_type": result.section_type,
-                "mode": "full_paper_once_progressive_reveal",
+                "mode": "full_paper_once_full_display",
                 "revealed_kg": revealed,
             }
         except Exception as e:
