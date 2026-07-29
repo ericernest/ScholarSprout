@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 from runtime.agent_runner import TokenUsage
@@ -91,6 +92,7 @@ class DomainOnboardingPipeline:
         request: DomainOnboardingRequest,
         trace: DomainOnboardingRequestTrace,
         execution_context: PipelineExecutionContext | None = None,
+        progress_callback: Callable[[str, float, bool, list[str], dict[str, Any]], None] | None = None,
     ) -> PipelineResult:
         trace.policy_version = self.policy.policy_version
         trace.policy_fingerprint = self.policy.fingerprint
@@ -108,6 +110,7 @@ class DomainOnboardingPipeline:
                 self.profile_builder.build,
                 request,
             )
+            self._emit(progress_callback, "profile_ready", 0.12, True, ["learner_profile"], {"learner_profile": profile.model_dump(mode="json")})
             try:
                 planning_result, trace.planning_duration_ms = context.call(
                     "planning",
@@ -124,6 +127,7 @@ class DomainOnboardingPipeline:
             plan = planning_result.plan
             self._record_planning_model_stats(trace, planning_result.stats)
             trace.search_query_count = len(plan.search_queries)
+            self._emit(progress_callback, "plan_ready", 0.25, True, ["research_plan"], {"research_plan": plan.model_dump(mode="json")})
 
             try:
                 retrieval_result, trace.retrieval_duration_ms = context.call(
@@ -175,16 +179,45 @@ class DomainOnboardingPipeline:
                     error="No verified papers were returned by the configured data source.",
                 )
 
+            self._emit(
+                progress_callback,
+                "papers_ready",
+                0.42,
+                True,
+                ["papers"],
+                {"papers": [paper.model_dump(mode="json") for paper in ranked]},
+            )
+
             try:
-                generation_result, trace.generation_duration_ms = context.call(
-                    "generation",
-                    self.config.generation_timeout_seconds,
-                    self.generator.generate,
-                    request,
-                    profile,
-                    plan,
-                    ranked,
-                )
+                incremental = getattr(self.generator, "generate_incrementally", None)
+                if callable(incremental) and progress_callback is not None:
+                    generation_result, trace.generation_duration_ms = context.call(
+                        "generation",
+                        self.config.generation_timeout_seconds,
+                        incremental,
+                        request,
+                        profile,
+                        plan,
+                        ranked,
+                        lambda event, data, paths: self._emit(
+                            progress_callback,
+                            event,
+                            {"development_ready": 0.58, "landscape_ready": 0.70, "learning_path_ready": 0.80}[event],
+                            True,
+                            paths,
+                            data,
+                        ),
+                    )
+                else:
+                    generation_result, trace.generation_duration_ms = context.call(
+                        "generation",
+                        self.config.generation_timeout_seconds,
+                        self.generator.generate,
+                        request,
+                        profile,
+                        plan,
+                        ranked,
+                    )
                 output = generation_result.output
             except GenerationError as error:
                 trace.generation_duration_ms = context.stage_durations_ms.get("generation", 0.0)
@@ -192,6 +225,19 @@ class DomainOnboardingPipeline:
                 return self._result(status="generation_failed", query=request.query, error=str(error))
             self._record_generation_model_stats(trace, generation_result.stats)
             partial_output = output
+            output.reproducibility.update(
+                {
+                    "request_id": trace.request_id,
+                    "policy_fingerprint": self.policy.fingerprint,
+                    "ranking_vectorizer_backend": trace.ranking_vectorizer_backend,
+                    "ranking_vectorizer_fallback_used": trace.ranking_vectorizer_fallback_used,
+                    "canonical_registry_version": getattr(
+                        getattr(self.ranker, "canonical_registry", None),
+                        "version",
+                        "unknown",
+                    ),
+                }
+            )
             trace.evidence_claim_count = len(output.evidence_claims)
 
             first_quality, trace.evaluation_duration_ms = context.call(
@@ -212,6 +258,7 @@ class DomainOnboardingPipeline:
                 )
             )
             self._record_first(trace, first_quality)
+            self._emit(progress_callback, "quality_ready", 0.88, True, ["quality"], {"quality": first_quality.model_dump(mode="json")})
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
                 initial_record = RepairRecord(
                     triggered=False,
@@ -221,7 +268,7 @@ class DomainOnboardingPipeline:
                 )
                 self._record_final(trace, first_quality, initial_record)
                 return self._result(
-                    status="ok",
+                    status=self._quality_status(first_quality),
                     query=request.query,
                     output=output,
                     quality=first_quality,
@@ -237,6 +284,7 @@ class DomainOnboardingPipeline:
                 policy_version=self.policy.policy_version,
                 policy_fingerprint=self.policy.fingerprint,
             )
+            self._emit(progress_callback, "repair_started", 0.91, True, [], {"issues": [item.model_dump(mode="json") for item in first_quality.issues]})
             self._attach_shadow_recommendations(partial_repair_record, first_quality, trace)
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
@@ -290,6 +338,26 @@ class DomainOnboardingPipeline:
                 trace.retry_status = "improved"
                 selected_output = repaired
                 selected_quality = retry_quality
+                repaired_payload = selected_output.model_dump(mode="json")
+                changed_paths = sorted(
+                    {
+                        path.split(".", 1)[0].split("[", 1)[0]
+                        for action in repair_result.record.actions
+                        for path in action.changed_paths
+                        if path
+                    }
+                )
+                changed_paths = [
+                    path for path in changed_paths if path in repaired_payload
+                ] or ["development_stages", "current_landscape", "learning_path"]
+                self._emit(
+                    progress_callback,
+                    "section_replaced",
+                    0.96,
+                    True,
+                    changed_paths,
+                    {path: repaired_payload[path] for path in changed_paths},
+                )
             else:
                 first_quality = self._with_retry(first_quality, selected=1, status="not_improved")
                 trace.retry_status = "not_improved"
@@ -335,6 +403,18 @@ class DomainOnboardingPipeline:
         close = getattr(self.retriever, "close", None)
         if callable(close):
             close()
+
+    @staticmethod
+    def _emit(
+        callback: Callable[[str, float, bool, list[str], dict[str, Any]], None] | None,
+        event: str,
+        progress: float,
+        provisional: bool,
+        replace_paths: list[str],
+        data: dict[str, Any],
+    ) -> None:
+        if callback is not None:
+            callback(event, progress, provisional, replace_paths, data)
 
     def _result(self, **values: Any) -> PipelineResult:
         return PipelineResult(
@@ -454,7 +534,7 @@ class DomainOnboardingPipeline:
     def _quality_status(quality: ContentQuality) -> str:
         if not quality.passed_hard_gates:
             return "quality_failed"
-        if quality.score < quality.threshold:
+        if quality.score < quality.threshold or quality.issues:
             return "quality_warning"
         return "ok"
 

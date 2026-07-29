@@ -44,10 +44,11 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(len(plan.perspectives), 3)
         self.assertTrue(any("survey" in query for query in plan.search_queries))
-        self.assertEqual(plan.search_queries[0], "ARXIV:2005.11401")
+        self.assertEqual(plan.search_queries[0], "ARXIV:2309.15217")
+        self.assertIn("ARXIV:2005.11401", plan.search_queries)
         self.assertEqual(
             plan.search_queries[1],
-            '"Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks"',
+            "ARXIV:2310.11511",
         )
 
     def test_invalid_model_output_falls_back_without_fabricating_papers(self) -> None:

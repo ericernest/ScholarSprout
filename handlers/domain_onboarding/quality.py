@@ -63,6 +63,7 @@ class CompositeQualityEvaluator:
             "development_coherence": self.evaluate_development_coherence(output, issues),
             "learning_path": self.evaluate_learning_path_quality(output, issues),
             "goal_alignment": self.evaluate_goal_alignment(output, issues),
+            "language_alignment": self.evaluate_language_alignment(output, issues),
         }
         self._ensure_gate_score_issues(dimensions, issues)
         hard_gates = self._hard_gate_results(dimensions, issues)
@@ -235,11 +236,20 @@ class CompositeQualityEvaluator:
         output: DomainOnboardingOutput,
         issues: list[QualityIssue],
     ) -> float:
+        stage_ids = {str(item.stage_id) for item in output.development_stages}
+        problem_ids = {str(item.problem_id) for item in output.current_landscape.problem_details}
+        subdirection_ids = {str(item.subdirection_id) for item in output.current_landscape.subdirection_details}
         problem_detail_score = _average(
             float(
                 bool(item.description.strip())
                 and bool(item.related_paper_ids)
                 and bool(item.related_stage_ids)
+                and bool(item.emerged_in_stage_id)
+                and bool(item.affected_stage_ids)
+                and bool(item.related_subdirection_ids)
+                and item.emerged_in_stage_id in stage_ids
+                and set(item.affected_stage_ids) <= stage_ids
+                and set(item.related_subdirection_ids) <= subdirection_ids
             )
             for item in output.current_landscape.problem_details
         )
@@ -250,6 +260,10 @@ class CompositeQualityEvaluator:
                 and bool(item.research_questions)
                 and bool(item.related_paper_ids)
                 and bool(item.related_stage_ids)
+                and bool(item.emerged_in_stage_id)
+                and bool(item.addresses_problem_ids)
+                and item.emerged_in_stage_id in stage_ids
+                and set(item.addresses_problem_ids) <= problem_ids
             )
             for item in output.current_landscape.subdirection_details
         )
@@ -369,6 +383,8 @@ class CompositeQualityEvaluator:
             checks = [
                 stage.sequence == index + 1,
                 bool(stage.period.strip()),
+                not bool(re.search(r"\bweek\b|周", stage.historical_period, re.IGNORECASE)),
+                stage.start_year is None or stage.end_year is None or stage.start_year <= stage.end_year,
                 bool(stage.summary.strip()),
                 bool(stage.motivation.strip()),
                 (
@@ -384,6 +400,7 @@ class CompositeQualityEvaluator:
                 bool(stage.open_problems),
                 reference_ids == set(stage.related_paper_ids),
                 guidance_complete,
+                bool(stage.prerequisite_ids),
             ]
             stage_scores.append(sum(checks) / len(checks))
             if not all(checks):
@@ -419,9 +436,15 @@ class CompositeQualityEvaluator:
                             paper.contribution.strip() and paper.reading_focus
                             for paper in step.papers
                         ),
+                        bool(step.deliverables),
+                        (
+                            bool(step.reproducibility_checklist and step.evaluation_metrics)
+                            if step.step == "4"
+                            else True
+                        ),
                     ]
                 )
-                / 6
+                / 8
                 for step in output.learning_path
             )
         )
@@ -452,6 +475,18 @@ class CompositeQualityEvaluator:
         route_fit = (not core_ids or bool(core_ids & early_ids)) and not (
             late_role_ids & first_two_ids
         )
+        if len(output.learning_path) >= 4:
+            method_roles = {
+                role_by_id.get(paper_id)
+                for paper_id in output.learning_path[2].paper_ids
+            }
+            experiment_roles = {
+                role_by_id.get(paper_id)
+                for paper_id in output.learning_path[3].paper_ids
+            }
+            route_fit = route_fit and bool(
+                method_roles & {"foundational", "method"}
+            ) and bool(experiment_roles & {"method", "evaluation", "application"})
         time_fit = self._learning_time_fit(output)
         score = (
             0.15 * float(sequence_ok)
@@ -467,6 +502,39 @@ class CompositeQualityEvaluator:
                     target_path="learning_path",
                     message="学习步骤不连续、缺少阅读指导、论文位置不合理，或未覆盖用户时间预算。",
                     recommended_action="按基础到实验再到前沿的固定阶段重新编号，并补齐周次、里程碑和验收条件。",
+                )
+            )
+        return score
+
+    def evaluate_language_alignment(
+        self,
+        output: DomainOnboardingOutput,
+        issues: list[QualityIssue],
+    ) -> float:
+        prose = " ".join(
+            [
+                output.text,
+                *(item.why_needed for item in output.prerequisites),
+                *(item.summary for item in output.development_stages),
+                *(item.description for item in output.current_landscape.problem_details),
+                *(item.description for item in output.current_landscape.subdirection_details),
+                *(item.goal for item in output.learning_path),
+            ]
+        )
+        cjk = len(re.findall(r"[\u4e00-\u9fff]", prose))
+        latin_words = len(re.findall(r"\b[A-Za-z]{3,}\b", prose))
+        if output.language == "zh-CN":
+            score = min(1.0, cjk / max(80, latin_words * 2))
+        else:
+            score = min(1.0, latin_words / max(40, cjk))
+        if score < 0.75:
+            issues.append(
+                QualityIssue(
+                    issue_type="language_mismatch",
+                    severity="warning",
+                    target_path="$",
+                    message="说明性内容与请求语言不一致。",
+                    recommended_action="保留论文标题和专业术语，其余说明改写为请求语言。",
                 )
             )
         return score

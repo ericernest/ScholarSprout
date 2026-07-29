@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -25,22 +25,28 @@ class GatewayProductionTests(unittest.TestCase):
             input_cost_per_million_tokens=1.0,
             output_cost_per_million_tokens=2.0,
         )
+        store = MagicMock()
+        store.recover_interrupted.return_value = 0
 
         with (
             patch("gateway.app.create_default_pipeline", return_value=pipeline),
             patch("gateway.app.create_audit_sink_from_env", return_value=audit),
+            patch("gateway.app.create_job_store_from_env", return_value=store),
         ):
             configure_domain_onboarding_runtime(state, object(), config)
 
         self.assertIs(state.domain_onboarding_pipeline, pipeline)
         self.assertIs(state.domain_onboarding_audit_sink, audit)
         self.assertIsInstance(state.domain_onboarding_metrics, DomainOnboardingMetrics)
+        self.assertIsNotNone(state.domain_onboarding_job_manager)
+        state.domain_onboarding_job_manager.close()
 
     def test_readiness_requires_v1_pipeline_and_observability(self) -> None:
         app.state.model = object()
         app.state.domain_onboarding_pipeline = object()
         app.state.domain_onboarding_metrics = DomainOnboardingMetrics()
         app.state.domain_onboarding_audit_sink = object()
+        app.state.domain_onboarding_job_manager = object()
 
         response = TestClient(app).get("/ready")
 
@@ -87,6 +93,8 @@ class GatewayProductionTests(unittest.TestCase):
         self.assertIn("USER novicesynapse", dockerfile)
         self.assertIn("/ready", dockerfile)
         self.assertIn("domain_onboarding_audit", compose)
+        self.assertIn("DOMAIN_ONBOARDING_JOB_DB", compose)
+        self.assertIn("domain_onboarding_jobs", compose)
         self.assertNotIn("openai_api_key", compose.lower())
 
 

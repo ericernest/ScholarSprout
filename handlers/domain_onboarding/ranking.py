@@ -326,10 +326,10 @@ class WeightedPaperRanker:
         current = datetime.now(timezone.utc).year
         if year and year <= current - 8 and (paper.citation_count or 0) >= 100:
             return "foundational"
-        if year >= current - 2:
-            return "frontier"
         if re.search(r"method|model|framework|architecture|algorithm", text):
             return "method"
+        if year >= current - 2:
+            return "frontier"
         return "other"
 
     @staticmethod
@@ -367,7 +367,16 @@ class WeightedPaperRanker:
         )
         while remaining and len(selected) < limit:
             scored: list[tuple[float, float, float, int, RankedPaper]] = []
-            for index, paper in enumerate(remaining):
+            application_count = sum(
+                item.paper_role == "application" for item in selected
+            )
+            eligible_remaining = [
+                paper
+                for paper in remaining
+                if paper.paper_role != "application"
+                or application_count < self.config.ranking_max_application_papers
+            ] or remaining
+            for index, paper in enumerate(eligible_remaining):
                 redundancy = max(
                     (
                         cosine_similarity(vectors[paper.paper_id], vectors[item.paper_id])

@@ -83,6 +83,7 @@ class DomainOnboardingConfig(BaseModel):
         default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]
     )
     ranking_min_role_coverage: int = Field(default=3, ge=0, le=5)
+    ranking_max_application_papers: int = Field(default=2, ge=0, le=10)
     embedding_batch_size: int = Field(default=32, ge=1, le=128)
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
     planning_max_tokens: int = Field(default=1600, ge=256, le=4096)

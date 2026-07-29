@@ -16,7 +16,7 @@ from runtime.agent_runner import TokenUsage
 @dataclass(slots=True)
 class DomainOnboardingRequestTrace:
     request_id: str = field(default_factory=lambda: str(uuid4()))
-    policy_version: str = "domain-quality-v1.4.0"
+    policy_version: str = "domain-quality-v1.5.0"
     policy_fingerprint: str | None = None
     status: str = "unknown"
     total_duration_ms: float = 0.0

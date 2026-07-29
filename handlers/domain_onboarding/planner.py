@@ -63,14 +63,14 @@ class StormLitePlanner:
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
-            plan.search_queries = self._with_canonical_query(plan)
+            plan.search_queries = self._with_canonical_query(plan, profile)
             return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
-            return PlanningResult(plan=self._fallback_plan(query), stats=error.stats)
+            return PlanningResult(plan=self._fallback_plan(query, profile), stats=error.stats)
         except (ValidationError, ValueError):
-            return PlanningResult(plan=self._fallback_plan(query), stats=stats)
+            return PlanningResult(plan=self._fallback_plan(query, profile), stats=stats)
 
-    def _fallback_plan(self, query: str) -> DomainResearchPlan:
+    def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
         domain = query.strip()
         for prefix in ("我想入门", "我想学习", "请帮我入门", "学习"):
             domain = domain.removeprefix(prefix).strip()
@@ -105,23 +105,27 @@ class StormLitePlanner:
             search_queries=queries[: self.config.search_queries_limit],
             expected_subdirections=["理论与基础", "核心方法", "评测与应用", "开放问题与前沿"],
         )
-        plan.search_queries = self._with_canonical_query(plan)
+        plan.search_queries = self._with_canonical_query(plan, profile or LearnerProfile())
         return plan
 
-    def _with_canonical_query(self, plan: DomainResearchPlan) -> list[str]:
+    def _with_canonical_query(
+        self, plan: DomainResearchPlan, profile: LearnerProfile
+    ) -> list[str]:
         specs = self.canonical_registry.specs(plan.normalized_domain)
-        exact = (
-            [
-                *(
-                    [f"ARXIV:{specs[0].arxiv_id}"]
-                    if specs[0].arxiv_id
-                    else []
-                ),
-                f'"{specs[0].title}"',
-            ]
-            if specs
-            else []
+        goal_text = f"{profile.goal} {profile.preference}".lower()
+        preferred_roles = (
+            ["evaluation", "method", "foundational"]
+            if profile.preference == "experiment_first" or any(term in goal_text for term in ("实验", "复现", "基线", "benchmark"))
+            else ["foundational", "survey", "method", "evaluation"]
         )
+        ordered = sorted(
+            specs,
+            key=lambda spec: preferred_roles.index(spec.role) if spec.role in preferred_roles else len(preferred_roles),
+        )
+        exact = [
+            f"ARXIV:{spec.arxiv_id}" if spec.arxiv_id else f'"{spec.title}"'
+            for spec in ordered
+        ]
         return list(dict.fromkeys([*exact, *plan.search_queries]))[
             : self.config.search_queries_limit
         ]
