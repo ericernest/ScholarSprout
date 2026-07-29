@@ -10,7 +10,10 @@ import asyncio
 import copy
 import json
 import logging
+import threading
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from channels.base import ChannelMessage
 from runtime.agent_runner import AgentRunResult, run_agent_detailed
@@ -26,10 +29,13 @@ from handlers.paper_reading.schemas.response import (
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.pipeline.parser import PDFParser
+from handlers.paper_reading.postprocessors.common import extract_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
 LAYOUT_PARSER_VERSION = "section-first-v7-bbox-text"
+READING_MAP_VERSION = "novice-reading-map-v1"
+READING_MAP_SKILL_ID = "reading.novice_map_builder"
 
 
 # ── 主入口 ──
@@ -156,73 +162,182 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     if pipeline is None:
         return _error("论文处理流水线未初始化", action="upload_paper")
 
+    if storage is None:
+        return _error("Paper storage 未初始化", action="upload_paper")
+
     try:
         if request.pdf_data:
             import base64
             pdf_bytes = base64.b64decode(request.pdf_data)
-            metadata = pipeline.parse_pdf_bytes(pdf_bytes)
         elif request.pdf_url:
             import httpx
-            import tempfile
             resp = httpx.get(request.pdf_url, follow_redirects=True, timeout=60.0)
             resp.raise_for_status()
             pdf_bytes = resp.content
-            metadata = pipeline.parse_pdf_bytes(pdf_bytes)
         else:
             return _error("请提供 pdf_url 或 pdf_data", action="upload_paper")
     except Exception as e:
-        return _error(f"PDF 解析失败: {e}", action="upload_paper")
+        return _error(f"PDF 获取失败: {e}", action="upload_paper")
 
-    # 持久化
-    if storage:
-        _persist_figure_assets(storage, metadata.paper_id, metadata.figures)
-        _persist_table_assets(storage, metadata.paper_id, metadata.tables)
-        _persist_layout_assets(storage, metadata.paper_id, metadata.layout_elements)
-        paper_payload = metadata.model_dump()
-        paper_payload["figure_extraction_status"] = "done"
-        paper_payload["layout_extraction_status"] = "done"
-        paper_payload["layout_parser_version"] = LAYOUT_PARSER_VERSION
-        storage.save_paper(metadata.paper_id, paper_payload)
-        if 'pdf_bytes' in dir():
-            storage.save_upload(metadata.paper_id, pdf_bytes)
-
-    kg_builder = getattr(app_state, "kg_builder", None)
-    kg_engine = getattr(app_state, "kg_engine", None)
-    kg_result = None
-    if kg_builder is not None:
-        kg_result = kg_builder.build_full_paper(
-            paper_id=metadata.paper_id,
-            paper_data=metadata.model_dump(),
-            model=getattr(app_state, "model", None),
-        )
-        if storage and kg_engine is not None:
-            storage.save_kg(metadata.paper_id, kg_engine.to_dict(metadata.paper_id))
-
-    sections_summary = [
-        {"section_id": s.section_id, "title": s.title, "level": s.level}
-        for s in metadata.sections
-    ]
+    paper_id = str(uuid4())
+    quick_payload = _build_quick_paper_payload(
+        paper_id=paper_id,
+        pdf_bytes=pdf_bytes,
+        pdf_url=request.pdf_url,
+        metadata=request.metadata,
+    )
+    storage.save_upload(paper_id, pdf_bytes)
+    storage.save_paper(paper_id, quick_payload)
+    _schedule_background_parse(app_state, paper_id, pdf_bytes)
 
     response_data = {
-        "paper_id": metadata.paper_id,
-        "title": metadata.title,
-        "authors": [a.name for a in metadata.authors],
-        "abstract": metadata.abstract[:500],
-        "sections_count": len(metadata.sections),
-        "sections": sections_summary,
-        "figures_count": len(metadata.figures),
-        "tables_count": len(metadata.tables),
-        "layout_elements_count": len(metadata.layout_elements),
-        "parse_status": metadata.parse_status,
+        "paper_id": paper_id,
+        "title": quick_payload.get("title", ""),
+        "authors": quick_payload.get("authors", []),
+        "abstract": quick_payload.get("abstract", ""),
+        "sections_count": 0,
+        "sections": [],
+        "figures_count": 0,
+        "tables_count": 0,
+        "layout_elements_count": 0,
+        "parse_status": quick_payload.get("parse_status", "queued"),
+        "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf",
+        "has_pdf": True,
+        "page_count": quick_payload.get("page_count", 0),
+        "text_layer_available": bool(quick_payload.get("full_text", "").strip()),
     }
-    if kg_result is not None:
-        response_data["kg_build"] = {
-            "new_nodes": len(kg_result.new_nodes),
-            "new_edges": len(kg_result.new_edges),
-            "mode": "full_paper_once",
-        }
 
     return _ok("upload_paper", response_data)
+
+
+def _build_quick_paper_payload(
+    *,
+    paper_id: str,
+    pdf_bytes: bytes,
+    pdf_url: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a minimal paper record so the PDF reader can open immediately."""
+    metadata = metadata or {}
+    title = str(metadata.get("original_filename") or "Parsing paper").removesuffix(".pdf")
+    first_text = ""
+    page_count = 0
+    try:
+        import fitz
+
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            page_count = doc.page_count
+            doc_title = str(doc.metadata.get("title") or "").strip()
+            if doc_title:
+                title = doc_title
+            if doc.page_count:
+                first_text = doc[0].get_text("text")[:2500]
+                if not doc_title:
+                    for line in first_text.splitlines():
+                        cleaned = line.strip()
+                        if len(cleaned) >= 8:
+                            title = cleaned[:180]
+                            break
+    except Exception as error:
+        logger.warning("Quick PDF metadata extraction failed for %s: %s", paper_id, error)
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "paper_id": paper_id,
+        "source": "upload",
+        "source_id": "",
+        "title": title or "Parsing paper",
+        "authors": [],
+        "abstract": "",
+        "year": None,
+        "categories": [],
+        "keywords": [],
+        "arxiv_id": "",
+        "doi": "",
+        "url": pdf_url,
+        "pdf_url": pdf_url,
+        "citation_count": None,
+        "venue": "",
+        "sections": [],
+        "figures": [],
+        "tables": [],
+        "layout_elements": [],
+        "references": [],
+        "full_text": first_text,
+        "parse_status": "parsing",
+        "parse_error": "",
+        "stored_at": now,
+        "page_count": page_count,
+        "reading_map": _empty_reading_map("parsing"),
+        "reading_map_status": "pending",
+    }
+
+
+def _schedule_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> None:
+    running = getattr(app_state, "_paper_parse_threads", None)
+    if running is None:
+        running = set()
+        setattr(app_state, "_paper_parse_threads", running)
+    if paper_id in running:
+        return
+    running.add(paper_id)
+
+    def worker() -> None:
+        try:
+            _run_background_parse(app_state, paper_id, pdf_bytes)
+        finally:
+            running.discard(paper_id)
+
+    thread = threading.Thread(
+        target=worker,
+        name=f"paper-parse-{paper_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> None:
+    pipeline = getattr(app_state, "paper_pipeline", None)
+    storage = getattr(app_state, "paper_storage", None)
+    if pipeline is None or storage is None:
+        return
+    paper = storage.load_paper(paper_id) or {"paper_id": paper_id}
+    paper["parse_status"] = "parsing"
+    storage.save_paper(paper_id, paper)
+    try:
+        metadata = pipeline.parse_pdf_bytes(pdf_bytes)
+        metadata.paper_id = paper_id
+        payload = metadata.model_dump(mode="json")
+        payload["paper_id"] = paper_id
+        payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
+        payload["page_count"] = paper.get("page_count", 0)
+        payload["url"] = payload.get("url") or paper.get("url", "")
+        payload["pdf_url"] = payload.get("pdf_url") or paper.get("pdf_url", "")
+        payload["figure_extraction_status"] = "done"
+        payload["layout_extraction_status"] = "done"
+        payload["layout_parser_version"] = LAYOUT_PARSER_VERSION
+        payload["reading_map"] = _build_reading_map(payload)
+        payload["reading_map_status"] = "llm_running"
+        _persist_figure_assets(storage, paper_id, metadata.figures)
+        _persist_table_assets(storage, paper_id, metadata.tables)
+        _persist_layout_assets(storage, paper_id, metadata.layout_elements)
+        storage.save_paper(paper_id, payload)
+        payload["reading_map"] = _build_llm_reading_map(
+            paper=payload,
+            fallback=payload["reading_map"],
+            model=getattr(app_state, "model", None),
+            skill_registry=getattr(app_state, "skill_registry", None),
+        )
+        payload["reading_map_status"] = payload["reading_map"].get("status", "done")
+        storage.save_paper(paper_id, payload)
+    except Exception as error:
+        logger.exception("Background PDF parse failed for %s", paper_id)
+        paper = storage.load_paper(paper_id) or {"paper_id": paper_id}
+        paper["parse_status"] = "failed"
+        paper["parse_error"] = str(error)
+        paper["reading_map"] = _empty_reading_map("failed")
+        paper["reading_map_status"] = "failed"
+        storage.save_paper(paper_id, paper)
 
 
 def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
@@ -259,18 +374,13 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
     current_section = _select_current_section(request, session, paper_data)
     kg_result = None
     revealed_kg: dict[str, Any] = {}
-    if kg_builder is not None and paper_data:
-        kg_result = kg_builder.ensure_full_paper_kg(
-            paper_id=session.paper_id or request.paper_id,
-            paper_data=paper_data,
-            model=getattr(app_state, "model", None),
-        )
-        revealed_kg = kg_builder.get_revealed_subgraph(
-            paper_id=session.paper_id or request.paper_id,
-            current_section="general",
-        )
-        if storage and kg_engine is not None:
-            storage.save_kg(session.paper_id or request.paper_id, kg_engine.to_dict(session.paper_id or request.paper_id))
+    if kg_builder is not None and kg_engine is not None and paper_data:
+        paper_id_for_kg = session.paper_id or request.paper_id
+        if kg_engine.list_nodes_by_paper(paper_id_for_kg):
+            revealed_kg = kg_builder.get_revealed_subgraph(
+                paper_id=paper_id_for_kg,
+                current_section="general",
+            )
 
     content_msg = _build_start_reading_context(
         request=request,
@@ -564,15 +674,18 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
         return _error("论文不存在", action="get_paper_detail")
 
     upload_path = storage.get_upload_path(paper_id)
-    paper = _ensure_paper_figures(
-        paper=paper,
-        upload_path=upload_path,
-        storage=storage,
-        pipeline=getattr(app_state, "paper_pipeline", None),
-    )
+    if paper.get("parse_status") == "done":
+        paper = _ensure_paper_figures(
+            paper=paper,
+            upload_path=upload_path,
+            storage=storage,
+            pipeline=getattr(app_state, "paper_pipeline", None),
+        )
     paper_detail = _paper_detail_for_response(paper)
     paper_index = _build_paper_index(paper)
     paper_detail["paper_index"] = paper_index
+    reading_map = paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending"))
+    paper_detail["reading_map"] = reading_map
     parse_quality = _parse_quality_for_paper(paper)
     text_layer_available = bool(str(paper.get("full_text", "")).strip())
     initial_kg: dict[str, Any] = {}
@@ -600,8 +713,12 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
     return _ok("get_paper_detail", {
         "paper": paper_detail,
         "paper_index": paper_index,
+        "reading_map": reading_map,
+        "reading_map_status": paper.get("reading_map_status", reading_map.get("status", "")),
         "text_layer_available": text_layer_available,
         "parse_quality": parse_quality,
+        "parse_status": paper.get("parse_status", ""),
+        "parse_error": paper.get("parse_error", ""),
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf" if upload_path else "",
         "has_pdf": upload_path is not None,
         "initial_kg": initial_kg,
@@ -618,7 +735,11 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
         if not paper:
             return paper
         full_text = str(paper.get("full_text", ""))
-        if full_text and PDFParser.sections_need_repair(paper.get("sections")):
+        if (
+            paper.get("parse_status") == "done"
+            and full_text
+            and PDFParser.sections_need_repair(paper.get("sections"))
+        ):
             parser = PDFParser()
             repaired = parser.extract_sections(full_text)
             if repaired:
@@ -867,6 +988,336 @@ def _build_paper_index(paper: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _empty_reading_map(status: str = "pending") -> dict[str, Any]:
+    return {
+        "version": READING_MAP_VERSION,
+        "status": status,
+        "research_problem": {},
+        "core_method": {},
+        "method_steps": [],
+        "experimental_support": [],
+        "limitations_and_questions": [],
+    }
+
+
+def _build_reading_map(paper: dict[str, Any]) -> dict[str, Any]:
+    sections = paper.get("sections", []) or []
+    if not sections:
+        return _empty_reading_map("pending")
+
+    def stage(section: dict[str, Any]) -> str:
+        title = str(section.get("title") or "").lower()
+        if "abstract" in title or "摘要" in title:
+            return "abstract"
+        if any(token in title for token in ("intro", "background", "related work", "引言", "背景")):
+            return "introduction"
+        if any(token in title for token in ("method", "approach", "model", "framework", "algorithm", "prelim", "方法", "模型")):
+            return "method"
+        if any(token in title for token in ("experiment", "evaluation", "result", "analysis", "实验", "评估", "结果")):
+            return "experiment"
+        if any(token in title for token in ("discussion", "limitation", "conclusion", "future", "讨论", "局限", "结论")):
+            return "conclusion"
+        return "general"
+
+    by_stage: dict[str, list[dict[str, Any]]] = {}
+    for section in sections:
+        by_stage.setdefault(stage(section), []).append(section)
+
+    title = str(paper.get("title") or "Core Method")
+    abstract = str(paper.get("abstract") or "")
+    intro_sections = by_stage.get("abstract", []) + by_stage.get("introduction", [])
+    method_sections = by_stage.get("method", []) or sections[: min(4, len(sections))]
+    experiment_sections = by_stage.get("experiment", [])
+    conclusion_sections = by_stage.get("conclusion", [])
+
+    intro_text = _compact_section_text(intro_sections, limit=1600) or abstract
+    method_text = _compact_section_text(method_sections, limit=1600)
+    experiment_text = _compact_section_text(experiment_sections, limit=1600)
+    conclusion_text = _compact_section_text(conclusion_sections, limit=1200)
+
+    problem_sentence = _first_sentence(intro_text) or _first_sentence(abstract) or "Identify the paper's core research problem from the abstract and introduction."
+    method_sentence = _first_sentence(method_text) or _first_sentence(abstract) or title
+
+    method_steps = []
+    for section in method_sections[:5]:
+        section_title = str(section.get("title") or "Method step")
+        text = str(section.get("content") or "")
+        method_steps.append({
+            "name": section_title,
+            "goal": _first_sentence(text) or "Understand this method component.",
+            "input": "See source section",
+            "operation": _second_sentence(text) or "Read how this step transforms the problem setup into the proposed solution.",
+            "output": "A clearer part of the proposed method",
+            "why_needed": "This section explains one link in the paper's method pipeline.",
+            "source_sections": [_source_ref(section)],
+        })
+
+    experimental_support = []
+    for section in experiment_sections[:5]:
+        text = str(section.get("content") or "")
+        experimental_support.append({
+            "claim": _first_sentence(text) or f"Evidence discussed in {section.get('title', 'experiment section')}",
+            "evidence": _second_sentence(text) or "Use this section to connect results back to the paper's claims.",
+            "datasets": _find_terms(text, ("dataset", "benchmark", "corpus", "qa", "imagenet", "cifar", "glue", "hotpot", "wiki", "数据集")),
+            "metrics": _find_terms(text, ("accuracy", "f1", "em", "pass@", "score", "precision", "recall", "指标")),
+            "figures_or_tables": _find_figure_table_refs(text),
+            "source_sections": [_source_ref(section)],
+        })
+
+    limitations = []
+    source_for_limits = conclusion_sections or sections[-2:]
+    for section in source_for_limits[:5]:
+        text = str(section.get("content") or "")
+        limitations.append({
+            "limitation": _first_sentence(text) or f"Open question from {section.get('title', 'final section')}",
+            "why_it_matters": _second_sentence(text) or "This helps novice readers separate proven claims from future work.",
+            "novice_question": f"What should I be cautious about when reading {section.get('title', 'this section')}?",
+            "source_sections": [_source_ref(section)],
+        })
+
+    return {
+        "version": READING_MAP_VERSION,
+        "status": "done",
+        "research_problem": {
+            "title": "Research Problem",
+            "one_sentence": problem_sentence,
+            "why_it_matters": _second_sentence(intro_text) or "This explains why the paper's method is needed.",
+            "source_sections": [_source_ref(item) for item in intro_sections[:3]],
+        },
+        "core_method": {
+            "name": title,
+            "one_sentence": method_sentence,
+            "main_idea": _second_sentence(method_text) or "Read the method sections to understand the paper's central mechanism.",
+            "source_sections": [_source_ref(item) for item in method_sections[:3]],
+        },
+        "method_steps": method_steps,
+        "experimental_support": experimental_support,
+        "limitations_and_questions": limitations,
+        "section_guides": _build_heuristic_section_guides(sections),
+    }
+
+
+def _build_llm_reading_map(
+    *,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    model: Any | None,
+    skill_registry: Any | None,
+) -> dict[str, Any]:
+    if model is None:
+        fallback["status"] = "heuristic_done"
+        return fallback
+    prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
+    try:
+        response = model.chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a paper-reading map builder for novice researchers. "
+                        "Return only a valid JSON object that follows the requested schema."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+        content = response.choices[0].message.content or ""
+        parsed = extract_json_object(content)
+        if not parsed:
+            fallback["status"] = "heuristic_done"
+            fallback["llm_error"] = "No valid JSON object returned."
+            return fallback
+        merged = _normalize_reading_map(parsed, fallback)
+        merged["status"] = "llm_done"
+        return merged
+    except Exception as error:
+        logger.warning("LLM reading map extraction failed: %s", error)
+        fallback["status"] = "heuristic_done"
+        fallback["llm_error"] = str(error)
+        return fallback
+
+
+def _build_reading_map_prompt(
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    skill_registry: Any | None,
+) -> str:
+    skill_instructions = ""
+    if skill_registry is not None:
+        try:
+            skill_instructions = skill_registry.get_instructions(READING_MAP_SKILL_ID)
+        except Exception as error:
+            logger.debug("Unable to load %s instructions: %s", READING_MAP_SKILL_ID, error)
+
+    sections_payload = []
+    for section in (paper.get("sections", []) or [])[:28]:
+        text = " ".join(str(section.get("content") or "").split())
+        sections_payload.append({
+            "section_id": section.get("section_id", ""),
+            "title": section.get("title", ""),
+            "level": section.get("level", 1),
+            "start_page": section.get("start_page"),
+            "end_page": section.get("end_page"),
+            "text": text[:1400],
+        })
+
+    prompt_payload = {
+        "paper": {
+            "title": paper.get("title", ""),
+            "abstract": str(paper.get("abstract") or "")[:1800],
+        },
+        "sections": sections_payload,
+        "heuristic_fallback": fallback,
+    }
+    return (
+        f"{skill_instructions}\n\n"
+        "Build a deep novice-oriented reading_map and smart_index for this paper.\n"
+        "The output must be JSON only. Use this schema exactly:\n"
+        "{\n"
+        '  "research_problem": {"title": "", "one_sentence": "", "why_it_matters": "", "novice_takeaway": "", "source_sections": []},\n'
+        '  "core_method": {"name": "", "one_sentence": "", "main_idea": "", "technical_route": "", "source_sections": []},\n'
+        '  "method_steps": [{"name": "", "goal": "", "input": "", "operation": "", "output": "", "why_needed": "", "source_sections": []}],\n'
+        '  "experimental_support": [{"claim": "", "evidence": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "protocol": "", "figures_or_tables": [], "source_sections": []}],\n'
+        '  "limitations_and_questions": [{"limitation": "", "why_it_matters": "", "novice_question": "", "source_sections": []}],\n'
+        '  "section_guides": [{"section_id": "", "title": "", "main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "experiment_protocol": "", "novice_focus": "", "source_page": null}]\n'
+        "}\n"
+        "Rules: keep each field compact but substantive; do not copy long paragraphs; "
+        "only fill experiment fields for experiment/evaluation/result sections; "
+        "for non-method sections, technical_route and implementation_plan may be empty; "
+        "source_sections entries should be objects with section_id, title, page when possible; "
+        "write Chinese content for readers.\n\n"
+        f"INPUT:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
+    )
+
+
+def _normalize_reading_map(parsed: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    normalized = {
+        "version": READING_MAP_VERSION,
+        "status": "llm_done",
+        "research_problem": parsed.get("research_problem") or fallback.get("research_problem", {}),
+        "core_method": parsed.get("core_method") or fallback.get("core_method", {}),
+        "method_steps": _list_or_fallback(parsed.get("method_steps"), fallback.get("method_steps", []), 5),
+        "experimental_support": _list_or_fallback(parsed.get("experimental_support"), fallback.get("experimental_support", []), 5),
+        "limitations_and_questions": _list_or_fallback(parsed.get("limitations_and_questions"), fallback.get("limitations_and_questions", []), 5),
+        "section_guides": _list_or_fallback(parsed.get("section_guides"), fallback.get("section_guides", []), 40),
+    }
+    return normalized
+
+
+def _list_or_fallback(value: Any, fallback: Any, limit: int) -> list[Any]:
+    items = value if isinstance(value, list) else fallback
+    return list(items or [])[:limit]
+
+
+def _build_heuristic_section_guides(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    guides = []
+    for section in sections[:40]:
+        title = str(section.get("title") or "")
+        content = str(section.get("content") or "")
+        text = " ".join(content.split())
+        lower_title = title.lower()
+        is_experiment = any(token in lower_title for token in ("experiment", "evaluation", "result", "analysis", "实验", "评估", "结果"))
+        is_method = any(token in lower_title for token in ("method", "approach", "model", "framework", "algorithm", "prelim", "方法", "模型"))
+        guide = {
+            "section_id": section.get("section_id", ""),
+            "title": title,
+            "main_content": _first_sentence(text) or "This section anchors one part of the paper.",
+            "core_idea": _second_sentence(text) or "Read it as a compact guide to the section's role in the paper.",
+            "technical_route": _third_sentence(text) if is_method else "",
+            "implementation_plan": "Identify inputs, operations, and outputs in this section." if is_method else "",
+            "datasets": _find_terms(text, ("dataset", "benchmark", "corpus", "qa", "imagenet", "cifar", "glue", "hotpot", "wiki", "数据集")) if is_experiment else [],
+            "dataset_format": "",
+            "experiment_setting": _first_sentence(text) if is_experiment else "",
+            "baselines": _find_baselines(text) if is_experiment else [],
+            "experiment_protocol": _second_sentence(text) if is_experiment else "",
+            "novice_focus": "Focus on why this section is needed and how it supports the paper's main claim.",
+            "source_page": section.get("start_page"),
+        }
+        guides.append(guide)
+    return guides
+
+
+def _compact_section_text(sections: list[dict[str, Any]], limit: int = 1600) -> str:
+    chunks = []
+    remaining = limit
+    for section in sections:
+        if remaining <= 0:
+            break
+        text = " ".join(str(section.get("content") or "").split())
+        if not text:
+            continue
+        take = text[:remaining]
+        chunks.append(take)
+        remaining -= len(take)
+    return " ".join(chunks).strip()
+
+
+def _first_sentence(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    if not text:
+        return ""
+    parts = [part.strip() for part in re_split_sentences(text) if part.strip()]
+    return parts[0][:360] if parts else text[:360]
+
+
+def _second_sentence(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    parts = [part.strip() for part in re_split_sentences(text) if part.strip()]
+    return parts[1][:360] if len(parts) > 1 else ""
+
+
+def _third_sentence(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    parts = [part.strip() for part in re_split_sentences(text) if part.strip()]
+    return parts[2][:360] if len(parts) > 2 else ""
+
+
+def re_split_sentences(text: str) -> list[str]:
+    import re
+
+    return re.split(r"(?<=[.!?。！？])\s+", text)
+
+
+def _source_ref(section: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "section_id": section.get("section_id", ""),
+        "title": section.get("title", ""),
+        "page": section.get("start_page"),
+    }
+
+
+def _find_terms(text: str, needles: tuple[str, ...]) -> list[str]:
+    lowered = str(text or "").lower()
+    hits = []
+    for needle in needles:
+        if needle.lower() in lowered:
+            hits.append(needle)
+    return hits[:6]
+
+
+def _find_figure_table_refs(text: str) -> list[str]:
+    import re
+
+    refs = re.findall(r"\b(?:Figure|Fig\.|Table)\s*\d+[A-Za-z]?\b", str(text or ""), flags=re.IGNORECASE)
+    seen = []
+    for ref in refs:
+        normalized = " ".join(ref.split())
+        if normalized not in seen:
+            seen.append(normalized)
+    return seen[:8]
+
+
+def _find_baselines(text: str) -> list[str]:
+    import re
+
+    matches = re.findall(r"\b(?:PPO|GRPO|DPO|SFT|MAML|ReAct|RAG|CoT|GPT-4|Llama|Qwen|DeepSeek|Claude)[A-Za-z0-9_.-]*\b", str(text or ""))
+    seen = []
+    for item in matches:
+        if item not in seen:
+            seen.append(item)
+    return seen[:8]
+
+
 def _parse_quality_for_paper(paper: dict[str, Any]) -> str:
     full_text_length = len(str(paper.get("full_text") or "").strip())
     sections_count = len(paper.get("sections", []) or [])
@@ -1029,6 +1480,10 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "references": paper.get("references", []),
         "full_text": paper.get("full_text", ""),
         "parse_status": paper.get("parse_status", ""),
+        "parse_error": paper.get("parse_error", ""),
+        "page_count": paper.get("page_count", 0),
+        "reading_map": paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending")),
+        "reading_map_status": paper.get("reading_map_status", ""),
         "stored_at": paper.get("stored_at", ""),
     }
 
