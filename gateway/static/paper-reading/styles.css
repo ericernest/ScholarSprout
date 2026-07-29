@@ -221,16 +221,28 @@ select option { color: #07120f; }
 }
 .paper-section p + p { margin-top: .2rem; }
 .paragraph-lead { color: #15251f; font-weight: 750; }
-.reflow-paragraph.is-equation {
-  margin: 1.35rem auto; padding: .8rem 1rem; overflow-x: auto; border-radius: 10px;
-  color: #1d3931; background: rgba(32,112,91,.055); font-family: "Cambria Math",Georgia,serif; text-align: center;
-}
 .reflow-paragraph.is-bullet { position: relative; padding-left: 1.2rem; }
 .reflow-paragraph.is-bullet::before {
   position: absolute; left: .2rem; color: #159173; content: "•";
 }
 .section-meta { display: flex; gap: .5rem; margin-bottom: .65rem; color: #13856d; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
 .section-meta { align-items: center; }
+.index-section {
+  max-width: 860px; margin-bottom: 1rem; padding: 1.35rem 1.45rem;
+  border: 1px solid rgba(35,75,64,.13); border-radius: 14px; background: rgba(255,255,255,.72);
+}
+.index-section h2 { margin-bottom: .8rem; font-size: clamp(1.25rem,1.7vw,1.75rem); letter-spacing: 0; }
+.index-section-summary {
+  margin-bottom: .8rem !important; color: #52615c !important;
+  font: 400 .88rem/1.6 Inter,"Noto Sans CJK SC",sans-serif !important;
+}
+.index-chunk-list { display: grid; gap: .45rem; margin: .75rem 0; }
+.index-chunk {
+  margin: 0 !important; padding: .65rem .75rem; border-left: 3px solid rgba(32,185,151,.45);
+  border-radius: 8px; color: #33413d !important; background: rgba(32,185,151,.055);
+  font: 400 .84rem/1.62 Inter,"Noto Sans CJK SC",sans-serif !important;
+}
+.index-section-actions { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .75rem; }
 .paper-figure {
   margin: 2rem 0 2.25rem; padding: clamp(.65rem,1.5vw,1rem); border: 1px solid rgba(36,76,65,.13);
   border-radius: 16px; background: #fff; box-shadow: 0 14px 36px rgba(25,50,43,.08);
@@ -238,6 +250,27 @@ select option { color: #07120f; }
 .paper-figure-image {
   display: block; width: 100%; max-height: 680px; object-fit: contain; border-radius: 9px;
   background: #fff;
+}
+.paper-table {
+  margin: 1.5rem 0 1.75rem; padding: clamp(.65rem,1.5vw,1rem);
+  border: 1px solid rgba(36,76,65,.13); border-radius: 12px; background: #fff;
+}
+.table-source {
+  margin: 0; padding: .9rem 1rem; overflow-x: auto; border-radius: 8px;
+  color: #17362e; background: rgba(32,112,91,.055);
+  font: 500 .92rem/1.7 "Cambria Math","Cascadia Mono",Consolas,monospace;
+  white-space: pre-wrap;
+}
+.paper-table-grid {
+  width: 100%; border-collapse: collapse; color: #2e3d38;
+  font: 400 .82rem/1.45 Inter,"Noto Sans CJK SC",sans-serif;
+}
+.paper-table-grid th, .paper-table-grid td {
+  padding: .45rem .55rem; border: 1px solid rgba(36,76,65,.16); vertical-align: top;
+}
+.paper-table-grid th { color: #18352e; background: rgba(32,112,91,.07); font-weight: 700; }
+.paper-caption {
+  color: #5f6b66; font-size: .88rem; line-height: 1.6;
 }
 .paper-figure-caption {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: .8rem .25rem .1rem;
@@ -248,8 +281,54 @@ select option { color: #07120f; }
   flex: 0 0 auto; padding: .38rem .55rem; border: 1px solid rgba(20,133,109,.22); border-radius: 99px;
   color: #0b725d; background: rgba(32,185,151,.08); font-size: .7rem;
 }
-.pdf-reader { position: relative; min-height: 0; }
+.pdf-reader { position: relative; min-height: 0; overflow: hidden; background: #d8dedc; }
 .pdf-reader iframe { width: 100%; height: 100%; border: 0; background: #d8dedc; }
+.pdf-toolbar {
+  position: absolute; top: 10px; left: 50%; z-index: 8; display: flex; align-items: center; gap: 4px;
+  padding: 6px; border: 1px solid rgba(35,55,50,.16); border-radius: 12px;
+  background: rgba(250,250,248,.92); box-shadow: 0 10px 32px rgba(20,30,28,.16);
+  transform: translateX(-50%); backdrop-filter: blur(8px);
+}
+.pdf-tool-button {
+  min-width: 34px; height: 32px; padding: 0 .55rem; border: 1px solid rgba(30,70,60,.14);
+  border-radius: 8px; color: #243631; background: rgba(255,255,255,.7); font-size: .72rem;
+}
+.pdf-tool-button:hover { color: #052f26; border-color: rgba(32,185,151,.38); background: rgba(102,245,214,.16); }
+.pdf-zoom-input {
+  width: 58px; min-height: 32px; padding: .25rem .35rem; border-radius: 8px;
+  color: #243631; background: white; text-align: right;
+}
+.pdf-tool-label { color: #52615c; font-size: .72rem; }
+.pdf-document {
+  position: absolute; inset: 0; display: grid; align-content: start; justify-items: center;
+  gap: 18px; padding: 60px 18px 18px; overflow: auto; background: #d8dedc;
+}
+.pdf-page {
+  position: relative; flex: 0 0 auto; overflow: hidden; background: white;
+  box-shadow: 0 8px 28px rgba(20,30,28,.24);
+}
+.pdf-canvas { position: absolute; inset: 0; display: block; }
+.pdf-loading {
+  align-self: center; justify-self: center; margin-top: 20vh; padding: .75rem 1rem;
+  border-radius: 12px; color: #3d4b47; background: rgba(255,255,255,.85);
+}
+.textLayer {
+  position: absolute; inset: 0; overflow: hidden; opacity: 1; line-height: 1;
+  text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
+}
+.textLayer span, .textLayer br {
+  position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0% 0%;
+}
+.textLayer ::selection { background: rgba(102,245,214,.38); }
+.pdf-mark-layer { position: absolute; inset: 0; pointer-events: none; }
+.pdf-mark {
+  position: absolute; border: 0; border-radius: 2px; pointer-events: auto; cursor: pointer;
+  background: rgba(255,223,77,.38); mix-blend-mode: multiply;
+}
+.pdf-mark-note {
+  background: rgba(102,245,214,.34);
+  outline: 1px solid rgba(5,112,91,.48);
+}
 .pdf-mode-hint {
   padding: .28rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
   color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .66rem;
