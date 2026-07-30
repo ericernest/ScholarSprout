@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import tempfile
 import unittest
@@ -88,7 +89,8 @@ class AuditTests(unittest.TestCase):
             self.assertNotIn("private user", raw)
             self.assertNotIn("secret upstream failure body", raw)
             self.assertIsNone(stored["repair_record"]["actions"][0]["error"])
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     def test_jsonl_sink_appends_complete_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

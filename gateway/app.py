@@ -100,11 +100,23 @@ def paper_reading_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "paper-reading" / "index.html")
 
 
+# 返回领域入门工作台。
+@app.get("/app/domain-onboarding")
+def domain_onboarding_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "domain-onboarding" / "index.html")
+
+
 # 旧入口回到聊天页的论文精读模式。
 @app.get("/paper-reading", include_in_schema=False)
 @app.get("/paper_reading/app", include_in_schema=False)
 def legacy_paper_reading_page() -> RedirectResponse:
     return RedirectResponse(url="/app?mode=paper_reading")
+
+
+@app.get("/domain-onboarding", include_in_schema=False)
+@app.get("/domain_onboarding/app", include_in_schema=False)
+def legacy_domain_onboarding_page() -> RedirectResponse:
+    return RedirectResponse(url="/app?mode=domain_onboarding")
 
 
 # 返回浏览器标签页图标。

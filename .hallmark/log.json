@@ -1,0 +1,50 @@
+{
+  "version": "1.1.0",
+  "runs": [
+    {
+      "scope": "domain-onboarding",
+      "branch": "feat/domain-onboarding-ui-fix",
+      "genre": "atmospheric technical",
+      "anchor_hue": "deep teal",
+      "design_system": "gateway/static/domain-onboarding/tokens.css",
+      "macrostructure": "Workbench",
+      "self_critique": {
+        "philosophy": 5,
+        "hierarchy": 5,
+        "execution": 4,
+        "specificity": 5,
+        "restraint": 5,
+        "variety": 3
+      },
+      "slop_test": {
+        "result": "pass by code audit",
+        "transition_all": 0,
+        "raw_colors_outside_domain_tokens": 0,
+        "purple_blue_section_palette": false,
+        "focus_visible": true,
+        "reduced_motion": true,
+        "root_overflow_x_clip": true,
+        "notes": "Browser preview was intentionally skipped at the user's request."
+      },
+      "function_preservation": {
+        "domain_onboarding_ids": 35,
+        "chat_background_job_submission": true,
+        "workspace_sse": true,
+        "paper_import": true,
+        "backend_routes_changed_by_palette_pass": false
+      },
+      "verification": {
+        "javascript_syntax": "pass",
+        "html_duplicate_ids": "pass",
+        "global_redesign_imports": "absent",
+        "domain_suite": "169 passed, 13 subtests passed"
+      },
+      "files_created": [
+        "gateway/static/domain-onboarding/tokens.css",
+        ".hallmark/preflight.json",
+        ".hallmark/log.json"
+      ],
+      "files_deleted": []
+    }
+  ]
+}
