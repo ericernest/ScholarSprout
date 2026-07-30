@@ -10,6 +10,8 @@ const modeEndpoints = {
   paper_reading: "/paper_reading",
 };
 
+const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_5";
+
 let currentMode = "chat";
 let isGenerating = false;
 let selectedPaperFile = null;
@@ -118,7 +120,7 @@ function bindChatPage() {
   });
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
-  setMode(initialMode === "paper_reading" ? "paper_reading" : currentMode);
+  setMode(initialMode in modeLabels ? initialMode : currentMode);
 }
 
 // Close mode menu and sync accessibility state.
@@ -177,6 +179,13 @@ async function sendMessage() {
   setLoading(true);
 
   try {
+    if (requestMode === "domain_onboarding") {
+      const job = await submitDomainOnboardingJob(content);
+      appendDomainOnboardingCard(job, content);
+      watchDomainOnboardingCard(job.task_id);
+      return;
+    }
+
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -201,6 +210,121 @@ async function sendMessage() {
   } finally {
     setLoading(false);
   }
+}
+
+// Submit domain onboarding as a background job so the chat request never times out.
+async function submitDomainOnboardingJob(content) {
+  const response = await fetch("/domain_onboarding/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      content,
+      user_id: "local-web",
+      metadata: {},
+      client_request_id: crypto.randomUUID(),
+    }),
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`后端返回了无法解析的响应（HTTP ${response.status}）`);
+  }
+  if (!response.ok || !payload?.task_id) {
+    const detail = typeof payload?.detail === "string" ? payload.detail : "";
+    throw new Error(detail || `创建领域入门任务失败（HTTP ${response.status}）`);
+  }
+  saveDomainWorkspace({
+    schema_version: "1.5",
+    saved_at: new Date().toISOString(),
+    task_id: payload.task_id,
+    request: { query: content, session_id: sessionId, user_id: "local-web", metadata: {} },
+    snapshot: { ...payload, progress: 0 },
+  });
+  return payload;
+}
+
+// Append an interactive onboarding card; the full result lives in its workspace.
+function appendDomainOnboardingCard(job, query) {
+  const item = document.createElement("article");
+  item.className = "message assistant domain-card-message";
+  item.dataset.taskId = job.task_id;
+
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "domain-chat-card";
+  card.innerHTML = `
+    <span class="paper-card-kicker">DOMAIN ONBOARDING · 已开始</span>
+    <strong>${escapeHtml(query)}</strong>
+    <span class="domain-card-copy">正在为你检索真实论文、梳理发展脉络并生成个性化学习路线。</span>
+    <span class="domain-card-progress" aria-label="生成进度">
+      <span class="domain-card-progress-fill" style="transform:scaleX(0)"></span>
+    </span>
+    <span class="domain-card-meta">
+      <span data-domain-state>任务已接收</span>
+      <span data-domain-progress>0%</span>
+    </span>
+    <span class="paper-card-enter">进入领域学习工作台 <b>↗</b></span>
+  `;
+  card.addEventListener("click", () => {
+    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`;
+  });
+  item.appendChild(card);
+  messages.appendChild(item);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// Keep the chat card useful while the user decides when to open the workspace.
+function watchDomainOnboardingCard(taskId) {
+  const labels = {
+    queued: "等待执行",
+    running: "正在生成",
+    cancel_requested: "正在取消",
+    completed: "学习路线已生成",
+    failed: "生成失败，可进入工作台重试",
+    cancelled: "任务已取消",
+    interrupted: "任务因服务重启中断",
+  };
+  let attempts = 0;
+  const poll = async () => {
+    const item = Array.from(document.querySelectorAll(".domain-card-message"))
+      .find((node) => node.dataset.taskId === taskId);
+    if (!item) return;
+    try {
+      const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}`);
+      if (!response.ok) throw new Error(String(response.status));
+      const snapshot = await response.json();
+      const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
+      item.querySelector("[data-domain-state]").textContent = labels[snapshot.state] || snapshot.current_stage || "处理中";
+      item.querySelector("[data-domain-progress]").textContent = `${Math.round(progress * 100)}%`;
+      item.querySelector(".domain-card-progress-fill").style.transform = `scaleX(${progress})`;
+      item.querySelector(".paper-card-kicker").textContent =
+        snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
+      const saved = loadDomainWorkspace() || {};
+      saveDomainWorkspace({ ...saved, saved_at: new Date().toISOString(), task_id: taskId, snapshot });
+      if (!["completed", "failed", "cancelled", "interrupted"].includes(snapshot.state)) {
+        window.setTimeout(poll, 1800);
+      }
+    } catch {
+      attempts += 1;
+      if (attempts < 4) window.setTimeout(poll, 2500);
+    }
+  };
+  window.setTimeout(poll, 600);
+}
+
+function loadDomainWorkspace() {
+  try {
+    const value = JSON.parse(localStorage.getItem(DOMAIN_WORKSPACE_KEY) || "null");
+    return value?.schema_version === "1.5" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDomainWorkspace(value) {
+  localStorage.setItem(DOMAIN_WORKSPACE_KEY, JSON.stringify(value));
 }
 
 // Upload a local PDF or import a PDF/arXiv link from the chat composer.
