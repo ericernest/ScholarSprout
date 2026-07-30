@@ -296,6 +296,8 @@ class SelectedPaper(OnboardingModel):
     citation_score: float = Field(default=0.0, ge=0.0, le=1.0)
     recency_score: float = Field(default=0.0, ge=0.0, le=1.0)
     diversity_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    contribution: str = ""
+    reading_focus: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_ranked(cls, paper: RankedPaper) -> "SelectedPaper":

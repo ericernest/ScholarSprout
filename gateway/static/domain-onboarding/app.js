@@ -48,11 +48,13 @@ const PRIORITY_LABELS = {
 const QUALITY_LABELS = {
   structure: "结构完整性",
   paper_validity: "论文真实性",
-  relevance: "内容相关性",
-  evidence_coverage: "证据覆盖",
+  paper_relevance: "论文相关性",
+  evidence_grounding: "证据支撑",
+  topic_coverage: "主题覆盖",
+  development_coherence: "发展连贯性",
   learning_path: "路线可执行性",
-  personalization: "个性化",
-  content_completeness: "内容完整度",
+  goal_alignment: "目标匹配",
+  language_alignment: "语言一致性",
 };
 
 const state = {
@@ -206,10 +208,14 @@ function consumeSnapshot(snapshot, persist = true) {
   if (!snapshot || typeof snapshot !== "object") return;
   state.snapshot = snapshot;
   state.revision = Math.max(state.revision, Number(snapshot.revision) || 0);
-  state.partial = snapshot.partial_result && typeof snapshot.partial_result === "object"
-    ? snapshot.partial_result
-    : state.partial;
-  state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : state.result;
+  if (Object.prototype.hasOwnProperty.call(snapshot, "partial_result")) {
+    state.partial = snapshot.partial_result && typeof snapshot.partial_result === "object"
+      ? snapshot.partial_result
+      : {};
+  }
+  if (Object.prototype.hasOwnProperty.call(snapshot, "result")) {
+    state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : null;
+  }
   render();
   if (persist) saveWorkspace();
 
@@ -248,7 +254,7 @@ function handleEvent(event) {
   state.revision = revision;
 
   const data = payload.data || {};
-  if (payload.event === "completed" && data.result) {
+  if (data.result && typeof data.result === "object") {
     state.result = data.result;
   } else {
     for (const path of payload.replace_paths || []) {
@@ -370,16 +376,19 @@ function renderOverview(data) {
 }
 
 function renderPrerequisites(data) {
-  const items = data.prerequisites;
-  if (!Array.isArray(items)) return;
   const container = $("prerequisites-content");
   container.classList.remove("loading-grid");
+  if (!Array.isArray(data.prerequisites) || !data.prerequisites.length) {
+    container.innerHTML = sectionStatusCopy("前置知识", data);
+    return;
+  }
+  const items = data.prerequisites;
   container.innerHTML = items.length
     ? items.map((item, index) => `
       <button class="interactive-card" type="button" data-detail-kind="prerequisite" data-detail-id="${escapeHtml(item.prerequisite_id || String(index))}">
         <span class="card-index">FOUNDATION ${String(index + 1).padStart(2, "0")}</span>
         <h3>${escapeHtml(item.name)}</h3>
-        <p>${escapeHtml(item.why_needed || "这是后续学习的重要基础。")}</p>
+        <p>${escapeHtml(item.why_needed || fieldStatusCopy("说明"))}</p>
         <span class="chip-row">${(item.key_points || []).slice(0, 3).map(chip).join("")}</span>
       </button>
     `).join("")
@@ -387,10 +396,13 @@ function renderPrerequisites(data) {
 }
 
 function renderDevelopment(data) {
-  if (!Array.isArray(data.development_stages)) return;
-  const items = [...data.development_stages].sort((a, b) => Number(a.sequence) - Number(b.sequence));
   const container = $("development-content");
   container.classList.remove("loading-grid");
+  if (!Array.isArray(data.development_stages) || !data.development_stages.length) {
+    container.innerHTML = sectionStatusCopy("发展路径", data);
+    return;
+  }
+  const items = [...data.development_stages].sort((a, b) => Number(a.sequence) - Number(b.sequence));
   container.innerHTML = items.length
     ? items.map((stage, index) => `
       <button class="interactive-card timeline-card" type="button" data-detail-kind="stage" data-detail-id="${escapeHtml(stage.stage_id || String(index))}">
@@ -409,7 +421,12 @@ function renderDevelopment(data) {
 
 function renderLandscape(data) {
   const landscape = data.current_landscape;
-  if (!landscape || typeof landscape !== "object") return;
+  if (!landscape || typeof landscape !== "object") {
+    const container = $("landscape-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = sectionStatusCopy("概念全景", data);
+    return;
+  }
   const problems = landscape.problem_details || (landscape.problems || []).map((name, index) => ({
     problem_id: `problem-${index}`,
     name,
@@ -450,7 +467,12 @@ function renderLandscape(data) {
 }
 
 function renderLearningPath(data) {
-  if (!Array.isArray(data.learning_path)) return;
+  if (!Array.isArray(data.learning_path) || !data.learning_path.length) {
+    const container = $("learning-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = sectionStatusCopy("学习路线", data);
+    return;
+  }
   const container = $("learning-content");
   container.classList.remove("loading-grid");
   container.innerHTML = data.learning_path.length
@@ -460,10 +482,10 @@ function renderLearningPath(data) {
       const week = start === end ? `W${start}` : `W${start}–${end}`;
       return `
         <button class="interactive-card learning-card" type="button" data-detail-kind="learning" data-detail-id="${escapeHtml(String(index))}">
-          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(step.estimated_hours ? `${step.estimated_hours} 小时` : "按计划推进")}</span></span>
+          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(step.estimated_hours ? `${step.estimated_hours} 小时` : fieldStatusCopy("时间"))}</span></span>
           <span class="learning-main">
             <span class="card-index">STEP ${escapeHtml(step.step || String(index + 1))}</span>
-            <h3>${escapeHtml(step.goal || "阶段学习目标")}</h3>
+            <h3>${escapeHtml(step.goal || fieldStatusCopy("目标"))}</h3>
             <p>${escapeHtml(step.expected_outcome || "")}</p>
             ${step.milestone ? `<p class="milestone">里程碑 · ${escapeHtml(step.milestone)}</p>` : ""}
           </span>
@@ -475,7 +497,12 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  if (!Array.isArray(data.papers)) return;
+  if (!Array.isArray(data.papers) || !data.papers.length) {
+    const container = $("papers-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = sectionStatusCopy("论文清单", data);
+    return;
+  }
   const priorities = ["all", "core", "recommended", "optional", "extended"];
   $("paper-filters").innerHTML = priorities.map((priority) => `
     <button class="filter-button${state.paperFilter === priority ? " is-active" : ""}" type="button" data-paper-filter="${priority}">
@@ -499,7 +526,7 @@ function renderPapers(data) {
           <h3>${escapeHtml(paper.title)}</h3>
           <small>${escapeHtml((paper.authors || []).slice(0, 4).join("、") || "作者未知")} · ${escapeHtml(paper.year || "年份未知")}</small>
         </span>
-        <span class="paper-score"><b>${formatScore(paper.final_score)}</b><span>综合得分</span></span>
+        <span class="paper-score"><b>${formatPercentScore(paper.final_score)}<small>/100</small></b><span>综合推荐度</span></span>
       </button>
     `).join("")
     : emptyCopy("当前筛选下没有论文。");
@@ -507,7 +534,12 @@ function renderPapers(data) {
 
 function renderQuality(data) {
   const quality = data.quality;
-  if (!quality || typeof quality !== "object") return;
+  if (!quality || typeof quality !== "object") {
+    const container = $("quality-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = sectionStatusCopy("质量评估", data);
+    return;
+  }
   const dimensions = Object.entries(quality.dimensions || {});
   const gates = quality.hard_gates || [];
   const issues = quality.issues || [];
@@ -684,6 +716,28 @@ function showDetail(kind, id) {
 }
 
 function renderPaperDetail(paper) {
+  const guidance = paperGuidance(paper);
+  const contribution = paper.contribution || guidance.contribution;
+  const readingFocus = (paper.reading_focus || []).length
+    ? paper.reading_focus
+    : guidance.reading_focus;
+  const scoreRows = [
+    ["综合推荐度", paper.final_score],
+    ["主题相关", paper.relevance_score],
+    ["领域语境", paper.context_score],
+    ["引用影响", paper.citation_score],
+    ["时效性", paper.recency_score],
+    ["内容差异性", paper.diversity_score],
+  ].filter(([, value]) => Number.isFinite(Number(value)));
+  const metadata = [
+    paper.source ? `来源：${paper.source}` : "",
+    paper.citation_count != null && Number.isFinite(Number(paper.citation_count))
+      ? `引用数：${Number(paper.citation_count)}`
+      : "",
+    paper.doi ? `DOI：${paper.doi}` : "",
+    paper.arxiv_id ? `arXiv：${paper.arxiv_id}` : "",
+    (paper.publication_types || []).length ? `类型：${paper.publication_types.join("、")}` : "",
+  ].filter(Boolean);
   state.selected = { kind: "paper", id: String(paper.paper_id) };
   $("inspector-title").textContent = paper.title || "论文详情";
   $("inspector-subtitle").textContent = `${paper.year || "年份未知"} · ${paper.paper_role || "论文"}`;
@@ -698,8 +752,24 @@ function renderPaperDetail(paper) {
         <h3>作者</h3>
         <p class="detail-summary">${escapeHtml((paper.authors || []).join("、") || "作者信息暂无")}</p>
       </div>
-      ${paper.contribution ? `<div class="detail-block"><h3>主要贡献</h3><p class="detail-summary">${escapeHtml(paper.contribution)}</p></div>` : ""}
-      ${detailList("阅读重点", paper.reading_focus)}
+      ${metadata.length ? detailList("论文元数据", metadata) : ""}
+      <div class="detail-block">
+        <h3>推荐依据 <span class="score-note">归一化信号 · 非论文质量绝对分</span></h3>
+        <div class="paper-score-grid">
+          ${scoreRows.map(([label, value]) => `
+            <div class="paper-score-row">
+              <span>${escapeHtml(label)}</span>
+              <span class="mini-track"><span style="width:${formatPercentScore(value)}%"></span></span>
+              <b>${formatPercentScore(value)}</b>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+      <div class="detail-block">
+        <h3>主要贡献</h3>
+        <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
+      </div>
+      ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
         ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
@@ -795,7 +865,41 @@ async function retryTask() {
 }
 
 function currentData() {
-  return state.result || state.partial || null;
+  const partial = state.partial && typeof state.partial === "object" ? state.partial : {};
+  const result = state.result && typeof state.result === "object" ? state.result : {};
+  if (!Object.keys(partial).length && !Object.keys(result).length) return null;
+  return { ...partial, ...result };
+}
+
+function isTerminalTask() {
+  return TERMINAL_STATES.has(state.snapshot?.state);
+}
+
+function sectionStatusCopy(label, data) {
+  if (!isTerminalTask()) return emptyCopy(`${label}待生成`);
+  const error = data?.error || state.snapshot?.error;
+  return emptyCopy(
+    error
+      ? `${label}生成失败：${error}`
+      : `${label}生成失败`
+  );
+}
+
+function fieldStatusCopy(label) {
+  return `${label}${isTerminalTask() ? "生成失败" : "待生成"}`;
+}
+
+function paperGuidance(paper) {
+  const data = currentData() || {};
+  const references = [
+    ...(data.development_stages || []).flatMap((stage) => stage.representative_papers || []),
+    ...(data.learning_path || []).flatMap((step) => step.papers || []),
+  ];
+  const matches = references.filter((item) => String(item.paper_id) === String(paper.paper_id));
+  return {
+    contribution: matches.find((item) => item.contribution)?.contribution || "",
+    reading_focus: [...new Set(matches.flatMap((item) => item.reading_focus || []))],
+  };
 }
 
 function saveWorkspace() {
@@ -924,6 +1028,12 @@ function qualityStatusLabel(value) {
 function formatScore(value) {
   const score = Number(value);
   return Number.isFinite(score) ? score.toFixed(2) : "—";
+}
+
+function formatPercentScore(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
 }
 
 function escapeHtml(value) {

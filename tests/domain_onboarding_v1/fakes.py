@@ -140,6 +140,13 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                 "expected_outcome": "能够解释并实现核心方法",
                 "estimated_hours": 6,
                 "milestone": f"完成阶段 {index} 的可验收产出",
+                "deliverables": [f"阶段 {index} 结构化笔记"],
+                "reproducibility_checklist": (
+                    ["固定数据集版本", "保存运行配置"] if index == 4 else []
+                ),
+                "evaluation_metrics": (
+                    ["任务主指标", "运行成本"] if index == 4 else []
+                ),
             }
             for index in range(1, 6)
         ],
@@ -150,5 +157,13 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                 "support_type": "abstract_explicit",
             }
             for index in range(1, 4)
+        ],
+        "paper_guidance": [
+            {
+                "paper_id": paper_id,
+                "contribution": f"说明论文 {paper_id} 在领域发展与学习路径中的作用。",
+                "reading_focus": ["核心问题", "方法设计", "实验结论"],
+            }
+            for paper_id in paper_ids
         ],
     }
