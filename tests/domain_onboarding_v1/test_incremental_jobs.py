@@ -77,6 +77,40 @@ class IncrementalJobTests(unittest.TestCase):
         self.assertEqual(snapshot["state"], "interrupted")
         self.assertTrue(snapshot["retryable"])
 
+    def test_failed_job_preserves_generated_partial_sections(self):
+        class FailingPipeline:
+            config = SimpleNamespace(request_timeout_seconds=5.0)
+
+            def run(self, request, trace, execution_context=None, progress_callback=None):
+                progress_callback(
+                    "development_ready",
+                    0.6,
+                    True,
+                    ["development_stages"],
+                    {"development_stages": [{"stage_id": "stage_1"}]},
+                )
+                return PipelineResult(
+                    status="generation_failed",
+                    query=request.query,
+                    error="learning_path section generation failed",
+                )
+
+        self.manager.close()
+        self.manager = DomainOnboardingJobManager(FailingPipeline(), self.store, max_workers=1)
+        job = self.manager.submit(DomainOnboardingRequest(query="RAG"))
+        for _ in range(100):
+            snapshot = self.store.get(job["task_id"])
+            if snapshot and snapshot["state"] == "failed":
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(snapshot["state"], "failed")
+        self.assertEqual(
+            snapshot["partial_result"]["development_stages"],
+            [{"stage_id": "stage_1"}],
+        )
+        self.assertEqual(snapshot["result"]["status"], "generation_failed")
+
     def test_cancel_is_cooperative_and_preserves_existing_events(self):
         started = Event()
         release = Event()

@@ -376,20 +376,19 @@ function renderOverview(data) {
 }
 
 function renderPrerequisites(data) {
-  const items = Array.isArray(data.prerequisites)
-    ? data.prerequisites
-    : isTerminalTask()
-      ? []
-      : null;
-  if (!items) return;
   const container = $("prerequisites-content");
   container.classList.remove("loading-grid");
+  if (!Array.isArray(data.prerequisites) || !data.prerequisites.length) {
+    container.innerHTML = sectionStatusCopy("前置知识", data);
+    return;
+  }
+  const items = data.prerequisites;
   container.innerHTML = items.length
     ? items.map((item, index) => `
       <button class="interactive-card" type="button" data-detail-kind="prerequisite" data-detail-id="${escapeHtml(item.prerequisite_id || String(index))}">
         <span class="card-index">FOUNDATION ${String(index + 1).padStart(2, "0")}</span>
         <h3>${escapeHtml(item.name)}</h3>
-        <p>${escapeHtml(item.why_needed || "这是后续学习的重要基础。")}</p>
+        <p>${escapeHtml(item.why_needed || fieldStatusCopy("说明"))}</p>
         <span class="chip-row">${(item.key_points || []).slice(0, 3).map(chip).join("")}</span>
       </button>
     `).join("")
@@ -397,15 +396,13 @@ function renderPrerequisites(data) {
 }
 
 function renderDevelopment(data) {
-  const source = Array.isArray(data.development_stages)
-    ? data.development_stages
-    : isTerminalTask()
-      ? []
-      : null;
-  if (!source) return;
-  const items = [...source].sort((a, b) => Number(a.sequence) - Number(b.sequence));
   const container = $("development-content");
   container.classList.remove("loading-grid");
+  if (!Array.isArray(data.development_stages) || !data.development_stages.length) {
+    container.innerHTML = sectionStatusCopy("发展路径", data);
+    return;
+  }
+  const items = [...data.development_stages].sort((a, b) => Number(a.sequence) - Number(b.sequence));
   container.innerHTML = items.length
     ? items.map((stage, index) => `
       <button class="interactive-card timeline-card" type="button" data-detail-kind="stage" data-detail-id="${escapeHtml(stage.stage_id || String(index))}">
@@ -425,10 +422,9 @@ function renderDevelopment(data) {
 function renderLandscape(data) {
   const landscape = data.current_landscape;
   if (!landscape || typeof landscape !== "object") {
-    if (!isTerminalTask()) return;
     const container = $("landscape-content");
     container.classList.remove("loading-grid");
-    container.innerHTML = emptyCopy("任务在概念全景生成前结束，已保留其它可用内容。");
+    container.innerHTML = sectionStatusCopy("概念全景", data);
     return;
   }
   const problems = landscape.problem_details || (landscape.problems || []).map((name, index) => ({
@@ -471,11 +467,10 @@ function renderLandscape(data) {
 }
 
 function renderLearningPath(data) {
-  if (!Array.isArray(data.learning_path)) {
-    if (!isTerminalTask()) return;
+  if (!Array.isArray(data.learning_path) || !data.learning_path.length) {
     const container = $("learning-content");
     container.classList.remove("loading-grid");
-    container.innerHTML = emptyCopy("任务在学习路线生成前结束，可重试任务继续生成。");
+    container.innerHTML = sectionStatusCopy("学习路线", data);
     return;
   }
   const container = $("learning-content");
@@ -487,10 +482,10 @@ function renderLearningPath(data) {
       const week = start === end ? `W${start}` : `W${start}–${end}`;
       return `
         <button class="interactive-card learning-card" type="button" data-detail-kind="learning" data-detail-id="${escapeHtml(String(index))}">
-          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(step.estimated_hours ? `${step.estimated_hours} 小时` : "按计划推进")}</span></span>
+          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(step.estimated_hours ? `${step.estimated_hours} 小时` : fieldStatusCopy("时间"))}</span></span>
           <span class="learning-main">
             <span class="card-index">STEP ${escapeHtml(step.step || String(index + 1))}</span>
-            <h3>${escapeHtml(step.goal || "阶段学习目标")}</h3>
+            <h3>${escapeHtml(step.goal || fieldStatusCopy("目标"))}</h3>
             <p>${escapeHtml(step.expected_outcome || "")}</p>
             ${step.milestone ? `<p class="milestone">里程碑 · ${escapeHtml(step.milestone)}</p>` : ""}
           </span>
@@ -502,7 +497,12 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  if (!Array.isArray(data.papers)) return;
+  if (!Array.isArray(data.papers) || !data.papers.length) {
+    const container = $("papers-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = sectionStatusCopy("论文清单", data);
+    return;
+  }
   const priorities = ["all", "core", "recommended", "optional", "extended"];
   $("paper-filters").innerHTML = priorities.map((priority) => `
     <button class="filter-button${state.paperFilter === priority ? " is-active" : ""}" type="button" data-paper-filter="${priority}">
@@ -535,14 +535,9 @@ function renderPapers(data) {
 function renderQuality(data) {
   const quality = data.quality;
   if (!quality || typeof quality !== "object") {
-    if (!isTerminalTask()) return;
     const container = $("quality-content");
     container.classList.remove("loading-grid");
-    container.innerHTML = emptyCopy(
-      data.error
-        ? `任务在质量评估前结束：${data.error}`
-        : "本次任务没有返回质量评估结果。"
-    );
+    container.innerHTML = sectionStatusCopy("质量评估", data);
     return;
   }
   const dimensions = Object.entries(quality.dimensions || {});
@@ -770,8 +765,11 @@ function renderPaperDetail(paper) {
           `).join("")}
         </div>
       </div>
-      ${contribution ? `<div class="detail-block"><h3>主要贡献</h3><p class="detail-summary">${escapeHtml(contribution)}</p></div>` : ""}
-      ${detailList("阅读重点", readingFocus)}
+      <div class="detail-block">
+        <h3>主要贡献</h3>
+        <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
+      </div>
+      ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
         ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
@@ -875,6 +873,20 @@ function currentData() {
 
 function isTerminalTask() {
   return TERMINAL_STATES.has(state.snapshot?.state);
+}
+
+function sectionStatusCopy(label, data) {
+  if (!isTerminalTask()) return emptyCopy(`${label}待生成`);
+  const error = data?.error || state.snapshot?.error;
+  return emptyCopy(
+    error
+      ? `${label}生成失败：${error}`
+      : `${label}生成失败`
+  );
+}
+
+function fieldStatusCopy(label) {
+  return `${label}${isTerminalTask() ? "生成失败" : "待生成"}`;
 }
 
 function paperGuidance(paper) {

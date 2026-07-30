@@ -69,8 +69,9 @@ class SimpleStagePathPlanner:
         results: list[LearningStep] = []
         week_windows = self._week_windows(profile.time_budget_weeks, len(self.stage_names))
         paper_by_id = {paper.paper_id: paper for paper in papers}
-        for index, stage_name in enumerate(self.stage_names, start=1):
-            raw = provided[index - 1] if index - 1 < len(provided) and isinstance(provided[index - 1], dict) else {}
+        for index, raw in enumerate(provided[: len(self.stage_names)], start=1):
+            if not isinstance(raw, dict):
+                continue
             ids = self._valid_ids(raw.get("paper_ids"), references)
             desired_roles = {
                 1: {"survey", "foundational"},
@@ -97,30 +98,13 @@ class SimpleStagePathPlanner:
                 chosen = eligible or papers
                 ids = [chosen[min(index - 1, len(chosen) - 1)].paper_id]
             activities = self._strings(raw.get("activities"))
-            if profile.preference == "experiment_first" and index == 4:
-                activities.append("复现一个公开基线并记录实验配置与结果")
-            elif profile.preference == "theory_first" and index <= 3:
-                activities.append("整理概念定义、关键假设与方法推导笔记")
-            elif not activities:
-                activities.append("完成本阶段阅读清单并形成一页结构化笔记")
-            criteria = self._strings(raw.get("completion_criteria")) or [
-                "能够用自己的语言解释本阶段核心内容",
-                "完成至少一项可检查的阅读或实验产出",
-            ]
-            goal = str(raw.get("goal") or f"完成{stage_name}并建立与下一阶段的连接")
-            topics = self._strings(raw.get("topics")) or [stage_name]
-            outcome = str(raw.get("expected_outcome") or criteria[0])
-            deliverables = self._strings(raw.get("deliverables")) or [
-                f"{stage_name}阶段结构化笔记"
-            ]
+            criteria = self._strings(raw.get("completion_criteria"))
+            goal = str(raw.get("goal") or "")
+            topics = self._strings(raw.get("topics"))
+            outcome = str(raw.get("expected_outcome") or "")
+            deliverables = self._strings(raw.get("deliverables"))
             reproducibility = self._strings(raw.get("reproducibility_checklist"))
             evaluation_metrics = self._strings(raw.get("evaluation_metrics"))
-            if index == 4:
-                reproducibility = reproducibility or [
-                    "固定数据集版本、随机种子和依赖版本",
-                    "保存基线配置、原始结果和运行日志",
-                ]
-                evaluation_metrics = evaluation_metrics or ["任务主指标", "延迟与成本"]
             start_week, end_week = week_windows[index - 1]
             estimated_hours = self._positive_int(raw.get("estimated_hours"))
             if estimated_hours is None and start_week is not None and end_week is not None:
@@ -138,7 +122,7 @@ class SimpleStagePathPlanner:
                     start_week=start_week,
                     end_week=end_week,
                     estimated_hours=estimated_hours,
-                    milestone=str(raw.get("milestone") or criteria[0]),
+                    milestone=str(raw.get("milestone") or ""),
                     deliverables=deliverables,
                     reproducibility_checklist=reproducibility,
                     evaluation_metrics=evaluation_metrics,
@@ -255,38 +239,49 @@ class StructuredOnboardingGenerator:
                 paths = ["learning_path"]
             on_section(event_name, data, paths)
 
-        def call_section(
-            section: str,
-            completed: dict[str, Any],
-        ) -> tuple[dict[str, Any], ModelCallStats]:
-            try:
-                return self._call_section(
-                    section, request, profile, plan, papers, completed
-                )
-            except GenerationError as error:
-                return (
-                    self._fallback_section(section, request, plan, papers),
-                    error.stats,
-                )
-
-        development_payload, development_stats = call_section("development", payload)
+        development_payload, development_stats = self._call_section(
+            "development", request, profile, plan, papers, payload
+        )
         apply_section("development", development_payload, development_stats)
         completed_snapshot = json.loads(json.dumps(payload, ensure_ascii=False))
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="onboarding-content") as executor:
             futures = {
                 executor.submit(
-                    call_section,
+                    self._call_section,
                     section,
+                    request,
+                    profile,
+                    plan,
+                    papers,
                     completed_snapshot,
                 ): section
                 for section in ("landscape", "learning_path")
             }
-            completed_sections = {
-                futures[future]: future.result() for future in as_completed(futures)
-            }
+            completed_sections = {}
+            failed_sections: dict[str, GenerationError] = {}
+            for future in as_completed(futures):
+                section = futures[future]
+                try:
+                    completed_sections[section] = future.result()
+                except GenerationError as error:
+                    failed_sections[section] = error
             for section in ("landscape", "learning_path"):
-                section_payload, section_stats = completed_sections[section]
-                apply_section(section, section_payload, section_stats)
+                if section in completed_sections:
+                    section_payload, section_stats = completed_sections[section]
+                    apply_section(section, section_payload, section_stats)
+            if failed_sections:
+                for error in failed_sections.values():
+                    self._add_stats(stats, error.stats)
+                failed_section = next(
+                    section
+                    for section in ("landscape", "learning_path")
+                    if section in failed_sections
+                )
+                failed_error = failed_sections[failed_section]
+                raise GenerationError(
+                    f"{failed_section} section generation failed: {failed_error}",
+                    stats=stats,
+                ) from failed_error
         return GenerationResult(
             output=self._normalize(payload, request, profile, plan, papers), stats=stats
         )
@@ -365,12 +360,12 @@ class StructuredOnboardingGenerator:
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=max(1200, self.config.generation_max_tokens // 2),
             )
-            return (
-                self._complete_section_payload(
-                    section, payload, request, plan, papers
-                ),
-                stats,
-            )
+            try:
+                completed = self._complete_section_payload(section, payload, papers)
+            except GenerationError as error:
+                error.stats = stats
+                raise
+            return completed, stats
         except StructuredLLMError as error:
             raise GenerationError(str(error), stats=error.stats) from error
 
@@ -378,8 +373,6 @@ class StructuredOnboardingGenerator:
         self,
         section: str,
         payload: dict[str, Any],
-        request: DomainOnboardingRequest,
-        plan: DomainResearchPlan,
         papers: list[RankedPaper],
     ) -> dict[str, Any]:
         expected = {
@@ -387,11 +380,12 @@ class StructuredOnboardingGenerator:
             "landscape": ("current_landscape",),
             "learning_path": ("learning_path",),
         }[section]
-        candidates = [payload]
+        candidates = []
         for key in (section, "result", "data", "output"):
             nested = payload.get(key)
             if isinstance(nested, dict):
                 candidates.append(nested)
+        candidates.append(payload)
         selected = next(
             (
                 candidate
@@ -401,117 +395,33 @@ class StructuredOnboardingGenerator:
             payload,
         )
         completed = dict(selected)
-        fallback = self._fallback_section(section, request, plan, papers)
-        for key in expected:
-            value = completed.get(key)
-            if value is None or value == "" or value == [] or value == {}:
-                completed[key] = fallback[key]
+        self._validate_section_payload(section, completed, papers)
         return completed
 
-    def _fallback_section(
+    def _validate_section_payload(
         self,
         section: str,
-        request: DomainOnboardingRequest,
-        plan: DomainResearchPlan,
+        payload: dict[str, Any],
         papers: list[RankedPaper],
-    ) -> dict[str, Any]:
-        paper_ids = [paper.paper_id for paper in papers]
+    ) -> None:
         if section == "development":
-            if request.language == "en-US":
-                prerequisites = [
-                    ("Problem definitions and terminology", "Build a shared vocabulary before comparing methods.", ["core tasks", "assumptions", "terminology"]),
-                    ("Core methods and tools", "Understand the main technical building blocks used by representative work.", ["method families", "tooling", "implementation"]),
-                    ("Research evaluation", "Judge evidence, reproducibility, and practical limitations.", ["baselines", "metrics", "reproducibility"]),
-                ]
-                stage_names = [
-                    ("Problem formation and foundations", "The field establishes its core tasks, assumptions, and foundational approaches."),
-                    ("Method consolidation and scaling", "Research develops reusable method families and increasingly capable systems."),
-                    ("Evaluation, deployment, and frontiers", "Attention expands to robust evaluation, real-world use, and open problems."),
-                ]
-                text = (
-                    f"This onboarding map introduces {plan.normalized_domain} through prerequisites, "
-                    "research development, representative papers, current directions, and an executable learning path."
-                )
-            else:
-                prerequisites = [
-                    ("问题定义与领域术语", "先建立共同词汇，才能准确比较不同方法与论文。", ["核心任务", "基本假设", "常用术语"]),
-                    ("核心方法与工具", "理解代表性工作共同依赖的技术模块与实现方式。", ["方法范式", "常用工具", "实现流程"]),
-                    ("科研评测与论文阅读", "用于判断证据强弱、复现条件与方法边界。", ["基线对比", "评价指标", "可复现性"]),
-                ]
-                stage_names = [
-                    ("问题形成与理论奠基", "研究首先明确核心问题、基本假设与代表性基础方法。"),
-                    ("方法体系化与能力扩展", "研究逐步形成可复用的方法体系，并扩展系统能力与应用范围。"),
-                    ("评测、落地与前沿探索", "研究重点进一步转向可靠评测、真实场景落地和开放问题。"),
-                ]
-                text = (
-                    f"本入门地图从前置知识、研究发展、代表论文、当前方向和学习实践五个层面介绍"
-                    f"{plan.normalized_domain}，并为后续阅读与实验提供可执行起点。"
-                )
-            prerequisite_payload = [
-                {
-                    "name": name,
-                    "why_needed": reason,
-                    "key_points": points,
-                    "related_paper_ids": paper_ids[index : index + 1],
-                }
-                for index, (name, reason, points) in enumerate(prerequisites)
-            ]
-            stage_payload = []
-            for index, (name, summary) in enumerate(stage_names):
-                paper = papers[min(index, len(papers) - 1)] if papers else None
-                year = paper.year if paper else None
-                stage_payload.append(
-                    {
-                        "stage_id": f"stage_{index + 1}",
-                        "name": name,
-                        "historical_period": (
-                            f"{year} 年前后（以入选论文为线索）"
-                            if year
-                            else "具体年代待进一步考证"
-                        ),
-                        "start_year": year,
-                        "end_year": year,
-                        "summary": summary,
-                        "motivation": summary,
-                        "transition_from_previous": "" if index == 0 else summary,
-                        "related_paper_ids": [paper.paper_id] if paper else [],
-                        "prerequisite_ids": [],
-                        "core_concepts": prerequisites[index][2],
-                        "main_techniques": [],
-                        "open_problems": [],
-                    }
-                )
-            return {
-                "domain": plan.normalized_domain,
-                "text": text,
-                "prerequisites": prerequisite_payload,
-                "development_stages": stage_payload,
-                "paper_guidance": [],
-                "evidence_claims": [],
-            }
+            prerequisites = payload.get("prerequisites")
+            stages = payload.get("development_stages")
+            if not str(payload.get("domain") or "").strip():
+                raise GenerationError("development section is missing domain")
+            if not isinstance(prerequisites, list):
+                raise GenerationError("development section is missing prerequisites")
+            if not isinstance(stages, list):
+                raise GenerationError("development section is missing development stages")
+            return
         if section == "landscape":
-            if request.language == "en-US":
-                problems = [
-                    "How should the core task be defined and decomposed?",
-                    "How can effectiveness, efficiency, and reliability be balanced?",
-                    "How should reproducible, realistic evaluation be designed?",
-                ]
-            else:
-                problems = [
-                    "如何清晰定义并分解该领域的核心任务？",
-                    "如何兼顾方法效果、效率与可靠性？",
-                    "如何建立可复现且贴近真实场景的评测？",
-                ]
-            return {
-                "current_landscape": {
-                    "problems": problems,
-                    "subdirections": list(plan.expected_subdirections),
-                    "problem_details": [],
-                    "subdirection_details": [],
-                },
-                "evidence_claims": [],
-            }
-        return {"learning_path": [], "evidence_claims": []}
+            landscape = payload.get("current_landscape")
+            if not isinstance(landscape, dict):
+                raise GenerationError("landscape section is missing current_landscape")
+            return
+        steps = payload.get("learning_path")
+        if not isinstance(steps, list):
+            raise GenerationError("learning path section is missing learning_path")
 
     def repair(
         self,
@@ -633,11 +543,10 @@ class StructuredOnboardingGenerator:
                 url=paper.url,
                 contribution=(
                     guidance.get(paper.paper_id, {}).get("contribution")
-                    or self._fallback_contribution(paper)
+                    or ""
                 ),
                 reading_focus=(
                     self._strings(guidance.get(paper.paper_id, {}).get("reading_focus"))
-                    or self._fallback_reading_focus(paper)
                 ),
                 reading_priority=paper.reading_priority,
                 is_canonical=paper.is_canonical,
@@ -663,11 +572,6 @@ class StructuredOnboardingGenerator:
         )
         try:
             text = str(payload.get("text") or "").strip()
-            if len(text) < 40:
-                text = (
-                    f"本方案面向{profile.preference}学习偏好，按领域演进、当前全景和实践路径"
-                    f"系统介绍{plan.normalized_domain}，并为目标“{profile.goal}”绑定可验证论文与里程碑。"
-                )
             selected_papers = []
             for paper in papers:
                 reference = references[paper.paper_id]
@@ -954,26 +858,6 @@ class StructuredOnboardingGenerator:
             if isinstance(item, dict) and str(item.get("paper_id") or "").strip()
         }
 
-    @staticmethod
-    def _fallback_contribution(paper: RankedPaper) -> str:
-        role_labels = {
-            "survey": "综述",
-            "foundational": "奠基",
-            "method": "方法",
-            "evaluation": "评测",
-            "application": "应用",
-            "frontier": "前沿",
-            "other": "补充",
-        }
-        return f"作为{role_labels[paper.paper_role]}阅读，帮助理解《{paper.title}》所代表的研究位置与技术路线。"
-
-    @staticmethod
-    def _fallback_reading_focus(paper: RankedPaper) -> list[str]:
-        focuses = ["论文解决的核心问题", "方法设计与关键假设"]
-        if paper.paper_role in {"evaluation", "application"}:
-            focuses[1] = "实验设置、指标与适用边界"
-        return focuses
-
     def _normalize_stages(
         self,
         value: object,
@@ -1006,8 +890,8 @@ class StructuredOnboardingGenerator:
                     stage_id=item.get("stage_id"),
                     sequence=index + 1,
                     name=str(item["name"]),
-                    period=str(item.get("historical_period") or item.get("period") or "时期待考证"),
-                    historical_period=str(item.get("historical_period") or item.get("period") or "时期待考证"),
+                    period=str(item.get("historical_period") or item.get("period") or ""),
+                    historical_period=str(item.get("historical_period") or item.get("period") or ""),
                     start_year=self._positive_int(item.get("start_year")),
                     end_year=self._positive_int(item.get("end_year")),
                     summary=str(item.get("summary") or ""),
@@ -1030,10 +914,6 @@ class StructuredOnboardingGenerator:
                 continue
             previous = results[index - 1]
             stage.previous_stage_id = previous.stage_id
-            if not stage.transition_from_previous:
-                stage.transition_from_previous = (
-                    f"在“{previous.name}”的基础上，研究进一步转向“{stage.name}”。"
-                )
         return results
 
     @staticmethod
