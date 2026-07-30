@@ -59,6 +59,7 @@ def invoke_json(
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=max_tokens,
+            response_format={"type": "json_object"},
         )
     except Exception as error:
         stats = ModelCallStats(

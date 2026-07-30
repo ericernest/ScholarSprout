@@ -60,6 +60,18 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(result.stats.model_calls, 1)
         self.assertEqual(result.stats.total_tokens, 50)
 
+    def test_fallback_removes_request_words_and_adds_multi_agent_core_queries(self) -> None:
+        planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
+
+        plan = planner.plan("介绍多智能体方向", make_profile()).plan
+
+        self.assertEqual(plan.normalized_domain, "多智能体")
+        self.assertTrue(any("ARXIV:2303.17760" == query for query in plan.search_queries))
+        self.assertTrue(any("ARXIV:2308.08155" == query for query in plan.search_queries))
+        self.assertTrue(
+            any("multi-agent systems" in query for query in plan.search_queries)
+        )
+
 
 class FakeResponse:
     def __init__(

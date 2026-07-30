@@ -255,20 +255,28 @@ class StructuredOnboardingGenerator:
                 paths = ["learning_path"]
             on_section(event_name, data, paths)
 
-        development_payload, development_stats = self._call_section(
-            "development", request, profile, plan, papers, payload
-        )
+        def call_section(
+            section: str,
+            completed: dict[str, Any],
+        ) -> tuple[dict[str, Any], ModelCallStats]:
+            try:
+                return self._call_section(
+                    section, request, profile, plan, papers, completed
+                )
+            except GenerationError as error:
+                return (
+                    self._fallback_section(section, request, plan, papers),
+                    error.stats,
+                )
+
+        development_payload, development_stats = call_section("development", payload)
         apply_section("development", development_payload, development_stats)
         completed_snapshot = json.loads(json.dumps(payload, ensure_ascii=False))
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="onboarding-content") as executor:
             futures = {
                 executor.submit(
-                    self._call_section,
+                    call_section,
                     section,
-                    request,
-                    profile,
-                    plan,
-                    papers,
                     completed_snapshot,
                 ): section
                 for section in ("landscape", "learning_path")
@@ -318,10 +326,30 @@ class StructuredOnboardingGenerator:
                 "the experiment step also needs reproducibility_checklist and evaluation_metrics."
             ),
         }
+        examples = {
+            "development": (
+                '{"domain":"domain","text":"summary","prerequisites":[{"name":"foundation",'
+                '"why_needed":"reason","key_points":["concept"],"related_paper_ids":[]}],'
+                '"development_stages":[{"stage_id":"stage_1","name":"stage","historical_period":"2020-2022",'
+                '"summary":"summary","related_paper_ids":[]}],"paper_guidance":[],"evidence_claims":[]}'
+            ),
+            "landscape": (
+                '{"current_landscape":{"problems":["problem"],"subdirections":["direction"],'
+                '"problem_details":[],"subdirection_details":[]},"evidence_claims":[]}'
+            ),
+            "learning_path": (
+                '{"learning_path":[{"step":"1","goal":"goal","topics":["topic"],'
+                '"paper_ids":[],"activities":["activity"],"completion_criteria":["criterion"],'
+                '"expected_outcome":"outcome"}],"evidence_claims":[]}'
+            ),
+        }
         system_prompt = (
             "You generate one section of a grounded domain onboarding result. Return one JSON object only. "
             f"Write explanatory prose in {request.language}; preserve English paper titles and technical terms. "
-            "Use only allowed paper IDs and stage IDs. " + instructions[section]
+            "Use only allowed paper IDs and stage IDs. "
+            + instructions[section]
+            + " Use these exact top-level keys. Example JSON shape: "
+            + examples[section]
         )
         user_payload = {
             "request": request.model_dump(mode="json"),
@@ -331,14 +359,159 @@ class StructuredOnboardingGenerator:
             "completed_sections": completed,
         }
         try:
-            return invoke_json(
+            payload, stats = invoke_json(
                 self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=max(1200, self.config.generation_max_tokens // 2),
             )
+            return (
+                self._complete_section_payload(
+                    section, payload, request, plan, papers
+                ),
+                stats,
+            )
         except StructuredLLMError as error:
             raise GenerationError(str(error), stats=error.stats) from error
+
+    def _complete_section_payload(
+        self,
+        section: str,
+        payload: dict[str, Any],
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
+        papers: list[RankedPaper],
+    ) -> dict[str, Any]:
+        expected = {
+            "development": ("domain", "prerequisites", "development_stages"),
+            "landscape": ("current_landscape",),
+            "learning_path": ("learning_path",),
+        }[section]
+        candidates = [payload]
+        for key in (section, "result", "data", "output"):
+            nested = payload.get(key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        selected = next(
+            (
+                candidate
+                for candidate in candidates
+                if any(key in candidate for key in expected)
+            ),
+            payload,
+        )
+        completed = dict(selected)
+        fallback = self._fallback_section(section, request, plan, papers)
+        for key in expected:
+            value = completed.get(key)
+            if value is None or value == "" or value == [] or value == {}:
+                completed[key] = fallback[key]
+        return completed
+
+    def _fallback_section(
+        self,
+        section: str,
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
+        papers: list[RankedPaper],
+    ) -> dict[str, Any]:
+        paper_ids = [paper.paper_id for paper in papers]
+        if section == "development":
+            if request.language == "en-US":
+                prerequisites = [
+                    ("Problem definitions and terminology", "Build a shared vocabulary before comparing methods.", ["core tasks", "assumptions", "terminology"]),
+                    ("Core methods and tools", "Understand the main technical building blocks used by representative work.", ["method families", "tooling", "implementation"]),
+                    ("Research evaluation", "Judge evidence, reproducibility, and practical limitations.", ["baselines", "metrics", "reproducibility"]),
+                ]
+                stage_names = [
+                    ("Problem formation and foundations", "The field establishes its core tasks, assumptions, and foundational approaches."),
+                    ("Method consolidation and scaling", "Research develops reusable method families and increasingly capable systems."),
+                    ("Evaluation, deployment, and frontiers", "Attention expands to robust evaluation, real-world use, and open problems."),
+                ]
+                text = (
+                    f"This onboarding map introduces {plan.normalized_domain} through prerequisites, "
+                    "research development, representative papers, current directions, and an executable learning path."
+                )
+            else:
+                prerequisites = [
+                    ("问题定义与领域术语", "先建立共同词汇，才能准确比较不同方法与论文。", ["核心任务", "基本假设", "常用术语"]),
+                    ("核心方法与工具", "理解代表性工作共同依赖的技术模块与实现方式。", ["方法范式", "常用工具", "实现流程"]),
+                    ("科研评测与论文阅读", "用于判断证据强弱、复现条件与方法边界。", ["基线对比", "评价指标", "可复现性"]),
+                ]
+                stage_names = [
+                    ("问题形成与理论奠基", "研究首先明确核心问题、基本假设与代表性基础方法。"),
+                    ("方法体系化与能力扩展", "研究逐步形成可复用的方法体系，并扩展系统能力与应用范围。"),
+                    ("评测、落地与前沿探索", "研究重点进一步转向可靠评测、真实场景落地和开放问题。"),
+                ]
+                text = (
+                    f"本入门地图从前置知识、研究发展、代表论文、当前方向和学习实践五个层面介绍"
+                    f"{plan.normalized_domain}，并为后续阅读与实验提供可执行起点。"
+                )
+            prerequisite_payload = [
+                {
+                    "name": name,
+                    "why_needed": reason,
+                    "key_points": points,
+                    "related_paper_ids": paper_ids[index : index + 1],
+                }
+                for index, (name, reason, points) in enumerate(prerequisites)
+            ]
+            stage_payload = []
+            for index, (name, summary) in enumerate(stage_names):
+                paper = papers[min(index, len(papers) - 1)] if papers else None
+                year = paper.year if paper else None
+                stage_payload.append(
+                    {
+                        "stage_id": f"stage_{index + 1}",
+                        "name": name,
+                        "historical_period": (
+                            f"{year} 年前后（以入选论文为线索）"
+                            if year
+                            else "具体年代待进一步考证"
+                        ),
+                        "start_year": year,
+                        "end_year": year,
+                        "summary": summary,
+                        "motivation": summary,
+                        "transition_from_previous": "" if index == 0 else summary,
+                        "related_paper_ids": [paper.paper_id] if paper else [],
+                        "prerequisite_ids": [],
+                        "core_concepts": prerequisites[index][2],
+                        "main_techniques": [],
+                        "open_problems": [],
+                    }
+                )
+            return {
+                "domain": plan.normalized_domain,
+                "text": text,
+                "prerequisites": prerequisite_payload,
+                "development_stages": stage_payload,
+                "paper_guidance": [],
+                "evidence_claims": [],
+            }
+        if section == "landscape":
+            if request.language == "en-US":
+                problems = [
+                    "How should the core task be defined and decomposed?",
+                    "How can effectiveness, efficiency, and reliability be balanced?",
+                    "How should reproducible, realistic evaluation be designed?",
+                ]
+            else:
+                problems = [
+                    "如何清晰定义并分解该领域的核心任务？",
+                    "如何兼顾方法效果、效率与可靠性？",
+                    "如何建立可复现且贴近真实场景的评测？",
+                ]
+            return {
+                "current_landscape": {
+                    "problems": problems,
+                    "subdirections": list(plan.expected_subdirections),
+                    "problem_details": [],
+                    "subdirection_details": [],
+                },
+                "evidence_claims": [],
+            }
+        return {"learning_path": [], "evidence_claims": []}
 
     def repair(
         self,
@@ -495,6 +668,17 @@ class StructuredOnboardingGenerator:
                     f"本方案面向{profile.preference}学习偏好，按领域演进、当前全景和实践路径"
                     f"系统介绍{plan.normalized_domain}，并为目标“{profile.goal}”绑定可验证论文与里程碑。"
                 )
+            selected_papers = []
+            for paper in papers:
+                reference = references[paper.paper_id]
+                selected_papers.append(
+                    SelectedPaper.from_ranked(paper).model_copy(
+                        update={
+                            "contribution": reference.contribution,
+                            "reading_focus": list(reference.reading_focus),
+                        }
+                    )
+                )
             return DomainOnboardingOutput(
                 language=request.language,
                 domain=str(payload.get("domain") or plan.normalized_domain or request.query),
@@ -505,7 +689,7 @@ class StructuredOnboardingGenerator:
                 development_stages=stages,
                 current_landscape=landscape,
                 learning_path=learning_path,
-                papers=[SelectedPaper.from_ranked(paper) for paper in papers],
+                papers=selected_papers,
                 evidence_claims=evidence_claims,
                 reproducibility={
                     "policy_version": self.config.policy_version,

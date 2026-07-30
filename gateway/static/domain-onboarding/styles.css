@@ -222,6 +222,7 @@ button { color: inherit; }
 .paper-title small { color: var(--muted); line-height: 1.45; }
 .paper-score { display: grid; justify-items: end; gap: 0.28rem; color: var(--muted); font-size: 0.62rem; }
 .paper-score b { color: var(--color-accent); font: 700 0.78rem var(--font-mono); }
+.paper-score b small { margin-left: 0.12rem; color: var(--muted); font-size: 0.54rem; font-weight: 500; }
 
 .quality-summary { display: grid; grid-template-columns: 180px 1fr; gap: 0.85rem; }
 .score-card { display: grid; place-items: center; align-content: center; gap: 0.25rem; min-height: 150px; border: 1px solid var(--color-accent-line); border-radius: var(--radius-card); background: radial-gradient(circle, var(--color-accent-wash), transparent 70%); }
@@ -257,6 +258,10 @@ button { color: inherit; }
 .detail-summary, .detail-block { padding: 0.7rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-soft); }
 .detail-summary { color: var(--color-ink-soft); font-size: 0.72rem; line-height: 1.6; }
 .detail-block h3 { margin: 0 0 0.5rem; color: var(--color-ink); font-size: 0.72rem; }
+.score-note { margin-left: 0.35rem; color: var(--muted); font-size: 0.58rem; font-weight: 500; }
+.paper-score-grid { display: grid; gap: 0.5rem; }
+.paper-score-row { display: grid; grid-template-columns: 76px 1fr 30px; align-items: center; gap: 0.45rem; color: var(--muted); font-size: 0.65rem; }
+.paper-score-row b { color: var(--color-ink); font: 700 0.65rem var(--font-mono); text-align: right; }
 .detail-block ul { margin: 0; padding-left: 1rem; }
 .detail-block li { margin: 0.35rem 0; color: var(--muted); font-size: 0.68rem; line-height: 1.5; }
 .paper-mini { display: grid; gap: 0.34rem; width: 100%; padding: 0.65rem; border: 1px solid var(--line); border-radius: var(--radius-control); color: inherit; background: var(--color-surface-soft); cursor: pointer; text-align: left; }

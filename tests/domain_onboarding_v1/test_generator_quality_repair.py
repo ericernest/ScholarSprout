@@ -48,6 +48,62 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(result.output.language, "zh-CN")
         self.assertTrue(result.output.learning_path[3].reproducibility_checklist)
 
+    def test_incremental_generation_degrades_to_complete_sections_when_json_is_invalid(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        model = FakeJSONModel(["not json", "not json", "not json"])
+        events = []
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda event, data, paths: events.append((event, data, paths)),
+        )
+
+        self.assertEqual(
+            [item[0] for item in events],
+            ["development_ready", "landscape_ready", "learning_path_ready"],
+        )
+        self.assertEqual(result.stats.model_calls, 3)
+        self.assertEqual(len(result.output.prerequisites), 3)
+        self.assertEqual(len(result.output.development_stages), 3)
+        self.assertTrue(result.output.current_landscape.problems)
+        self.assertEqual(len(result.output.learning_path), 5)
+        self.assertTrue(all(paper.contribution for paper in result.output.papers))
+        self.assertTrue(all(paper.reading_focus for paper in result.output.papers))
+
+    def test_incremental_generation_unwraps_named_section_payloads(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        development = make_generation_payload([paper.paper_id for paper in ranked])
+        model = FakeJSONModel(
+            [
+                {"development": development},
+                {"landscape": {"current_landscape": development["current_landscape"]}},
+                {"learning_path": {"learning_path": development["learning_path"]}},
+            ]
+        )
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        self.assertEqual(len(result.output.prerequisites), 3)
+        self.assertEqual(len(result.output.development_stages), 3)
+        self.assertEqual(len(result.output.learning_path), 5)
+        self.assertTrue(result.output.papers[0].contribution)
+        self.assertTrue(result.output.papers[0].reading_focus)
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(

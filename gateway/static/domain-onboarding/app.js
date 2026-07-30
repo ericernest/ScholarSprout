@@ -48,11 +48,13 @@ const PRIORITY_LABELS = {
 const QUALITY_LABELS = {
   structure: "结构完整性",
   paper_validity: "论文真实性",
-  relevance: "内容相关性",
-  evidence_coverage: "证据覆盖",
+  paper_relevance: "论文相关性",
+  evidence_grounding: "证据支撑",
+  topic_coverage: "主题覆盖",
+  development_coherence: "发展连贯性",
   learning_path: "路线可执行性",
-  personalization: "个性化",
-  content_completeness: "内容完整度",
+  goal_alignment: "目标匹配",
+  language_alignment: "语言一致性",
 };
 
 const state = {
@@ -206,10 +208,14 @@ function consumeSnapshot(snapshot, persist = true) {
   if (!snapshot || typeof snapshot !== "object") return;
   state.snapshot = snapshot;
   state.revision = Math.max(state.revision, Number(snapshot.revision) || 0);
-  state.partial = snapshot.partial_result && typeof snapshot.partial_result === "object"
-    ? snapshot.partial_result
-    : state.partial;
-  state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : state.result;
+  if (Object.prototype.hasOwnProperty.call(snapshot, "partial_result")) {
+    state.partial = snapshot.partial_result && typeof snapshot.partial_result === "object"
+      ? snapshot.partial_result
+      : {};
+  }
+  if (Object.prototype.hasOwnProperty.call(snapshot, "result")) {
+    state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : null;
+  }
   render();
   if (persist) saveWorkspace();
 
@@ -248,7 +254,7 @@ function handleEvent(event) {
   state.revision = revision;
 
   const data = payload.data || {};
-  if (payload.event === "completed" && data.result) {
+  if (data.result && typeof data.result === "object") {
     state.result = data.result;
   } else {
     for (const path of payload.replace_paths || []) {
@@ -370,8 +376,12 @@ function renderOverview(data) {
 }
 
 function renderPrerequisites(data) {
-  const items = data.prerequisites;
-  if (!Array.isArray(items)) return;
+  const items = Array.isArray(data.prerequisites)
+    ? data.prerequisites
+    : isTerminalTask()
+      ? []
+      : null;
+  if (!items) return;
   const container = $("prerequisites-content");
   container.classList.remove("loading-grid");
   container.innerHTML = items.length
@@ -387,8 +397,13 @@ function renderPrerequisites(data) {
 }
 
 function renderDevelopment(data) {
-  if (!Array.isArray(data.development_stages)) return;
-  const items = [...data.development_stages].sort((a, b) => Number(a.sequence) - Number(b.sequence));
+  const source = Array.isArray(data.development_stages)
+    ? data.development_stages
+    : isTerminalTask()
+      ? []
+      : null;
+  if (!source) return;
+  const items = [...source].sort((a, b) => Number(a.sequence) - Number(b.sequence));
   const container = $("development-content");
   container.classList.remove("loading-grid");
   container.innerHTML = items.length
@@ -409,7 +424,13 @@ function renderDevelopment(data) {
 
 function renderLandscape(data) {
   const landscape = data.current_landscape;
-  if (!landscape || typeof landscape !== "object") return;
+  if (!landscape || typeof landscape !== "object") {
+    if (!isTerminalTask()) return;
+    const container = $("landscape-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = emptyCopy("任务在概念全景生成前结束，已保留其它可用内容。");
+    return;
+  }
   const problems = landscape.problem_details || (landscape.problems || []).map((name, index) => ({
     problem_id: `problem-${index}`,
     name,
@@ -450,7 +471,13 @@ function renderLandscape(data) {
 }
 
 function renderLearningPath(data) {
-  if (!Array.isArray(data.learning_path)) return;
+  if (!Array.isArray(data.learning_path)) {
+    if (!isTerminalTask()) return;
+    const container = $("learning-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = emptyCopy("任务在学习路线生成前结束，可重试任务继续生成。");
+    return;
+  }
   const container = $("learning-content");
   container.classList.remove("loading-grid");
   container.innerHTML = data.learning_path.length
@@ -499,7 +526,7 @@ function renderPapers(data) {
           <h3>${escapeHtml(paper.title)}</h3>
           <small>${escapeHtml((paper.authors || []).slice(0, 4).join("、") || "作者未知")} · ${escapeHtml(paper.year || "年份未知")}</small>
         </span>
-        <span class="paper-score"><b>${formatScore(paper.final_score)}</b><span>综合得分</span></span>
+        <span class="paper-score"><b>${formatPercentScore(paper.final_score)}<small>/100</small></b><span>综合推荐度</span></span>
       </button>
     `).join("")
     : emptyCopy("当前筛选下没有论文。");
@@ -507,7 +534,17 @@ function renderPapers(data) {
 
 function renderQuality(data) {
   const quality = data.quality;
-  if (!quality || typeof quality !== "object") return;
+  if (!quality || typeof quality !== "object") {
+    if (!isTerminalTask()) return;
+    const container = $("quality-content");
+    container.classList.remove("loading-grid");
+    container.innerHTML = emptyCopy(
+      data.error
+        ? `任务在质量评估前结束：${data.error}`
+        : "本次任务没有返回质量评估结果。"
+    );
+    return;
+  }
   const dimensions = Object.entries(quality.dimensions || {});
   const gates = quality.hard_gates || [];
   const issues = quality.issues || [];
@@ -684,6 +721,28 @@ function showDetail(kind, id) {
 }
 
 function renderPaperDetail(paper) {
+  const guidance = paperGuidance(paper);
+  const contribution = paper.contribution || guidance.contribution;
+  const readingFocus = (paper.reading_focus || []).length
+    ? paper.reading_focus
+    : guidance.reading_focus;
+  const scoreRows = [
+    ["综合推荐度", paper.final_score],
+    ["主题相关", paper.relevance_score],
+    ["领域语境", paper.context_score],
+    ["引用影响", paper.citation_score],
+    ["时效性", paper.recency_score],
+    ["内容差异性", paper.diversity_score],
+  ].filter(([, value]) => Number.isFinite(Number(value)));
+  const metadata = [
+    paper.source ? `来源：${paper.source}` : "",
+    paper.citation_count != null && Number.isFinite(Number(paper.citation_count))
+      ? `引用数：${Number(paper.citation_count)}`
+      : "",
+    paper.doi ? `DOI：${paper.doi}` : "",
+    paper.arxiv_id ? `arXiv：${paper.arxiv_id}` : "",
+    (paper.publication_types || []).length ? `类型：${paper.publication_types.join("、")}` : "",
+  ].filter(Boolean);
   state.selected = { kind: "paper", id: String(paper.paper_id) };
   $("inspector-title").textContent = paper.title || "论文详情";
   $("inspector-subtitle").textContent = `${paper.year || "年份未知"} · ${paper.paper_role || "论文"}`;
@@ -698,8 +757,21 @@ function renderPaperDetail(paper) {
         <h3>作者</h3>
         <p class="detail-summary">${escapeHtml((paper.authors || []).join("、") || "作者信息暂无")}</p>
       </div>
-      ${paper.contribution ? `<div class="detail-block"><h3>主要贡献</h3><p class="detail-summary">${escapeHtml(paper.contribution)}</p></div>` : ""}
-      ${detailList("阅读重点", paper.reading_focus)}
+      ${metadata.length ? detailList("论文元数据", metadata) : ""}
+      <div class="detail-block">
+        <h3>推荐依据 <span class="score-note">归一化信号 · 非论文质量绝对分</span></h3>
+        <div class="paper-score-grid">
+          ${scoreRows.map(([label, value]) => `
+            <div class="paper-score-row">
+              <span>${escapeHtml(label)}</span>
+              <span class="mini-track"><span style="width:${formatPercentScore(value)}%"></span></span>
+              <b>${formatPercentScore(value)}</b>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+      ${contribution ? `<div class="detail-block"><h3>主要贡献</h3><p class="detail-summary">${escapeHtml(contribution)}</p></div>` : ""}
+      ${detailList("阅读重点", readingFocus)}
       ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
         ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
@@ -795,7 +867,27 @@ async function retryTask() {
 }
 
 function currentData() {
-  return state.result || state.partial || null;
+  const partial = state.partial && typeof state.partial === "object" ? state.partial : {};
+  const result = state.result && typeof state.result === "object" ? state.result : {};
+  if (!Object.keys(partial).length && !Object.keys(result).length) return null;
+  return { ...partial, ...result };
+}
+
+function isTerminalTask() {
+  return TERMINAL_STATES.has(state.snapshot?.state);
+}
+
+function paperGuidance(paper) {
+  const data = currentData() || {};
+  const references = [
+    ...(data.development_stages || []).flatMap((stage) => stage.representative_papers || []),
+    ...(data.learning_path || []).flatMap((step) => step.papers || []),
+  ];
+  const matches = references.filter((item) => String(item.paper_id) === String(paper.paper_id));
+  return {
+    contribution: matches.find((item) => item.contribution)?.contribution || "",
+    reading_focus: [...new Set(matches.flatMap((item) => item.reading_focus || []))],
+  };
 }
 
 function saveWorkspace() {
@@ -924,6 +1016,12 @@ function qualityStatusLabel(value) {
 function formatScore(value) {
   const score = Number(value);
   return Number.isFinite(score) ? score.toFixed(2) : "—";
+}
+
+function formatPercentScore(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
 }
 
 function escapeHtml(value) {

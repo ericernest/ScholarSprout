@@ -31,6 +31,7 @@ class OpenAIClient:
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> Any:
         model_name = self.config.model_name.strip()
         if not model_name:
@@ -46,6 +47,8 @@ class OpenAIClient:
             kwargs["tool_choice"] = tool_choice
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
         return self.client.chat.completions.create(**kwargs)
 

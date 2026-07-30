@@ -36,6 +36,10 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("new EventSource", script)
         self.assertIn("/domain_onboarding/jobs/", script)
         self.assertIn("replace_paths", script)
+        self.assertIn("return { ...partial, ...result };", script)
+        self.assertIn("formatPercentScore(paper.final_score)", script)
+        self.assertIn("paperGuidance(paper)", script)
+        self.assertIn("任务在质量评估前结束", script)
         self.assertIn('action: "upload_paper"', script)
 
 
