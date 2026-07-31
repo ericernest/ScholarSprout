@@ -65,7 +65,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         )
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
         self.assertLessEqual(
-            2 * config.generation_section_timeout_seconds,
+            4 * config.generation_section_timeout_seconds,
             config.generation_timeout_seconds,
         )
 
