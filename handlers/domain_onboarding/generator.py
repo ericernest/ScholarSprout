@@ -280,9 +280,15 @@ class StructuredOnboardingGenerator:
                 paths = ["learning_path"]
             on_section(event_name, data, paths)
 
-        development_payload, development_stats = self._call_section(
-            "development", request, profile, plan, papers, payload
-        )
+        try:
+            development_payload, development_stats = self._call_section(
+                "development", request, profile, plan, papers, payload
+            )
+        except GenerationError as error:
+            raise GenerationError(
+                f"development section generation failed: {error}",
+                stats=error.stats,
+            ) from error
         apply_section("development", development_payload, development_stats)
         completed_snapshot = json.loads(json.dumps(payload, ensure_ascii=False))
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="onboarding-content") as executor:
@@ -398,13 +404,14 @@ class StructuredOnboardingGenerator:
             + " Use these exact top-level keys. Example JSON shape: "
             + examples[section]
         )
-        user_payload = {
-            "request": request.model_dump(mode="json"),
-            "learner_profile": profile.model_dump(mode="json"),
-            "research_plan": plan.model_dump(mode="json"),
-            "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
-            "completed_sections": completed,
-        }
+        user_payload = self._section_user_payload(
+            section,
+            request,
+            profile,
+            plan,
+            papers,
+            completed,
+        )
         section_model = self.section_models.get(section, self.model)
 
         def generate_candidate(candidate: Any, timeout_seconds: float | None):
@@ -420,7 +427,12 @@ class StructuredOnboardingGenerator:
                 timeout_seconds=timeout_seconds,
             )
             try:
-                completed = self._complete_section_payload(section, payload, papers)
+                completed = self._complete_section_payload(
+                    section,
+                    payload,
+                    papers,
+                    default_domain=plan.normalized_domain,
+                )
             except GenerationError as error:
                 error.stats = stats
                 raise
@@ -455,6 +467,8 @@ class StructuredOnboardingGenerator:
         section: str,
         payload: dict[str, Any],
         papers: list[RankedPaper],
+        *,
+        default_domain: str = "",
     ) -> dict[str, Any]:
         expected = {
             "development": ("domain", "prerequisites", "development_stages"),
@@ -476,8 +490,45 @@ class StructuredOnboardingGenerator:
             payload,
         )
         completed = dict(selected)
+        # The normalized domain is planner-owned data. Copying it here is safer
+        # than spending another model attempt when a structurally valid
+        # development response merely omits that redundant field.
+        if section == "development" and not str(completed.get("domain") or "").strip():
+            completed["domain"] = default_domain
         self._validate_section_payload(section, completed, papers)
         return completed
+
+    def _section_user_payload(
+        self,
+        section: str,
+        request: DomainOnboardingRequest,
+        profile: LearnerProfile,
+        plan: DomainResearchPlan,
+        papers: list[RankedPaper],
+        completed: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Send each section only the context it can actually consume."""
+        plan_payload = plan.model_dump(
+            mode="json",
+            include={"normalized_domain", "perspectives", "expected_subdirections"},
+        )
+        completed_keys = {
+            "development": set(),
+            "landscape": {"domain", "development_stages"},
+            "learning_path": {"domain", "prerequisites", "development_stages"},
+        }[section]
+        return {
+            "request": {
+                "query": request.query,
+                "language": request.language,
+            },
+            "learner_profile": profile.model_dump(mode="json"),
+            "research_plan": plan_payload,
+            "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
+            "completed_sections": {
+                key: value for key, value in completed.items() if key in completed_keys
+            },
+        }
 
     def _validate_section_payload(
         self,
