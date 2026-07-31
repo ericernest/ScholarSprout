@@ -182,7 +182,7 @@ async function sendMessage() {
     if (requestMode === "domain_onboarding") {
       const job = await submitDomainOnboardingJob(content);
       appendDomainOnboardingCard(job, content);
-      watchDomainOnboardingCard(job.task_id);
+      watchDomainOnboardingCard(job.task_id, job.access_token);
       return;
     }
 
@@ -239,6 +239,7 @@ async function submitDomainOnboardingJob(content) {
     schema_version: "1.5",
     saved_at: new Date().toISOString(),
     task_id: payload.task_id,
+    access_token: payload.access_token,
     request: { query: content, session_id: sessionId, user_id: "local-web", metadata: {} },
     snapshot: { ...payload, progress: 0 },
   });
@@ -276,7 +277,7 @@ function appendDomainOnboardingCard(job, query) {
 }
 
 // Keep the chat card useful while the user decides when to open the workspace.
-function watchDomainOnboardingCard(taskId) {
+function watchDomainOnboardingCard(taskId, accessToken) {
   const labels = {
     queued: "等待执行",
     running: "正在生成",
@@ -292,7 +293,9 @@ function watchDomainOnboardingCard(taskId) {
       .find((node) => node.dataset.taskId === taskId);
     if (!item) return;
     try {
-      const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}`);
+      const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}`, {
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      });
       if (!response.ok) throw new Error(String(response.status));
       const snapshot = await response.json();
       const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
@@ -302,7 +305,13 @@ function watchDomainOnboardingCard(taskId) {
       item.querySelector(".paper-card-kicker").textContent =
         snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
       const saved = loadDomainWorkspace() || {};
-      saveDomainWorkspace({ ...saved, saved_at: new Date().toISOString(), task_id: taskId, snapshot });
+      saveDomainWorkspace({
+        ...saved,
+        saved_at: new Date().toISOString(),
+        task_id: taskId,
+        access_token: accessToken || saved.access_token || saved.snapshot?.access_token || "",
+        snapshot,
+      });
       if (!["completed", "failed", "cancelled", "interrupted"].includes(snapshot.state)) {
         window.setTimeout(poll, 1800);
       }
