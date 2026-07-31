@@ -13,6 +13,9 @@ PaperRole = Literal[
     "survey", "foundational", "method", "evaluation", "application", "frontier", "other"
 ]
 ReadingPriority = Literal["core", "recommended", "optional", "extended"]
+RelationStatus = Literal[
+    "explicit", "paper_inferred", "semantic_inferred", "unresolved"
+]
 QualityDimension = Literal[
     "structure",
     "paper_validity",
@@ -332,6 +335,25 @@ class Prerequisite(OnboardingModel):
         return self
 
 
+class StageBreakthrough(OnboardingModel):
+    breakthrough_id: str | None = None
+    name: str
+    description: str = ""
+    supporting_paper_ids: list[str] = Field(default_factory=list)
+    enabled_capabilities: list[str] = Field(default_factory=list)
+    limitation_problem_ids: list[str] = Field(default_factory=list)
+    relation_status: RelationStatus = "unresolved"
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "StageBreakthrough":
+        self.breakthrough_id = self.breakthrough_id or stable_id(
+            "breakthrough", self.name
+        )
+        self.supporting_paper_ids = list(dict.fromkeys(self.supporting_paper_ids))
+        self.limitation_problem_ids = list(dict.fromkeys(self.limitation_problem_ids))
+        return self
+
+
 class DevelopmentStage(OnboardingModel):
     stage_id: str | None = None
     sequence: int = Field(default=1, ge=1)
@@ -348,6 +370,8 @@ class DevelopmentStage(OnboardingModel):
     core_concepts: list[str] = Field(default_factory=list)
     main_techniques: list[str] = Field(default_factory=list)
     open_problems: list[str] = Field(default_factory=list)
+    breakthroughs: list[StageBreakthrough] = Field(default_factory=list)
+    related_problem_ids: list[str] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
     prerequisite_ids: list[str] = Field(default_factory=list)
 
@@ -356,6 +380,7 @@ class DevelopmentStage(OnboardingModel):
         self.stage_id = self.stage_id or stable_id("stage", self.name)
         self.historical_period = self.historical_period or self.period
         self.period = self.historical_period
+        self.related_problem_ids = list(dict.fromkeys(self.related_problem_ids))
         return self
 
 
@@ -368,6 +393,7 @@ class LandscapeProblem(OnboardingModel):
     emerged_in_stage_id: str | None = None
     affected_stage_ids: list[str] = Field(default_factory=list)
     related_subdirection_ids: list[str] = Field(default_factory=list)
+    relation_status: RelationStatus = "unresolved"
 
     @model_validator(mode="after")
     def ensure_id(self) -> "LandscapeProblem":
@@ -389,6 +415,7 @@ class SubdirectionDetail(OnboardingModel):
     related_stage_ids: list[str] = Field(default_factory=list)
     emerged_in_stage_id: str | None = None
     addresses_problem_ids: list[str] = Field(default_factory=list)
+    relation_status: RelationStatus = "unresolved"
 
     @model_validator(mode="after")
     def ensure_id(self) -> "SubdirectionDetail":
