@@ -44,6 +44,22 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("待生成", script)
         self.assertIn('action: "upload_paper"', script)
 
+    def test_protected_job_requests_propagate_access_token(self) -> None:
+        chat_script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        workspace_script = (STATIC_DIR / "domain-onboarding" / "app.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("watchDomainOnboardingCard(job.task_id, job.access_token)", chat_script)
+        self.assertIn("access_token: payload.access_token", chat_script)
+        self.assertIn("Authorization: `Bearer ${accessToken}`", chat_script)
+
+        self.assertIn('accessToken: ""', workspace_script)
+        self.assertIn("jobAuthHeaders({ Accept:", workspace_script)
+        self.assertIn('query.set("access_token", state.accessToken)', workspace_script)
+        self.assertIn("headers: jobAuthHeaders()", workspace_script)
+        self.assertIn("access_token: state.accessToken", workspace_script)
+
 
 if __name__ == "__main__":
     unittest.main()

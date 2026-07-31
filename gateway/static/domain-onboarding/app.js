@@ -59,6 +59,7 @@ const QUALITY_LABELS = {
 
 const state = {
   taskId: "",
+  accessToken: "",
   snapshot: null,
   partial: {},
   result: null,
@@ -83,7 +84,10 @@ async function initialize() {
 
   if (requestedTaskId) {
     state.taskId = requestedTaskId;
-    if (saved?.task_id === requestedTaskId) consumeSnapshot(saved.snapshot, false);
+    if (saved?.task_id === requestedTaskId) {
+      state.accessToken = saved.access_token || saved.snapshot?.access_token || "";
+      consumeSnapshot(saved.snapshot, false);
+    }
   } else if (query) {
     try {
       const job = await submitTask({
@@ -93,6 +97,7 @@ async function initialize() {
         metadata: {},
       });
       state.taskId = job.task_id;
+      state.accessToken = job.access_token || "";
       history.replaceState(null, "", `/app/domain-onboarding?task_id=${encodeURIComponent(state.taskId)}`);
     } catch (error) {
       showEmpty("任务创建失败", error.message, true);
@@ -100,6 +105,7 @@ async function initialize() {
     }
   } else if (saved?.task_id) {
     state.taskId = saved.task_id;
+    state.accessToken = saved.access_token || saved.snapshot?.access_token || "";
     consumeSnapshot(saved.snapshot, false);
     history.replaceState(null, "", `/app/domain-onboarding?task_id=${encodeURIComponent(state.taskId)}`);
   } else {
@@ -197,7 +203,7 @@ async function submitTask(request) {
 async function refreshSnapshot() {
   if (!state.taskId) return;
   const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}`, {
-    headers: { Accept: "application/json" },
+    headers: jobAuthHeaders({ Accept: "application/json" }),
   });
   const snapshot = await readJson(response);
   if (!response.ok) throw new Error(readError(snapshot, `读取任务失败（HTTP ${response.status}）`));
@@ -230,8 +236,12 @@ function consumeSnapshot(snapshot, persist = true) {
 
 function connectEvents() {
   if (!state.taskId || state.eventSource || TERMINAL_STATES.has(state.snapshot?.state)) return;
-  const after = state.lastEventId ? `?after=${state.lastEventId}` : "";
-  const source = new EventSource(`/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}/events${after}`);
+  const query = new URLSearchParams();
+  if (state.lastEventId) query.set("after", String(state.lastEventId));
+  if (state.accessToken) query.set("access_token", state.accessToken);
+  const queryString = query.toString();
+  const suffix = queryString ? `?${queryString}` : "";
+  const source = new EventSource(`/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}/events${suffix}`);
   state.eventSource = source;
   EVENT_NAMES.forEach((name) => source.addEventListener(name, handleEvent));
   source.onerror = () => {
@@ -823,7 +833,10 @@ async function cancelTask() {
   if (!state.taskId || TERMINAL_STATES.has(state.snapshot?.state)) return;
   $("cancel-button").disabled = true;
   try {
-    const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}`, { method: "DELETE" });
+    const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}`, {
+      method: "DELETE",
+      headers: jobAuthHeaders(),
+    });
     const payload = await readJson(response);
     if (!response.ok) throw new Error(readError(payload, "取消失败"));
     state.snapshot = { ...(state.snapshot || {}), state: payload.state || "cancel_requested" };
@@ -846,6 +859,7 @@ async function retryTask() {
     const job = await submitTask(request);
     closeLiveUpdates();
     state.taskId = job.task_id;
+    state.accessToken = job.access_token || "";
     state.snapshot = { ...job, progress: 0, request };
     state.partial = {};
     state.result = null;
@@ -908,6 +922,7 @@ function saveWorkspace() {
     schema_version: "1.5",
     saved_at: new Date().toISOString(),
     task_id: state.taskId,
+    access_token: state.accessToken,
     request,
     snapshot: {
       ...(state.snapshot || {}),
@@ -915,6 +930,12 @@ function saveWorkspace() {
       result: state.result,
     },
   }));
+}
+
+function jobAuthHeaders(headers = {}) {
+  return state.accessToken
+    ? { ...headers, Authorization: `Bearer ${state.accessToken}` }
+    : { ...headers };
 }
 
 function readWorkspace() {
