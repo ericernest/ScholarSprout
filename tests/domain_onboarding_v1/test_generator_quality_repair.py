@@ -613,6 +613,16 @@ class RepairTests(unittest.TestCase):
             make_plan(),
             ranked,
         ).output
+        expected_metadata = {
+            reference.paper_id: (
+                reference.reading_priority,
+                reference.is_canonical,
+            )
+            for reference in [
+                *output.development_stages[0].representative_papers,
+                *output.learning_path[0].papers,
+            ]
+        }
 
         repaired = TargetedRepairer(generator, config).code_executor.execute(
             output, ranked
@@ -624,11 +634,17 @@ class RepairTests(unittest.TestCase):
         ]
         self.assertTrue(all(reference.contribution for reference in references))
         self.assertTrue(all(reference.reading_focus for reference in references))
-        self.assertEqual(
-            {reference.reading_priority for reference in references},
-            {"core"},
+        self.assertTrue(
+            all(
+                (reference.reading_priority, reference.is_canonical)
+                == expected_metadata[reference.paper_id]
+                for reference in references
+            )
         )
-        self.assertTrue(all(reference.is_canonical for reference in references))
+        self.assertEqual(
+            repaired.learning_path[0].paper_bindings[0].learning_use,
+            "concept_introduction",
+        )
 
     def test_targeted_repair_prompt_receives_quality_issues(self) -> None:
         config = DomainOnboardingConfig()

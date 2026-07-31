@@ -37,6 +37,11 @@ class CodeRepairExecutor:
             )
         for stage in repaired.development_stages:
             stage.related_paper_ids = self._valid_unique(stage.related_paper_ids, allowed)
+            for breakthrough in stage.breakthroughs:
+                breakthrough.supporting_paper_ids = self._valid_unique(
+                    breakthrough.supporting_paper_ids,
+                    allowed,
+                )
             references = {
                 paper.paper_id: paper for paper in stage.representative_papers
             }
@@ -50,6 +55,16 @@ class CodeRepairExecutor:
         for index, step in enumerate(repaired.learning_path, start=1):
             step.step = str(index)
             step.paper_ids = self._valid_unique(step.paper_ids, allowed)
+            bindings_by_id = {
+                binding.paper_id: binding
+                for binding in step.paper_bindings
+                if binding.paper_id in step.paper_ids
+            }
+            step.paper_bindings = [
+                bindings_by_id[paper_id]
+                for paper_id in step.paper_ids
+                if paper_id in bindings_by_id
+            ]
             references = {paper.paper_id: paper for paper in step.papers}
             step.papers = [
                 self._reference(allowed_map[paper_id], references.get(paper_id))
