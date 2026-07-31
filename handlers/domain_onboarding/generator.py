@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from .config import DomainOnboardingConfig
 from .llm import StructuredLLMError, invoke_json
+from .relations import SemanticRelationResolver
 from .schemas import (
     CurrentLandscape,
     DevelopmentStage,
@@ -29,6 +30,7 @@ from .schemas import (
     QualityIssue,
     RankedPaper,
     SelectedPaper,
+    StageBreakthrough,
     SubdirectionDetail,
 )
 
@@ -195,6 +197,9 @@ class StructuredOnboardingGenerator:
         self.model = model
         self.config = config
         self.path_planner = SimpleStagePathPlanner()
+        self.relation_resolver = SemanticRelationResolver(
+            semantic_threshold=config.coverage_similarity_threshold
+        )
 
     @staticmethod
     def _positive_int(value: object) -> int | None:
@@ -332,12 +337,18 @@ class StructuredOnboardingGenerator:
             "development": (
                 "Return domain, text, exactly 3 prerequisites, exactly 3 chronological development_stages, "
                 "paper_guidance and evidence_claims. historical_period must be real calendar years or eras, never learner weeks. "
-                "Use start_year/end_year when known; stage 1 has empty transition, later stages explain the causal transition."
+                "Use start_year/end_year when known; stage 1 has empty transition, later stages explain the causal transition. "
+                "Every stage must include one or more breakthroughs. Each breakthrough has breakthrough_id, name, description, "
+                "supporting_paper_ids, enabled_capabilities and limitation_problem_ids. Use only allowed paper IDs; "
+                "limitation_problem_ids may stay empty until the landscape section is resolved."
             ),
             "landscape": (
                 "Return current_landscape and evidence_claims. Include 3 problems and 3-5 subdirections. "
                 "Each problem includes related papers, emerged_in_stage_id, affected_stage_ids and related_subdirection_ids. "
-                "Each subdirection includes related papers, emerged_in_stage_id and addresses_problem_ids."
+                "Each subdirection includes related papers, emerged_in_stage_id and addresses_problem_ids. "
+                "Use research_plan.expected_subdirections as the intended domain taxonomy; do not replace it with generic "
+                "paper roles such as survey, method, evaluation, or application. Only emit a relation ID when the prose or "
+                "shared paper evidence supports that relation."
             ),
             "learning_path": (
                 "Return five learning_path steps and evidence_claims. Bind foundational/survey papers early, method papers to step 3, "
@@ -350,7 +361,10 @@ class StructuredOnboardingGenerator:
                 '{"domain":"domain","text":"summary","prerequisites":[{"name":"foundation",'
                 '"why_needed":"reason","key_points":["concept"],"related_paper_ids":[]}],'
                 '"development_stages":[{"stage_id":"stage_1","name":"stage","historical_period":"2020-2022",'
-                '"summary":"summary","related_paper_ids":[]}],"paper_guidance":[],"evidence_claims":[]}'
+                '"summary":"summary","related_paper_ids":["paper_1"],"breakthroughs":['
+                '{"breakthrough_id":"breakthrough_1","name":"advance","description":"what changed",'
+                '"supporting_paper_ids":["paper_1"],"enabled_capabilities":["capability"],'
+                '"limitation_problem_ids":[]}]}],"paper_guidance":[],"evidence_claims":[]}'
             ),
             "landscape": (
                 '{"current_landscape":{"problems":["problem"],"subdirections":["direction"],'
@@ -442,6 +456,31 @@ class StructuredOnboardingGenerator:
                 raise GenerationError("development section is missing prerequisites")
             if not isinstance(stages, list):
                 raise GenerationError("development section is missing development stages")
+            allowed_ids = {paper.paper_id for paper in papers}
+            for index, stage in enumerate(stages):
+                breakthroughs = stage.get("breakthroughs") if isinstance(stage, dict) else None
+                if not isinstance(breakthroughs, list) or not breakthroughs:
+                    raise GenerationError(
+                        f"development stage {index} is missing breakthroughs"
+                    )
+                for breakthrough in breakthroughs:
+                    if not isinstance(breakthrough, dict):
+                        raise GenerationError(
+                            f"development stage {index} has an invalid breakthrough"
+                        )
+                    supporting_ids = set(
+                        self._strings(breakthrough.get("supporting_paper_ids"))
+                    )
+                    if not str(breakthrough.get("name") or "").strip() or not str(
+                        breakthrough.get("description") or ""
+                    ).strip():
+                        raise GenerationError(
+                            f"development stage {index} has an incomplete breakthrough"
+                        )
+                    if not supporting_ids or not supporting_ids <= allowed_ids:
+                        raise GenerationError(
+                            f"development stage {index} breakthrough has invalid paper evidence"
+                        )
             return
         if section == "landscape":
             landscape = payload.get("current_landscape")
@@ -492,11 +531,14 @@ class StructuredOnboardingGenerator:
             "Output fields: domain, text, prerequisites, development_stages, current_landscape, learning_path. "
             "Each prerequisite has name, why_needed, key_points, related_paper_ids. Each development stage has "
             "stage_id, name, historical_period, start_year, end_year, summary, motivation, transition_from_previous, related_paper_ids, prerequisite_ids, "
-            "core_concepts, main_techniques, open_problems. Use short stable stage_id values such as stage_1. "
+            "core_concepts, main_techniques, open_problems and breakthroughs. Each breakthrough has breakthrough_id, name, "
+            "description, supporting_paper_ids, enabled_capabilities and limitation_problem_ids. Use short stable IDs such as stage_1. "
             "current_landscape has problems:list[str], subdirections:list[str], problem_details and subdirection_details. "
             "Each problem detail has name, description, related_paper_ids and related_stage_ids. Each subdirection detail "
             "has name, description, why_it_matters, research_questions, related_paper_ids and related_stage_ids. "
             "Ground every landscape detail in allowed paper IDs and stage IDs. "
+            "Use research_plan.expected_subdirections as the domain taxonomy instead of generic paper-role categories. "
+            "Connect stages, breakthroughs, problems and subdirections only when explicit prose or shared paper evidence supports the edge. "
             "Each learning step has step, goal, topics, paper_ids, "
             "activities, completion_criteria, expected_outcome. Produce 3 development stages and 3-5 subdirections. "
             "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
@@ -596,6 +638,7 @@ class StructuredOnboardingGenerator:
             stages,
             references,
         )
+        landscape = self.relation_resolver.resolve(stages, landscape, papers)
         learning_path = self.path_planner.normalize(
             payload.get("learning_path"), profile=profile, papers=papers, references=references
         )
@@ -771,9 +814,6 @@ class StructuredOnboardingGenerator:
             references,
             stage_aliases,
         )
-        stage_ids = [str(stage.stage_id) for stage in stages if stage.stage_id]
-        problem_ids = [str(item.problem_id) for item in problem_details if item.problem_id]
-        subdirection_ids = [str(item.subdirection_id) for item in subdirection_details if item.subdirection_id]
         subdirection_aliases = {
             alias: str(item.subdirection_id)
             for item in subdirection_details
@@ -786,29 +826,18 @@ class StructuredOnboardingGenerator:
             if item.problem_id
             for alias in (str(item.problem_id), item.name)
         }
-        for index, problem in enumerate(problem_details):
-            if not problem.related_stage_ids and stage_ids:
-                problem.related_stage_ids = [stage_ids[index % len(stage_ids)]]
-            problem.emerged_in_stage_id = problem.emerged_in_stage_id or (problem.related_stage_ids[0] if problem.related_stage_ids else None)
-            problem.affected_stage_ids = problem.affected_stage_ids or list(problem.related_stage_ids)
+        for problem in problem_details:
             problem.related_subdirection_ids = list(dict.fromkeys(
                 subdirection_aliases[item]
                 for item in problem.related_subdirection_ids
                 if item in subdirection_aliases
             ))
-            if not problem.related_subdirection_ids and subdirection_ids:
-                problem.related_subdirection_ids = [subdirection_ids[index % len(subdirection_ids)]]
-        for index, subdirection in enumerate(subdirection_details):
-            if not subdirection.related_stage_ids and stage_ids:
-                subdirection.related_stage_ids = [stage_ids[index % len(stage_ids)]]
-            subdirection.emerged_in_stage_id = subdirection.emerged_in_stage_id or (subdirection.related_stage_ids[0] if subdirection.related_stage_ids else None)
+        for subdirection in subdirection_details:
             subdirection.addresses_problem_ids = list(dict.fromkeys(
                 problem_aliases[item]
                 for item in subdirection.addresses_problem_ids
                 if item in problem_aliases
             ))
-            if not subdirection.addresses_problem_ids and problem_ids:
-                subdirection.addresses_problem_ids = [problem_ids[index % len(problem_ids)]]
         return CurrentLandscape(
             problems=problem_names or [item.name for item in problem_details],
             subdirections=(
@@ -939,6 +968,51 @@ class StructuredOnboardingGenerator:
                 stage_prereqs = [
                     str(prerequisites[min(index, len(prerequisites) - 1)].prerequisite_id)
                 ]
+            breakthroughs = []
+            for raw_breakthrough in self._as_list(item.get("breakthroughs")):
+                if not isinstance(raw_breakthrough, dict):
+                    continue
+                name = str(raw_breakthrough.get("name") or "").strip()
+                description = str(
+                    raw_breakthrough.get("description") or ""
+                ).strip()
+                if not name or not description:
+                    continue
+                supporting_ids = self._valid_ids(
+                    raw_breakthrough.get("supporting_paper_ids"), references
+                )
+                if not supporting_ids:
+                    continue
+                breakthroughs.append(
+                    StageBreakthrough(
+                        breakthrough_id=raw_breakthrough.get("breakthrough_id"),
+                        name=name,
+                        description=description,
+                        supporting_paper_ids=supporting_ids,
+                        enabled_capabilities=self._strings(
+                            raw_breakthrough.get("enabled_capabilities")
+                        ),
+                        limitation_problem_ids=self._strings(
+                            raw_breakthrough.get("limitation_problem_ids")
+                        ),
+                    )
+                )
+            if not breakthroughs:
+                raise GenerationError(
+                    f"development stage {index} has no grounded breakthrough"
+                )
+            ids = list(
+                dict.fromkeys(
+                    [
+                        *ids,
+                        *(
+                            paper_id
+                            for breakthrough in breakthroughs
+                            for paper_id in breakthrough.supporting_paper_ids
+                        ),
+                    ]
+                )
+            )
             refs = [references[paper_id].model_copy(deep=True) for paper_id in ids]
             results.append(
                 DevelopmentStage(
@@ -958,6 +1032,7 @@ class StructuredOnboardingGenerator:
                     core_concepts=self._strings(item.get("core_concepts")),
                     main_techniques=self._strings(item.get("main_techniques")),
                     open_problems=self._strings(item.get("open_problems")),
+                    breakthroughs=breakthroughs,
                     related_paper_ids=ids,
                     prerequisite_ids=stage_prereqs,
                 )

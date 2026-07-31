@@ -257,6 +257,34 @@ class CompositeQualityEvaluator:
         stage_ids = {str(item.stage_id) for item in output.development_stages}
         problem_ids = {str(item.problem_id) for item in output.current_landscape.problem_details}
         subdirection_ids = {str(item.subdirection_id) for item in output.current_landscape.subdirection_details}
+        problem_by_id = {
+            str(item.problem_id): item
+            for item in output.current_landscape.problem_details
+        }
+        direction_by_id = {
+            str(item.subdirection_id): item
+            for item in output.current_landscape.subdirection_details
+        }
+        stage_relation_score = _average(
+            float(
+                bool(stage.breakthroughs)
+                and (not problem_ids or bool(stage.related_problem_ids))
+                and set(stage.related_problem_ids) <= problem_ids
+                and all(
+                    bool(item.description.strip())
+                    and bool(item.supporting_paper_ids)
+                    and set(item.supporting_paper_ids) <= set(stage.related_paper_ids)
+                    and (not problem_ids or bool(item.limitation_problem_ids))
+                    and set(item.limitation_problem_ids) <= problem_ids
+                    for item in stage.breakthroughs
+                )
+            )
+            for stage in output.development_stages
+        )
+        relation_contract_present = any(
+            stage.breakthroughs or stage.related_problem_ids
+            for stage in output.development_stages
+        )
         problem_detail_score = _average(
             float(
                 bool(item.description.strip())
@@ -268,6 +296,14 @@ class CompositeQualityEvaluator:
                 and item.emerged_in_stage_id in stage_ids
                 and set(item.affected_stage_ids) <= stage_ids
                 and set(item.related_subdirection_ids) <= subdirection_ids
+                and (
+                    not relation_contract_present
+                    or all(
+                        str(item.problem_id)
+                        in direction_by_id[direction_id].addresses_problem_ids
+                        for direction_id in item.related_subdirection_ids
+                    )
+                )
             )
             for item in output.current_landscape.problem_details
         )
@@ -282,6 +318,14 @@ class CompositeQualityEvaluator:
                 and bool(item.addresses_problem_ids)
                 and item.emerged_in_stage_id in stage_ids
                 and set(item.addresses_problem_ids) <= problem_ids
+                and (
+                    not relation_contract_present
+                    or all(
+                        str(item.subdirection_id)
+                        in problem_by_id[problem_id].related_subdirection_ids
+                        for problem_id in item.addresses_problem_ids
+                    )
+                )
             )
             for item in output.current_landscape.subdirection_details
         )
@@ -294,6 +338,16 @@ class CompositeQualityEvaluator:
             subdirection_detail_score,
         ]
         score = _average(values)
+        if relation_contract_present and stage_relation_score < 1.0:
+            issues.append(
+                QualityIssue(
+                    issue_type="missing_coverage",
+                    severity="warning",
+                    target_path="development_stages",
+                    message="发展阶段、关键突破与遗留问题之间的关系证据不完整。",
+                    recommended_action="补齐突破的论文依据和可验证的问题 ID，不要按位置推断关系。",
+                )
+            )
         if score < 1.0:
             issues.append(
                 QualityIssue(

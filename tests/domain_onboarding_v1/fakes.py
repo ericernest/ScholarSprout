@@ -102,6 +102,20 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                 "core_concepts": ["检索增强"],
                 "main_techniques": ["检索与生成"],
                 "open_problems": ["事实一致性"],
+                "breakthroughs": [
+                    {
+                        "breakthrough_id": f"breakthrough-{index}",
+                        "name": f"阶段 {index} 的关键突破",
+                        "description": "该突破建立了可验证的检索与生成能力。",
+                        "supporting_paper_ids": [
+                            paper_ids[(index - 1) % len(paper_ids)]
+                        ],
+                        "enabled_capabilities": ["基于外部证据生成回答"],
+                        "limitation_problem_ids": [
+                            f"problem-{(index - 1) % 3 + 1}"
+                        ],
+                    }
+                ],
             }
             for index in range(1, 4)
         ],
@@ -110,21 +124,28 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
             "subdirections": ["检索优化", "生成约束", "自动评测"],
             "problem_details": [
                 {
+                    "problem_id": f"problem-{index + 1}",
                     "name": name,
                     "description": f"{name}会限制 RAG 的可靠性。",
                     "related_paper_ids": [paper_ids[index % len(paper_ids)]],
                     "related_stage_ids": [f"stage-{index % 3 + 1}"],
+                    "emerged_in_stage_id": f"stage-{index % 3 + 1}",
+                    "affected_stage_ids": [f"stage-{index % 3 + 1}"],
+                    "related_subdirection_ids": [f"direction-{index + 1}"],
                 }
                 for index, name in enumerate(["检索噪声", "证据冲突", "端到端评测"])
             ],
             "subdirection_details": [
                 {
+                    "subdirection_id": f"direction-{index + 1}",
                     "name": name,
                     "description": f"{name}是当前可证据化的技术方向。",
                     "why_it_matters": "直接影响召回、生成或评测质量。",
                     "research_questions": [f"如何稳定改善{name}？"],
                     "related_paper_ids": [paper_ids[index % len(paper_ids)]],
                     "related_stage_ids": [f"stage-{index % 3 + 1}"],
+                    "emerged_in_stage_id": f"stage-{index % 3 + 1}",
+                    "addresses_problem_ids": [f"problem-{index + 1}"],
                 }
                 for index, name in enumerate(["检索优化", "生成约束", "自动评测"])
             ],
