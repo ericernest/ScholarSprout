@@ -514,8 +514,49 @@ class StructuredOnboardingGenerator:
         # development response merely omits that redundant field.
         if section == "development" and not str(completed.get("domain") or "").strip():
             completed["domain"] = default_domain
+        if section == "development":
+            self._sanitize_development_paper_ids(completed, papers)
         self._validate_section_payload(section, completed, papers)
         return completed
+
+    def _sanitize_development_paper_ids(
+        self,
+        payload: dict[str, Any],
+        papers: list[RankedPaper],
+    ) -> None:
+        """Bind generated development claims to canonical retrieved paper IDs."""
+        allowed_ids = {paper.paper_id for paper in papers}
+        ranked_ids = [paper.paper_id for paper in papers]
+        stages = payload.get("development_stages")
+        if not isinstance(stages, list) or not ranked_ids:
+            return
+        for index, stage in enumerate(stages):
+            if not isinstance(stage, dict):
+                continue
+            stage_ids = [
+                paper_id
+                for paper_id in self._strings(stage.get("related_paper_ids"))
+                if paper_id in allowed_ids
+            ]
+            if not stage_ids:
+                stage_ids = [ranked_ids[index % len(ranked_ids)]]
+            stage["related_paper_ids"] = list(dict.fromkeys(stage_ids))
+            breakthroughs = stage.get("breakthroughs")
+            if not isinstance(breakthroughs, list):
+                continue
+            for breakthrough in breakthroughs:
+                if not isinstance(breakthrough, dict):
+                    continue
+                supporting_ids = [
+                    paper_id
+                    for paper_id in self._strings(
+                        breakthrough.get("supporting_paper_ids")
+                    )
+                    if paper_id in allowed_ids
+                ]
+                breakthrough["supporting_paper_ids"] = list(
+                    dict.fromkeys(supporting_ids or stage_ids)
+                )
 
     def _section_user_payload(
         self,

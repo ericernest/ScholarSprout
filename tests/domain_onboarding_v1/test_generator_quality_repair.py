@@ -200,6 +200,34 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len(result.output.development_stages), 3)
         self.assertTrue(result.output.papers[0].contribution)
 
+    def test_incremental_generation_rebinds_invalid_breakthrough_paper_ids(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        payload["development_stages"][0]["related_paper_ids"] = ["invented-paper"]
+        payload["development_stages"][0]["breakthroughs"][0][
+            "supporting_paper_ids"
+        ] = ["invented-paper"]
+        model = FakeJSONModel([payload, payload, payload])
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        allowed_ids = {paper.paper_id for paper in ranked}
+        stage = result.output.development_stages[0]
+        self.assertTrue(set(stage.related_paper_ids) <= allowed_ids)
+        self.assertTrue(
+            set(stage.breakthroughs[0].supporting_paper_ids) <= allowed_ids
+        )
+        self.assertNotIn("invented-paper", stage.related_paper_ids)
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
