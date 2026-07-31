@@ -228,6 +228,28 @@ class GeneratorTests(unittest.TestCase):
         )
         self.assertNotIn("invented-paper", stage.related_paper_ids)
 
+    def test_landscape_section_wraps_real_top_level_landscape_fields(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])[
+            "current_landscape"
+        ]
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        completed = generator._complete_section_payload(
+            "landscape", payload, ranked
+        )
+
+        self.assertEqual(
+            completed["current_landscape"]["problems"], payload["problems"]
+        )
+        self.assertEqual(
+            completed["current_landscape"]["subdirections"],
+            payload["subdirections"],
+        )
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
