@@ -535,6 +535,13 @@ class StructuredOnboardingGenerator:
             }
             if any(isinstance(value, list) for value in landscape.values()):
                 completed["current_landscape"] = landscape
+        if section == "learning_path" and not isinstance(
+            completed.get("learning_path"), list
+        ):
+            for alias in ("steps", "learning_steps", "path"):
+                if isinstance(completed.get(alias), list):
+                    completed["learning_path"] = completed[alias]
+                    break
         self._validate_section_payload(section, completed, papers)
         return completed
 

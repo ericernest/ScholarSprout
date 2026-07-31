@@ -250,6 +250,23 @@ class GeneratorTests(unittest.TestCase):
             payload["subdirections"],
         )
 
+    def test_learning_path_section_accepts_real_step_list_aliases(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        steps = make_generation_payload([paper.paper_id for paper in ranked])[
+            "learning_path"
+        ]
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        for alias in ("steps", "learning_steps", "path"):
+            with self.subTest(alias=alias):
+                completed = generator._complete_section_payload(
+                    "learning_path", {alias: steps}, ranked
+                )
+                self.assertEqual(completed["learning_path"], steps)
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
