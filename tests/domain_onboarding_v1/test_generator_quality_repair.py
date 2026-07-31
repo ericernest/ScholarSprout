@@ -171,6 +171,35 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(result.output.papers[0].contribution)
         self.assertTrue(result.output.papers[0].reading_focus)
 
+    def test_incremental_generation_merges_outer_and_wrapped_section_fields(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        development = {
+            "domain": payload["domain"],
+            "prerequisites": payload["prerequisites"],
+            "development": {
+                "development_stages": payload["development_stages"],
+                "paper_guidance": payload["paper_guidance"],
+            },
+            "evidence_claims": payload["evidence_claims"],
+        }
+        model = FakeJSONModel([development, payload, payload])
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        self.assertEqual(len(result.output.prerequisites), 3)
+        self.assertEqual(len(result.output.development_stages), 3)
+        self.assertTrue(result.output.papers[0].contribution)
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(

@@ -475,21 +475,40 @@ class StructuredOnboardingGenerator:
             "landscape": ("current_landscape",),
             "learning_path": ("learning_path",),
         }[section]
-        candidates = []
-        for key in (section, "result", "data", "output"):
+        wrapper_keys = (section, "result", "data", "output")
+        candidates = [payload]
+        nested_wrapper_keys: set[str] = set()
+        for key in wrapper_keys:
             nested = payload.get(key)
             if isinstance(nested, dict):
+                nested_wrapper_keys.add(key)
                 candidates.append(nested)
-        candidates.append(payload)
-        selected = next(
-            (
-                candidate
-                for candidate in candidates
-                if any(key in candidate for key in expected)
-            ),
-            payload,
+        selected = max(
+            candidates,
+            key=lambda candidate: sum(key in candidate for key in expected),
         )
-        completed = dict(selected)
+        # Providers do not always agree on whether companion fields belong
+        # beside or inside a named wrapper. Merge all one-level candidates,
+        # then let the candidate with the strongest required-field coverage
+        # win conflicts so valid outer fields are not silently discarded.
+        completed: dict[str, Any] = {}
+        for candidate in candidates:
+            excluded = nested_wrapper_keys if candidate is payload else set()
+            completed.update(
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if key not in excluded
+                }
+            )
+        selected_excluded = nested_wrapper_keys if selected is payload else set()
+        completed.update(
+            {
+                key: value
+                for key, value in selected.items()
+                if key not in selected_excluded
+            }
+        )
         # The normalized domain is planner-owned data. Copying it here is safer
         # than spending another model attempt when a structurally valid
         # development response merely omits that redundant field.
