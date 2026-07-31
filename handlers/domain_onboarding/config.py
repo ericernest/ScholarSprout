@@ -101,7 +101,9 @@ class DomainOnboardingConfig(BaseModel):
     generation_development_max_tokens: int = Field(default=2200, ge=800, le=5000)
     generation_landscape_max_tokens: int = Field(default=1600, ge=600, le=4000)
     generation_learning_path_max_tokens: int = Field(default=1800, ge=800, le=4000)
-    generation_section_timeout_seconds: float = Field(default=35.0, gt=0.0, le=120.0)
+    # Incremental generation runs development first, then landscape/path in
+    # parallel, so two section windows must fit inside generation_timeout.
+    generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
     generation_paper_abstract_max_chars: int = Field(default=700, ge=200, le=4000)
     retrieval_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
     retrieval_max_attempts: int = Field(default=1, ge=1, le=5)
@@ -135,6 +137,10 @@ class DomainOnboardingConfig(BaseModel):
         if self.planning_model_timeout_seconds >= self.planning_timeout_seconds:
             raise ValueError(
                 "planning model timeout must be shorter than the planning stage deadline"
+            )
+        if 2 * self.generation_section_timeout_seconds > self.generation_timeout_seconds:
+            raise ValueError(
+                "two generation section windows must fit inside the generation deadline"
             )
         if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
             raise ValueError("knowledge graph foundation supports shadow mode only")
