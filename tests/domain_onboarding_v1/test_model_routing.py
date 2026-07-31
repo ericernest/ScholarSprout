@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from handlers.domain_onboarding.llm import StructuredLLMError, invoke_json
+from handlers.domain_onboarding.model_routing import RoutedChatModel
+from handlers.domain_onboarding.pipeline import create_default_pipeline
+
+from .fakes import FakeJSONModel
+
+
+class ModelRoutingTests(unittest.TestCase):
+    def test_timeout_falls_back_within_one_bounded_route(self) -> None:
+        delegate = FakeJSONModel(
+            [TimeoutError("primary timeout"), {"ok": True}]
+        )
+        model = RoutedChatModel(
+            delegate,
+            ["fast-primary", "stable-backup"],
+            route_name="planning",
+        )
+
+        payload, stats = invoke_json(
+            model,
+            system_prompt="Return JSON",
+            user_prompt="{}",
+            timeout_seconds=30.0,
+        )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(stats.model_calls, 2)
+        self.assertEqual(
+            [call["model_name"] for call in delegate.calls],
+            ["fast-primary", "stable-backup"],
+        )
+        self.assertEqual(
+            [call["timeout"] for call in delegate.calls],
+            [14.0, 14.0],
+        )
+        snapshot = model.snapshot()
+        self.assertEqual(snapshot["selected_model"], "stable-backup")
+        self.assertEqual(
+            [item["status"] for item in snapshot["attempts"]],
+            ["failed", "selected"],
+        )
+
+    def test_all_failures_report_attempt_count_without_error_text(self) -> None:
+        model = RoutedChatModel(
+            FakeJSONModel([TimeoutError("secret-one"), RuntimeError("secret-two")]),
+            ["first", "second"],
+            route_name="landscape",
+        )
+
+        with self.assertRaises(StructuredLLMError) as context:
+            invoke_json(
+                model,
+                system_prompt="Return JSON",
+                user_prompt="{}",
+                timeout_seconds=20.0,
+            )
+
+        self.assertEqual(context.exception.stats.model_calls, 2)
+        self.assertNotIn("secret", str(context.exception))
+        self.assertIsNone(model.snapshot()["selected_model"])
+
+    def test_pipeline_routes_can_be_configured_per_module(self) -> None:
+        delegate = FakeJSONModel([{"ok": True}])
+        environment = {
+            "DOMAIN_ONBOARDING_PLANNING_MODELS": "planner-fast,planner-backup",
+            "DOMAIN_ONBOARDING_DEVELOPMENT_MODELS": "development-strong",
+            "DOMAIN_ONBOARDING_LANDSCAPE_MODELS": "landscape-strong,landscape-fast",
+            "DOMAIN_ONBOARDING_LEARNING_PATH_MODELS": "path-fast",
+            "DOMAIN_ONBOARDING_REPAIR_MODELS": "repair-fast",
+        }
+
+        with patch.dict("os.environ", environment, clear=False):
+            pipeline = create_default_pipeline(delegate)
+        try:
+            self.assertEqual(
+                pipeline.planner.model.model_names,
+                ["planner-fast", "planner-backup"],
+            )
+            self.assertEqual(
+                pipeline.generator.section_models["development"].model_names,
+                ["development-strong"],
+            )
+            self.assertEqual(
+                pipeline.generator.section_models["landscape"].model_names,
+                ["landscape-strong", "landscape-fast"],
+            )
+            self.assertEqual(
+                pipeline.generator.section_models["learning_path"].model_names,
+                ["path-fast"],
+            )
+            self.assertEqual(
+                pipeline.generator.repair_model.model_names,
+                ["repair-fast"],
+            )
+        finally:
+            pipeline.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -64,16 +64,18 @@ def invoke_json(
             response_format={"type": "json_object"},
         )
     except Exception as error:
+        attempt_count = int(getattr(model, "last_attempt_count", 1))
         stats = ModelCallStats(
             duration_ms=round((perf_counter() - started) * 1000, 3),
-            model_calls=1,
+            model_calls=attempt_count,
         )
         raise StructuredLLMError(f"LLM call failed: {error}", stats) from error
 
     usage = get_response_usage(response)
+    attempt_count = int(getattr(model, "last_attempt_count", 1))
     stats = ModelCallStats(
         duration_ms=round((perf_counter() - started) * 1000, 3),
-        model_calls=1,
+        model_calls=attempt_count,
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         total_tokens=usage.total_tokens,

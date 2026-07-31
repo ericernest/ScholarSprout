@@ -33,13 +33,14 @@ class OpenAIClient:
         max_tokens: int | None = None,
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
+        model_name: str | None = None,
     ) -> Any:
-        model_name = self.config.model_name.strip()
-        if not model_name:
+        selected_model = (model_name or self.config.model_name).strip()
+        if not selected_model:
             raise ValueError("model_name is empty. Please run config and choose a model.")
 
         kwargs: dict[str, Any] = {
-            "model": model_name,
+            "model": selected_model,
             "messages": messages,
         }
         if tools:

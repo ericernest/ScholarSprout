@@ -17,6 +17,22 @@ SEMANTIC_SCHOLAR_API_KEY=<optional>
 CROSSREF_MAILTO=<operations-email>
 ```
 
+### 分模块模型路由
+
+领域规划、发展阶段、领域全景、学习路径和定向修复可以使用不同模型。每个变量接受按优先级排列的逗号分隔模型 ID；第一个模型在分配到的尝试时间内失败时，才会调用下一个模型。未设置变量时继续使用用户配置中的 `client.model_name`。
+
+```text
+DOMAIN_ONBOARDING_PLANNING_MODELS=<fast-json-model>,<planning-backup>
+DOMAIN_ONBOARDING_DEVELOPMENT_MODELS=<long-form-model>,<development-backup>
+DOMAIN_ONBOARDING_LANDSCAPE_MODELS=<relation-model>,<landscape-backup>
+DOMAIN_ONBOARDING_LEARNING_PATH_MODELS=<fast-instruction-model>,<path-backup>
+DOMAIN_ONBOARDING_REPAIR_MODELS=<fast-instruction-model>,<repair-backup>
+```
+
+`DOMAIN_ONBOARDING_GENERATION_MODELS` 是三个内容段的公共默认路由；某个内容段的专用变量优先。路由共享调用方原有 deadline，不会因为增加备用模型而无界延长请求。结果的 `reproducibility.planning_model_route` 与 `reproducibility.generation_model_routes` 会记录实际尝试、选中模型和耗时，但不会记录 API Key 或服务端错误正文。
+
+上线前必须用真实模块 Prompt 校准主备顺序。仅凭模型名称不能保证时延；如果网关本身不可达，同一网关下的全部模型都会失败，此时应由服务监控告警，而不是提交 Mock 或人工补全输出。
+
 同时在用户配置的 `client` 节点填写 `input_cost_per_million_tokens` 和 `output_cost_per_million_tokens`，否则成本会明确显示为 `null`，不会伪造估值。
 
 ## 启动与探针

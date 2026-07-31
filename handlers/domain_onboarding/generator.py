@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from .config import DomainOnboardingConfig
 from .learning_bindings import LearningPaperBinder
 from .llm import StructuredLLMError, invoke_json
+from .model_routing import routing_snapshot
 from .relations import SemanticRelationResolver
 from .schemas import (
     CurrentLandscape,
@@ -194,9 +195,18 @@ class SimpleStagePathPlanner:
 
 
 class StructuredOnboardingGenerator:
-    def __init__(self, model: Any, config: DomainOnboardingConfig):
+    def __init__(
+        self,
+        model: Any,
+        config: DomainOnboardingConfig,
+        *,
+        section_models: dict[str, Any] | None = None,
+        repair_model: Any | None = None,
+    ):
         self.model = model
         self.config = config
+        self.section_models = section_models or {}
+        self.repair_model = repair_model or model
         self.path_planner = SimpleStagePathPlanner()
         self.paper_binder = LearningPaperBinder()
         self.relation_resolver = SemanticRelationResolver(
@@ -397,7 +407,7 @@ class StructuredOnboardingGenerator:
         }
         try:
             payload, stats = invoke_json(
-                self.model,
+                self.section_models.get(section, self.model),
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens={
@@ -582,7 +592,7 @@ class StructuredOnboardingGenerator:
             user_payload["instruction"] = "Repair only the reported weaknesses while preserving valid paper IDs."
         try:
             payload, stats = invoke_json(
-                self.model,
+                self.repair_model if previous_output is not None else self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=self.config.generation_max_tokens,
@@ -697,10 +707,23 @@ class StructuredOnboardingGenerator:
                     "search_queries": plan.search_queries,
                     "retrieval_sources": sorted({paper.source for paper in papers}),
                     "selected_paper_ids": [paper.paper_id for paper in papers],
+                    "generation_model_routes": self.model_routing_snapshot(),
                 },
             )
         except ValidationError as error:
             raise GenerationError(f"generated output failed validation: {error}") from error
+
+    def model_routing_snapshot(self) -> dict[str, Any]:
+        models = {
+            "generation": self.model,
+            **self.section_models,
+            "repair": self.repair_model,
+        }
+        return {
+            name: snapshot
+            for name, model in models.items()
+            if (snapshot := routing_snapshot(model)) is not None
+        }
 
     @staticmethod
     def _display_domain(request: DomainOnboardingRequest, candidate: str) -> str:

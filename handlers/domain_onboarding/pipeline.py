@@ -18,6 +18,7 @@ from .graph_path_planner import GraphBasedPathPlanner
 from .graph_validator import DomainKnowledgeGraphValidator
 from .knowledge_graph import DomainKnowledgeGraphBuilder
 from .metrics import DomainOnboardingRequestTrace
+from .model_routing import routed_model_from_env, routing_snapshot
 from .planner import StormLitePlanner
 from .profile import RuleBasedProfileBuilder
 from .quality import CompositeQualityEvaluator
@@ -238,6 +239,11 @@ class DomainOnboardingPipeline:
                     ),
                 }
             )
+            planning_route = routing_snapshot(
+                getattr(self.planner, "model", None)
+            )
+            if planning_route is not None:
+                output.reproducibility["planning_model_route"] = planning_route
             trace.evidence_claim_count = len(output.evidence_claims)
 
             first_quality, trace.evaluation_duration_ms = context.call(
@@ -686,7 +692,42 @@ def create_default_pipeline(
     config: DomainOnboardingConfig | None = None,
 ) -> DomainOnboardingPipeline:
     settings = config or DomainOnboardingConfig()
-    generator = StructuredOnboardingGenerator(model, settings)
+    planning_model = routed_model_from_env(
+        model,
+        os.getenv("DOMAIN_ONBOARDING_PLANNING_MODELS"),
+        route_name="planning",
+    )
+    configured_generation = os.getenv("DOMAIN_ONBOARDING_GENERATION_MODELS")
+    generation_model = routed_model_from_env(
+        model,
+        configured_generation,
+        route_name="generation",
+    )
+    section_models = {}
+    for section in ("development", "landscape", "learning_path"):
+        configured = os.getenv(
+            f"DOMAIN_ONBOARDING_{section.upper()}_MODELS"
+        ) or configured_generation
+        section_models[section] = routed_model_from_env(
+            model,
+            configured,
+            route_name=section,
+        )
+    configured_repair = (
+        os.getenv("DOMAIN_ONBOARDING_REPAIR_MODELS")
+        or configured_generation
+    )
+    repair_model = routed_model_from_env(
+        model,
+        configured_repair,
+        route_name="repair",
+    )
+    generator = StructuredOnboardingGenerator(
+        generation_model,
+        settings,
+        section_models=section_models,
+        repair_model=repair_model,
+    )
     retry_policy = RetrievalRetryPolicy(
         max_attempts=settings.retrieval_max_attempts,
         base_backoff_seconds=settings.retrieval_backoff_seconds,
@@ -722,7 +763,7 @@ def create_default_pipeline(
     )
     return DomainOnboardingPipeline(
         profile_builder=RuleBasedProfileBuilder(),
-        planner=StormLitePlanner(model, settings),
+        planner=StormLitePlanner(planning_model, settings),
         retriever=CompositePaperRetriever(
             [
                 SemanticScholarRetriever(
