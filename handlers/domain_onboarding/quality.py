@@ -588,6 +588,53 @@ class CompositeQualityEvaluator:
             route_fit = route_fit and bool(
                 method_roles & {"foundational", "method"}
             ) and bool(experiment_roles & {"method", "evaluation", "application"})
+        binding_contract_present = any(
+            step.paper_bindings for step in output.learning_path
+        )
+        if binding_contract_present:
+            expected_uses = {
+                "1": {"concept_introduction"},
+                "2": {"architecture_reference"},
+                "3": {"method_extension"},
+                "4": {
+                    "baseline_implementation",
+                    "benchmark_dataset",
+                    "evaluation_framework",
+                },
+                "5": {"frontier_problem"},
+            }
+            binding_fit = True
+            for step in output.learning_path:
+                binding_ids = [item.paper_id for item in step.paper_bindings]
+                uses = {item.learning_use for item in step.paper_bindings}
+                binding_fit = binding_fit and (
+                    binding_ids == step.paper_ids
+                    and all(item.reason.strip() for item in step.paper_bindings)
+                    and uses <= expected_uses.get(step.step, set())
+                    and bool(uses & expected_uses.get(step.step, set()))
+                )
+            if len(output.learning_path) >= 5:
+                experiment = output.learning_path[3]
+                baseline_ids = {
+                    item.paper_id
+                    for item in experiment.paper_bindings
+                    if item.learning_use == "baseline_implementation"
+                    and item.required
+                }
+                frontier_ids = {
+                    item.paper_id
+                    for item in output.learning_path[4].paper_bindings
+                    if item.learning_use == "frontier_problem"
+                }
+                binding_fit = binding_fit and bool(baseline_ids) and all(
+                    role_by_id.get(paper_id) in {"foundational", "method"}
+                    for paper_id in baseline_ids
+                )
+                binding_fit = binding_fit and bool(frontier_ids) and all(
+                    role_by_id.get(paper_id) not in {"application", "evaluation"}
+                    for paper_id in frontier_ids
+                )
+            route_fit = route_fit and binding_fit
         time_fit = self._learning_time_fit(output)
         score = (
             0.15 * float(sequence_ok)
@@ -724,9 +771,12 @@ class CompositeQualityEvaluator:
         for stage in output.development_stages:
             yield from stage.related_paper_ids
             yield from (paper.paper_id for paper in stage.representative_papers)
+            for breakthrough in stage.breakthroughs:
+                yield from breakthrough.supporting_paper_ids
         for step in output.learning_path:
             yield from step.paper_ids
             yield from (paper.paper_id for paper in step.papers)
+            yield from (binding.paper_id for binding in step.paper_bindings)
         for claim in output.evidence_claims:
             yield from claim.supporting_paper_ids
         for problem in output.current_landscape.problem_details:

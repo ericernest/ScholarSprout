@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from .config import DomainOnboardingConfig
+from .learning_bindings import LearningPaperBinder
 from .llm import StructuredLLMError, invoke_json
 from .relations import SemanticRelationResolver
 from .schemas import (
@@ -197,6 +198,7 @@ class StructuredOnboardingGenerator:
         self.model = model
         self.config = config
         self.path_planner = SimpleStagePathPlanner()
+        self.paper_binder = LearningPaperBinder()
         self.relation_resolver = SemanticRelationResolver(
             semantic_threshold=config.coverage_similarity_threshold
         )
@@ -351,9 +353,11 @@ class StructuredOnboardingGenerator:
                 "shared paper evidence supports that relation."
             ),
             "learning_path": (
-                "Return five learning_path steps and evidence_claims. Bind foundational/survey papers early, method papers to step 3, "
-                "evaluation papers to the baseline experiment step, and frontier papers only late. Each step needs deliverables; "
-                "the experiment step also needs reproducibility_checklist and evaluation_metrics."
+                "Return five learning_path steps and evidence_claims. Suggest papers according to the actual learning task: "
+                "survey/foundational work for concepts, foundational/classic methods for architecture, method papers for improvements, "
+                "an implementable method as the experiment baseline, evaluation papers only for learning evaluation, and recent "
+                "problem-driven methods for the frontier. An evaluation or application paper must never be the sole baseline paper. "
+                "Each step needs deliverables; the experiment step also needs reproducibility_checklist and evaluation_metrics."
             ),
         }
         examples = {
@@ -554,6 +558,10 @@ class StructuredOnboardingGenerator:
             "Development stages describe field history, not the learner schedule. historical_period uses calendar years/eras and never weeks. Every "
             "stage after the first must explain how the earlier limitation motivated the next stage. "
             "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
+            "Paper IDs in learning steps are suggestions that code will verify against the learning task. Use surveys/foundational work "
+            "for concepts, foundational/classic methods for architecture, method papers for improvements, an implementable method for "
+            "baseline reproduction, evaluation papers for evaluation, and recent problem-driven methods for the frontier. Never use an "
+            "evaluation framework or a narrow application as the sole baseline or frontier entry. "
             "Each learning step includes estimated_hours and milestone; its content must fit the learner time budget. "
             "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
             "at most 3 items in each explanatory list, and at most 6 evidence claims. "
@@ -641,6 +649,14 @@ class StructuredOnboardingGenerator:
         landscape = self.relation_resolver.resolve(stages, landscape, papers)
         learning_path = self.path_planner.normalize(
             payload.get("learning_path"), profile=profile, papers=papers, references=references
+        )
+        learning_path = self.paper_binder.bind(
+            learning_path,
+            papers,
+            stages,
+            landscape,
+            references,
+            language=request.language,
         )
         evidence_claims = self._normalize_evidence_claims(
             payload.get("evidence_claims"),

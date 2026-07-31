@@ -13,6 +13,17 @@ PaperRole = Literal[
     "survey", "foundational", "method", "evaluation", "application", "frontier", "other"
 ]
 ReadingPriority = Literal["core", "recommended", "optional", "extended"]
+LearningUse = Literal[
+    "concept_introduction",
+    "architecture_reference",
+    "method_extension",
+    "baseline_implementation",
+    "benchmark_dataset",
+    "evaluation_framework",
+    "frontier_problem",
+]
+ReadingMode = Literal["skim", "read", "reproduce", "evaluate"]
+BindingStatus = Literal["policy_matched", "fallback"]
 RelationStatus = Literal[
     "explicit", "paper_inferred", "semantic_inferred", "unresolved"
 ]
@@ -454,7 +465,18 @@ class CurrentLandscape(OnboardingModel):
         return self
 
 
+class LearningPaperBinding(OnboardingModel):
+    paper_id: str
+    learning_use: LearningUse
+    reason: str = Field(min_length=1)
+    reading_mode: ReadingMode = "read"
+    required: bool = True
+    binding_status: BindingStatus = "policy_matched"
+    matched_signals: list[str] = Field(default_factory=list)
+
+
 class LearningStep(OnboardingModel):
+    learning_step_id: str | None = None
     step: str
     goal: str = ""
     topics: list[str] = Field(default_factory=list)
@@ -470,11 +492,27 @@ class LearningStep(OnboardingModel):
     deliverables: list[str] = Field(default_factory=list)
     reproducibility_checklist: list[str] = Field(default_factory=list)
     evaluation_metrics: list[str] = Field(default_factory=list)
+    paper_bindings: list[LearningPaperBinding] = Field(default_factory=list)
+    related_stage_ids: list[str] = Field(default_factory=list)
+    related_problem_ids: list[str] = Field(default_factory=list)
+    related_subdirection_ids: list[str] = Field(default_factory=list)
 
     @field_validator("step", mode="before")
     @classmethod
     def stringify_step(cls, value: Any) -> str:
         return str(value).strip()
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "LearningStep":
+        self.learning_step_id = self.learning_step_id or stable_id(
+            "learning-step", f"{self.step}:{self.goal}"
+        )
+        self.related_stage_ids = list(dict.fromkeys(self.related_stage_ids))
+        self.related_problem_ids = list(dict.fromkeys(self.related_problem_ids))
+        self.related_subdirection_ids = list(
+            dict.fromkeys(self.related_subdirection_ids)
+        )
+        return self
 
 
 class EvidenceClaim(OnboardingModel):
@@ -495,7 +533,7 @@ class EvidenceClaim(OnboardingModel):
 
 
 class DomainOnboardingOutput(OnboardingModel):
-    schema_version: str = "domain-onboarding-output-v1.5"
+    schema_version: str = "domain-onboarding-output-v1.6"
     language: Literal["zh-CN", "en-US"] = "zh-CN"
     domain: str
     text: str
