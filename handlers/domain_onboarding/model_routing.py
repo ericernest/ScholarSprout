@@ -129,10 +129,15 @@ def run_with_model_route(
     *,
     timeout_seconds: float | None,
 ) -> Any:
-    """Retry transport, JSON, and caller validation errors on the next model."""
+    """Retry section generation without shrinking each model's response window.
+
+    The pipeline owns the total stage deadline. This helper's timeout is the
+    maximum duration of one model call; dividing it by the number of models
+    made long-form backup models unusable after a fast validation failure.
+    """
     if not isinstance(model, RoutedChatModel):
         return operation(model, timeout_seconds)
-    attempt_timeout = model._attempt_timeout(timeout_seconds)
+    attempt_timeout = timeout_seconds
     attempts: list[dict[str, Any]] = []
     last_error: Exception | None = None
     for model_name in model.model_names:

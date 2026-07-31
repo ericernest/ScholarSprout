@@ -64,7 +64,9 @@ class DomainOnboardingConfig(BaseModel):
     max_content_repairs: int = Field(default=1, ge=0, le=1)
     # Calibrated from the 2026-07-27 controlled online run (3 real domains):
     # total 111-147s, planning 13-26s, generation 78-103s.
-    request_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
+    # Incremental clients receive validated sections before terminal completion,
+    # so the background request may outlive the old single-response budget.
+    request_timeout_seconds: float = Field(default=420.0, gt=0.0, le=600.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
@@ -74,7 +76,7 @@ class DomainOnboardingConfig(BaseModel):
     )
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     ranking_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
-    generation_timeout_seconds: float = Field(default=150.0, gt=0.0, le=180.0)
+    generation_timeout_seconds: float = Field(default=240.0, gt=0.0, le=360.0)
     evaluation_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
     repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
     relevance_weight: float = Field(default=0.55, ge=0.0, le=1.0)
@@ -102,7 +104,7 @@ class DomainOnboardingConfig(BaseModel):
     generation_landscape_max_tokens: int = Field(default=1600, ge=600, le=4000)
     generation_learning_path_max_tokens: int = Field(default=1800, ge=800, le=4000)
     # Incremental generation runs development first, then landscape/path in
-    # parallel, so two section windows must fit inside generation_timeout.
+    # parallel. The default deadline fits two full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
     generation_paper_abstract_max_chars: int = Field(default=700, ge=200, le=4000)
     retrieval_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
@@ -138,9 +140,9 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError(
                 "planning model timeout must be shorter than the planning stage deadline"
             )
-        if 2 * self.generation_section_timeout_seconds > self.generation_timeout_seconds:
+        if 4 * self.generation_section_timeout_seconds > self.generation_timeout_seconds:
             raise ValueError(
-                "two generation section windows must fit inside the generation deadline"
+                "two model attempts in both incremental waves must fit inside the generation deadline"
             )
         if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
             raise ValueError("knowledge graph foundation supports shadow mode only")
