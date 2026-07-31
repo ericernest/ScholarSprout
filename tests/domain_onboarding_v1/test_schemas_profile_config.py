@@ -63,6 +63,18 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_model_timeout_seconds,
             config.planning_timeout_seconds,
         )
+        self.assertEqual(config.generation_section_timeout_seconds, 60.0)
+        self.assertLessEqual(
+            2 * config.generation_section_timeout_seconds,
+            config.generation_timeout_seconds,
+        )
+
+    def test_incremental_section_windows_must_fit_generation_deadline(self) -> None:
+        with self.assertRaises(ValidationError):
+            DomainOnboardingConfig(
+                generation_timeout_seconds=100.0,
+                generation_section_timeout_seconds=60.0,
+            )
 
     def test_quality_policy_requires_complete_normalized_weights(self) -> None:
         with self.assertRaises(ValidationError):
