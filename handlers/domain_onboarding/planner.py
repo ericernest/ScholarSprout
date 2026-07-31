@@ -66,7 +66,7 @@ class StormLitePlanner:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=self.config.planning_max_tokens,
-                timeout_seconds=self.config.planning_timeout_seconds,
+                timeout_seconds=self.config.planning_model_timeout_seconds,
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
