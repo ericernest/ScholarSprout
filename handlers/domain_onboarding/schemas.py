@@ -54,6 +54,7 @@ QualityIssueType = Literal[
     "paper_context_mismatch",
     "missing_core_paper",
     "language_mismatch",
+    "generation_fallback",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -83,6 +84,7 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "paper_context_mismatch": "paper_relevance",
     "missing_core_paper": "paper_relevance",
     "language_mismatch": "language_alignment",
+    "generation_fallback": "structure",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -116,6 +118,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "paper_context_mismatch": "retrieval",
     "missing_core_paper": "retrieval",
     "language_mismatch": "llm",
+    "generation_fallback": "none",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)

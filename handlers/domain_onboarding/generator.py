@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
@@ -95,8 +96,27 @@ class SimpleStagePathPlanner:
                     for paper in papers
                     if paper.paper_role in desired_roles
                 ]
-                chosen = eligible or papers
-                ids = [chosen[min(index - 1, len(chosen) - 1)].paper_id]
+                used_ids = {
+                    paper_id for step in results for paper_id in step.paper_ids
+                }
+                preferred_roles = {
+                    1: ("foundational", "survey"),
+                    2: ("foundational", "survey", "method"),
+                    3: ("method", "foundational"),
+                    4: ("evaluation", "method", "application"),
+                    5: ("frontier", "method", "evaluation", "survey"),
+                }[index]
+                chosen = sorted(
+                    eligible or papers,
+                    key=lambda paper: (
+                        paper.paper_id in used_ids,
+                        preferred_roles.index(paper.paper_role)
+                        if paper.paper_role in preferred_roles
+                        else len(preferred_roles),
+                        -paper.final_score,
+                    ),
+                )
+                ids = [chosen[0].paper_id]
             activities = self._strings(raw.get("activities"))
             criteria = self._strings(raw.get("completion_criteria"))
             goal = str(raw.get("goal") or "")
@@ -157,7 +177,11 @@ class SimpleStagePathPlanner:
         if isinstance(value, str):
             return [value.strip()] if value.strip() else []
         if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
+            return [
+                item.strip()
+                for item in value
+                if isinstance(item, str) and item.strip()
+            ]
         return []
 
     @staticmethod
@@ -358,7 +382,12 @@ class StructuredOnboardingGenerator:
                 self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens=max(1200, self.config.generation_max_tokens // 2),
+                max_tokens={
+                    "development": self.config.generation_development_max_tokens,
+                    "landscape": self.config.generation_landscape_max_tokens,
+                    "learning_path": self.config.generation_learning_path_max_tokens,
+                }[section],
+                timeout_seconds=self.config.generation_section_timeout_seconds,
             )
             try:
                 completed = self._complete_section_payload(section, payload, papers)
@@ -507,6 +536,11 @@ class StructuredOnboardingGenerator:
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=self.config.generation_max_tokens,
+                timeout_seconds=(
+                    self.config.repair_timeout_seconds
+                    if previous_output is not None
+                    else self.config.generation_timeout_seconds
+                ),
             )
             return payload, stats
         except StructuredLLMError as error:
@@ -572,6 +606,10 @@ class StructuredOnboardingGenerator:
         )
         try:
             text = str(payload.get("text") or "").strip()
+            display_domain = self._display_domain(
+                request,
+                str(payload.get("domain") or plan.normalized_domain or request.query),
+            )
             selected_papers = []
             for paper in papers:
                 reference = references[paper.paper_id]
@@ -585,7 +623,7 @@ class StructuredOnboardingGenerator:
                 )
             return DomainOnboardingOutput(
                 language=request.language,
-                domain=str(payload.get("domain") or plan.normalized_domain or request.query),
+                domain=display_domain,
                 text=text,
                 learner_profile=profile,
                 research_plan=plan,
@@ -604,6 +642,23 @@ class StructuredOnboardingGenerator:
             )
         except ValidationError as error:
             raise GenerationError(f"generated output failed validation: {error}") from error
+
+    @staticmethod
+    def _display_domain(request: DomainOnboardingRequest, candidate: str) -> str:
+        if request.language != "zh-CN":
+            return candidate
+        mappings = (
+            (r"检索增强|\brag\b", "检索增强生成（RAG）"),
+            (r"多模态", "多模态大模型"),
+            (r"多智能体辩论", "多智能体辩论"),
+            (r"图神经网络", "图神经网络"),
+            (r"扩散模型", "扩散模型"),
+            (r"幻觉", "大模型幻觉检测"),
+        )
+        for pattern, display in mappings:
+            if re.search(pattern, request.query, re.IGNORECASE):
+                return display
+        return candidate
 
     def _normalize_evidence_claims(
         self,

@@ -36,6 +36,9 @@ _DOMAIN_ALIASES = {
     "扩散模型": "diffusion models",
     "大模型幻觉检测": "large language model hallucination detection",
 }
+_DOMAIN_CANONICAL_NAMES = {
+    "rag": "检索增强生成",
+}
 
 
 class StormLitePlanner:
@@ -63,11 +66,11 @@ class StormLitePlanner:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=self.config.planning_max_tokens,
+                timeout_seconds=self.config.planning_timeout_seconds,
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
-            plan.normalized_domain = self._clean_domain(plan.normalized_domain or query)
             plan.search_queries = self._with_canonical_query(plan, profile)
             return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
@@ -76,7 +79,7 @@ class StormLitePlanner:
             return PlanningResult(plan=self._fallback_plan(query, profile), stats=stats)
 
     def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
-        domain = self._clean_domain(query)
+        domain = self._extract_domain(query)
         english = _DOMAIN_ALIASES.get(domain.lower(), _DOMAIN_ALIASES.get(domain, domain))
         perspectives = [
             ResearchPerspective(
@@ -110,6 +113,25 @@ class StormLitePlanner:
         plan.search_queries = self._with_canonical_query(plan, profile or LearnerProfile())
         return plan
 
+    @classmethod
+    def _extract_domain(cls, query: str) -> str:
+        text = query.strip()
+        lowered = text.lower()
+        for alias in sorted(_DOMAIN_ALIASES, key=len, reverse=True):
+            if re.fullmatch(r"[a-z0-9-]+", alias):
+                matched = re.search(rf"\b{re.escape(alias)}\b", lowered)
+            else:
+                matched = alias in text
+            if matched:
+                return _DOMAIN_CANONICAL_NAMES.get(alias, alias)
+        match = re.search(
+            r"(?:入门|学习|了解|研究)([^，。；;]{2,50}?)(?:方向|并|希望|偏(?:向|重)|$)",
+            text,
+        )
+        if match:
+            return cls._clean_domain(match.group(1))
+        return cls._clean_domain(text)
+
     @staticmethod
     def _clean_domain(value: str) -> str:
         domain = str(value or "").strip(" \t\r\n，。！？!?：:")
@@ -136,12 +158,16 @@ class StormLitePlanner:
             changed = False
             for prefix in prefixes:
                 if domain.startswith(prefix):
-                    domain = domain.removeprefix(prefix).strip(" \t\r\n，。！？!?：:")
+                    domain = domain.removeprefix(prefix).strip(
+                        " \t\r\n，。！？!?：:"
+                    )
                     changed = True
                     break
-        domain = re.sub(r"(?:这个)?(?:研究)?(?:方向|领域|入门|概述|简介)$", "", domain).strip(
-            " \t\r\n，。！？!?：:"
-        )
+        domain = re.sub(
+            r"(?:这个)?(?:研究)?(?:方向|领域|入门|概述|简介)$",
+            "",
+            domain,
+        ).strip(" \t\r\n，。！？!?：:")
         return domain or str(value or "").strip()
 
     def _with_canonical_query(

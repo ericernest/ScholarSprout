@@ -384,6 +384,7 @@ class SkillLoaderRegistryTests(unittest.TestCase):
                 "reading.writing_coach",
                 "reading.idea_generator",
                 "reading.cross_paper_linker",
+                "reading.novice_map_builder",
             ],
         )
 

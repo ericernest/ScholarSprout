@@ -31,6 +31,7 @@ class OpenAIClient:
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
         max_tokens: int | None = None,
+        timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> Any:
         model_name = self.config.model_name.strip()
@@ -50,7 +51,12 @@ class OpenAIClient:
         if response_format is not None:
             kwargs["response_format"] = response_format
 
-        return self.client.chat.completions.create(**kwargs)
+        client = (
+            self.client.with_options(timeout=timeout, max_retries=0)
+            if timeout is not None
+            else self.client
+        )
+        return client.chat.completions.create(**kwargs)
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
         """Create dense vectors through an OpenAI-compatible embedding endpoint."""

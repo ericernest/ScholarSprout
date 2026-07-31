@@ -24,6 +24,9 @@ from handlers.domain_onboarding.pipeline import create_default_pipeline
 from handlers.domain_onboarding.jobs import (
     TERMINAL_STATES,
     DomainOnboardingJobManager,
+    JobNotRetryableError,
+    JobQueueFullError,
+    JobRateLimitError,
     create_job_store_from_env,
 )
 from handlers.domain_onboarding.schemas import DomainOnboardingRequest
@@ -221,12 +224,25 @@ async def create_domain_onboarding_job(request: Request) -> JSONResponse:
         )
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=error.errors()) from error
-    job = manager.submit(job_request, client_request_id=payload.get("client_request_id"))
+    try:
+        job = manager.submit(
+            job_request,
+            client_request_id=payload.get("client_request_id"),
+            owner_key=_domain_job_owner_key(request, job_request),
+        )
+    except (JobQueueFullError, JobRateLimitError) as error:
+        return JSONResponse(
+            {"detail": str(error), "retry_after_seconds": 10},
+            status_code=429,
+            headers={"Retry-After": "10"},
+        )
     body = {
         "task_id": job["task_id"], "state": job["state"], "revision": job["revision"],
+        "access_token": job["access_token"],
         "poll_url": f"/domain_onboarding/jobs/{job['task_id']}",
         "events_url": f"/domain_onboarding/jobs/{job['task_id']}/events",
         "cancel_url": f"/domain_onboarding/jobs/{job['task_id']}",
+        "retry_url": f"/domain_onboarding/jobs/{job['task_id']}/retry",
     }
     return JSONResponse(body, status_code=202)
 
@@ -235,25 +251,62 @@ async def create_domain_onboarding_job(request: Request) -> JSONResponse:
 def get_domain_onboarding_job(task_id: str, request: Request) -> dict[str, object]:
     store = getattr(request.app.state, "domain_onboarding_job_store", None)
     job = store.get(task_id) if store is not None else None
-    if job is None:
-        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    _require_domain_job_access(task_id, request, job)
     return job
 
 
 @app.delete("/domain_onboarding/jobs/{task_id}", status_code=202)
 def cancel_domain_onboarding_job(task_id: str, request: Request) -> JSONResponse:
     manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    store = getattr(request.app.state, "domain_onboarding_job_store", None)
+    existing = store.get(task_id) if store is not None else None
+    _require_domain_job_access(task_id, request, existing)
     job = manager.cancel(task_id) if manager is not None else None
     if job is None:
         raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
     return JSONResponse({"task_id": task_id, "state": job["state"]}, status_code=202)
 
 
+@app.post("/domain_onboarding/jobs/{task_id}/retry", status_code=202)
+def retry_domain_onboarding_job(task_id: str, request: Request) -> JSONResponse:
+    manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    store = getattr(request.app.state, "domain_onboarding_job_store", None)
+    existing = store.get(task_id) if store is not None else None
+    _require_domain_job_access(task_id, request, existing)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Domain onboarding jobs are not initialized.")
+    try:
+        previous_request = DomainOnboardingRequest.model_validate(existing["request"])
+        job = manager.retry(
+            task_id,
+            owner_key=_domain_job_owner_key(request, previous_request),
+        )
+    except JobNotRetryableError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (JobQueueFullError, JobRateLimitError) as error:
+        return JSONResponse(
+            {"detail": str(error), "retry_after_seconds": 10},
+            status_code=429,
+            headers={"Retry-After": "10"},
+        )
+    body = {
+        "task_id": job["task_id"],
+        "parent_task_id": task_id,
+        "state": job["state"],
+        "revision": job["revision"],
+        "access_token": job["access_token"],
+        "poll_url": f"/domain_onboarding/jobs/{job['task_id']}",
+        "events_url": f"/domain_onboarding/jobs/{job['task_id']}/events",
+        "cancel_url": f"/domain_onboarding/jobs/{job['task_id']}",
+    }
+    return JSONResponse(body, status_code=202)
+
+
 @app.get("/domain_onboarding/jobs/{task_id}/events")
 async def stream_domain_onboarding_job(task_id: str, request: Request) -> StreamingResponse:
     store = getattr(request.app.state, "domain_onboarding_job_store", None)
-    if store is None or store.get(task_id) is None:
-        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    job = store.get(task_id) if store is not None else None
+    _require_domain_job_access(task_id, request, job)
     header_cursor = request.headers.get("last-event-id")
     query_cursor = request.query_params.get("after")
     try:
@@ -270,6 +323,16 @@ async def stream_domain_onboarding_job(task_id: str, request: Request) -> Stream
             rows = store.events_after(task_id, cursor)
             for event in rows:
                 cursor = int(event["id"])
+                if event["event"] in TERMINAL_STATES and event["data"].get("result_available"):
+                    terminal_snapshot = store.get(task_id)
+                    if terminal_snapshot is not None:
+                        event = {
+                            **event,
+                            "data": {
+                                **event["data"],
+                                "result": terminal_snapshot.get("result"),
+                            },
+                        }
                 yield f"id: {cursor}\nevent: {event['event']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             snapshot = store.get(task_id)
             if snapshot is None or snapshot["state"] in TERMINAL_STATES:
@@ -279,7 +342,42 @@ async def stream_domain_onboarding_job(task_id: str, request: Request) -> Stream
                 yield ": heartbeat\n\n"
             await asyncio.sleep(0.5)
 
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+def _domain_job_access_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return request.query_params.get("access_token")
+
+
+def _require_domain_job_access(
+    task_id: str, request: Request, job: dict[str, object] | None
+) -> None:
+    manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    if job is None or manager is None or not manager.authorize(
+        task_id, _domain_job_access_token(request)
+    ):
+        # Deliberately use the same response for missing and unauthorized jobs.
+        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+
+
+def _domain_job_owner_key(
+    request: Request, job_request: DomainOnboardingRequest | None = None
+) -> str:
+    host = request.client.host if request.client is not None else "unknown"
+    if job_request is None:
+        return host
+    return f"{host}:{job_request.user_id or ''}:{job_request.session_id or ''}"
 
 
 @app.get("/metrics/domain_onboarding")
@@ -379,4 +477,17 @@ def configure_domain_onboarding_runtime(app_state: object, model: object, client
         metrics=app_state.domain_onboarding_metrics,
         audit_sink=app_state.domain_onboarding_audit_sink,
         max_workers=int(os.getenv("DOMAIN_ONBOARDING_JOB_WORKERS", "2")),
+        max_queue_size=int(os.getenv("DOMAIN_ONBOARDING_JOB_QUEUE_SIZE", "20")),
+        per_owner_active_limit=int(
+            os.getenv("DOMAIN_ONBOARDING_JOB_OWNER_ACTIVE_LIMIT", "2")
+        ),
+        submissions_per_minute=int(
+            os.getenv("DOMAIN_ONBOARDING_JOB_SUBMISSIONS_PER_MINUTE", "10")
+        ),
+        retention_seconds=int(
+            os.getenv("DOMAIN_ONBOARDING_JOB_RETENTION_SECONDS", "604800")
+        ),
+        recovery_stale_seconds=int(
+            os.getenv("DOMAIN_ONBOARDING_JOB_RECOVERY_STALE_SECONDS", "900")
+        ),
     )
