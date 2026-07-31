@@ -19,6 +19,10 @@ class FailedLLMCallMetricsTests(unittest.TestCase):
         )
 
         self.assertEqual(model.calls[0]["max_tokens"], 1234)
+        self.assertEqual(
+            model.calls[0]["response_format"],
+            {"type": "json_object"},
+        )
 
     def test_invalid_json_error_preserves_reported_usage(self) -> None:
         model = FakeJSONModel(["not json"])

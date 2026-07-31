@@ -1,0 +1,55 @@
+/* Hallmark · atmospheric workbench · deep-teal research interface */
+:root {
+  color-scheme: dark;
+  --color-paper: oklch(14% 0.024 175);
+  --color-paper-deep: oklch(11% 0.021 175);
+  --color-surface: oklch(18% 0.03 175);
+  --color-surface-raised: oklch(22% 0.034 175);
+  --color-surface-soft: oklch(25% 0.03 175 / 0.72);
+  --color-surface-hover: oklch(29% 0.05 172 / 0.72);
+  --color-overlay: oklch(9% 0.02 175 / 0.82);
+  --color-ink: oklch(95% 0.018 170);
+  --color-ink-soft: oklch(87% 0.025 170);
+  --color-muted: oklch(72% 0.035 174);
+  --color-ink-on-accent: oklch(15% 0.03 175);
+  --color-rule: oklch(36% 0.05 174 / 0.62);
+  --color-rule-strong: oklch(64% 0.1 171 / 0.72);
+  --color-accent: oklch(84% 0.15 170);
+  --color-accent-strong: oklch(76% 0.17 169);
+  --color-accent-soft: oklch(84% 0.15 170 / 0.09);
+  --color-accent-wash: oklch(84% 0.15 170 / 0.16);
+  --color-accent-line: oklch(84% 0.15 170 / 0.34);
+  --color-accent-grid: oklch(84% 0.15 170 / 0.04);
+  --color-warning: oklch(82% 0.14 85);
+  --color-warning-soft: oklch(82% 0.14 85 / 0.1);
+  --color-warning-line: oklch(82% 0.14 85 / 0.38);
+  --color-warning-ink: oklch(91% 0.09 85);
+  --color-danger: oklch(72% 0.18 25);
+  --color-danger-soft: oklch(72% 0.18 25 / 0.1);
+  --color-danger-line: oklch(72% 0.18 25 / 0.4);
+  --color-danger-ink: oklch(88% 0.08 25);
+  --gradient-canvas:
+    radial-gradient(circle at 10% 0%, var(--color-accent-wash), transparent 30rem),
+    radial-gradient(circle at 88% 12%, var(--color-accent-soft), transparent 34rem),
+    linear-gradient(145deg, var(--color-paper-deep), var(--color-paper) 52%, var(--color-surface));
+  --gradient-panel:
+    radial-gradient(circle at 10% 0%, var(--color-accent-soft), transparent 18rem),
+    linear-gradient(160deg, var(--color-surface-raised), var(--color-surface));
+  --gradient-hero:
+    radial-gradient(circle at 88% 2%, var(--color-accent-wash), transparent 21rem),
+    radial-gradient(circle at 8% 100%, var(--color-accent-soft), transparent 18rem),
+    linear-gradient(145deg, var(--color-surface-raised), var(--color-surface));
+  --gradient-accent: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+  --font-body: "IBM Plex Sans", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Tomorrow", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Mono", monospace;
+  --radius-control: 0.7rem;
+  --radius-card: 0.9rem;
+  --radius-panel: 1.2rem;
+  --shadow-panel: 0 1.4rem 4rem oklch(6% 0.015 175 / 0.34);
+  --shadow-card: 0 0.8rem 2rem oklch(6% 0.015 175 / 0.22);
+  --focus-ring: 0 0 0 0.2rem oklch(84% 0.15 170 / 0.28);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+}

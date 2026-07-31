@@ -61,6 +61,7 @@ def invoke_json(
             ],
             max_tokens=max_tokens,
             timeout=timeout_seconds,
+            response_format={"type": "json_object"},
         )
     except Exception as error:
         stats = ModelCallStats(

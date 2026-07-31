@@ -1,0 +1,32 @@
+{
+  "version": "1.1.0",
+  "scope": "domain-onboarding",
+  "branch": "feat/domain-onboarding-ui-fix",
+  "pages": [
+    {
+      "path": "gateway/static/chat.html",
+      "role": "domain onboarding chat entry and result card",
+      "existing_structure": "message stream with bottom composer"
+    },
+    {
+      "path": "gateway/static/domain-onboarding/index.html",
+      "role": "domain onboarding learning workbench",
+      "existing_structure": "left navigation, central research map, right inspector"
+    }
+  ],
+  "findings": [
+    "The domain workbench used blue, violet, orange, pink, and yellow as competing section accents.",
+    "The rest of the original application is anchored in a deep teal interface.",
+    "The page already exposes the required progress, empty, error, selected, inspector, graph, and responsive states.",
+    "Backend routes, chat job submission, workspace persistence, and all existing element IDs must be preserved.",
+    "The full-project redesign files belong only to feat/research-assistant-visual-redesign and must not be imported here."
+  ],
+  "locked_direction": {
+    "genre": "atmospheric technical",
+    "anchor_hue": "deep teal",
+    "macrostructure": "Workbench",
+    "accent_policy": "one teal accent; warning and danger remain semantic only",
+    "motion": "preserve existing particles; use transform-based progress updates"
+  },
+  "deletions": []
+}

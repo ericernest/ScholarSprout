@@ -27,6 +27,9 @@ class DomainPlanner(Protocol):
 _DOMAIN_ALIASES = {
     "多模态大模型": "multimodal large language models",
     "多智能体辩论": "multi-agent debate",
+    "多智能体": "multi-agent systems",
+    "多智能体系统": "multi-agent systems",
+    "智能体协作": "multi-agent collaboration",
     "检索增强生成": "retrieval-augmented generation",
     "rag": "retrieval-augmented generation",
     "图神经网络": "graph neural networks",
@@ -110,8 +113,8 @@ class StormLitePlanner:
         plan.search_queries = self._with_canonical_query(plan, profile or LearnerProfile())
         return plan
 
-    @staticmethod
-    def _extract_domain(query: str) -> str:
+    @classmethod
+    def _extract_domain(cls, query: str) -> str:
         text = query.strip()
         lowered = text.lower()
         for alias in sorted(_DOMAIN_ALIASES, key=len, reverse=True):
@@ -126,10 +129,46 @@ class StormLitePlanner:
             text,
         )
         if match:
-            return match.group(1).strip()
-        for prefix in ("我想入门", "我想学习", "请帮我入门", "学习"):
-            text = text.removeprefix(prefix).strip()
-        return text.removesuffix("方向").strip() or query.strip()
+            return cls._clean_domain(match.group(1))
+        return cls._clean_domain(text)
+
+    @staticmethod
+    def _clean_domain(value: str) -> str:
+        domain = str(value or "").strip(" \t\r\n，。！？!?：:")
+        prefixes = (
+            "请帮我介绍一下",
+            "请帮我介绍",
+            "帮我介绍一下",
+            "帮我介绍",
+            "请介绍一下",
+            "请介绍",
+            "介绍一下",
+            "介绍",
+            "我想入门",
+            "我想学习",
+            "请帮我入门",
+            "帮我了解一下",
+            "帮我了解",
+            "了解一下",
+            "了解",
+            "学习",
+        )
+        changed = True
+        while changed:
+            changed = False
+            for prefix in prefixes:
+                if domain.startswith(prefix):
+                    domain = domain.removeprefix(prefix).strip(
+                        " \t\r\n，。！？!?：:"
+                    )
+                    changed = True
+                    break
+        domain = re.sub(
+            r"(?:这个)?(?:研究)?(?:方向|领域|入门|概述|简介)$",
+            "",
+            domain,
+        ).strip(" \t\r\n，。！？!?：:")
+        return domain or str(value or "").strip()
 
     def _with_canonical_query(
         self, plan: DomainResearchPlan, profile: LearnerProfile

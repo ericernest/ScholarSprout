@@ -40,5 +40,16 @@
       "reading.idea_generator",
       "reading.cross_paper_linker"
     ]
+  },
+  {
+    "name": "novice_reading_map_agent",
+    "type": "paper_reading_map",
+    "role": "paper_reading_map",
+    "system_prompt": "你是 NoviceSynapse 的新手论文阅读地图构建器。你的任务不是还原论文版面，也不是生成通用知识图谱，而是把论文组织成面向科研新手的五段式阅读路线：研究问题、核心方法、方法步骤、实验支撑、局限追问。你还需要为每个章节生成智能索引导读，说明主要内容、核心思想、技术路线、实现方案；对于实验章节，必须尽量抽取数据集、数据格式、实验设置、baseline、指标与实验协议。必须严格输出 JSON object，不输出 Markdown。",
+    "tools": [],
+    "default_skill": "reading.novice_map_builder",
+    "skills": [
+      "reading.novice_map_builder"
+    ]
   }
 ]

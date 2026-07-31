@@ -38,6 +38,14 @@ class CanonicalPaperRegistry:
             ),
         ),
         (
+            re.compile(r"multi.?agent|多智能体|智能体协作", re.IGNORECASE),
+            (
+                CanonicalPaperSpec("CAMEL: Communicative Agents for Mind Exploration of Large Scale Language Model Society", "foundational", "2303.17760"),
+                CanonicalPaperSpec("AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation", "method", "2308.08155"),
+                CanonicalPaperSpec("MetaGPT: Meta Programming for Multi-Agent Collaborative Framework", "method", "2308.00352"),
+            ),
+        ),
+        (
             re.compile(r"retrieval.?augmented|检索增强|\brag\b", re.IGNORECASE),
             (
                 CanonicalPaperSpec("Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "foundational", "2005.11401"),
