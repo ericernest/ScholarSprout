@@ -70,6 +70,79 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(len(model.calls), 1)
 
+    def test_incremental_generation_identifies_development_failure(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+
+        with self.assertRaisesRegex(
+            GenerationError,
+            "development section generation failed: LLM did not return a JSON object",
+        ):
+            StructuredOnboardingGenerator(
+                FakeJSONModel(["not json"]), config
+            ).generate_incrementally(
+                DomainOnboardingRequest(query="RAG"),
+                make_profile(),
+                make_plan(),
+                ranked,
+                lambda *_: None,
+            )
+
+    def test_incremental_generation_restores_planner_owned_domain(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        development = dict(payload)
+        development.pop("domain")
+        model = FakeJSONModel([development, payload, payload])
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        self.assertIn(make_plan().normalized_domain, result.output.domain)
+
+    def test_section_payload_omits_retrieval_and_unrelated_completed_context(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+        request = DomainOnboardingRequest(
+            query="RAG",
+            metadata={"private_client_hint": "must-not-reach-generation"},
+        )
+        completed = {
+            "domain": "RAG",
+            "prerequisites": [{"name": "IR"}],
+            "development_stages": [{"stage_id": "stage-1"}],
+            "paper_guidance": [{"paper_id": "paper-1"}],
+            "evidence_claims": [{"claim": "claim"}],
+        }
+
+        development = generator._section_user_payload(
+            "development", request, make_profile(), make_plan(), ranked, completed
+        )
+        landscape = generator._section_user_payload(
+            "landscape", request, make_profile(), make_plan(), ranked, completed
+        )
+
+        self.assertNotIn("metadata", development["request"])
+        self.assertNotIn("search_queries", development["research_plan"])
+        self.assertEqual(development["completed_sections"], {})
+        self.assertEqual(
+            set(landscape["completed_sections"]),
+            {"domain", "development_stages"},
+        )
+
     def test_incremental_generation_unwraps_named_section_payloads(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(
