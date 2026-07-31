@@ -81,9 +81,13 @@ def main() -> None:
                     _write_jsonl(args.events_output, events)
                     raise TimeoutError("async example capture exceeded its deadline")
                 events = store.events_after(job["task_id"], 0)
+                _persist_terminal_capture(
+                    snapshot,
+                    events,
+                    snapshot_output=args.snapshot_output,
+                    events_output=args.events_output,
+                )
                 if snapshot["state"] != "completed":
-                    _write_json(args.snapshot_output, snapshot)
-                    _write_jsonl(args.events_output, events)
                     raise RuntimeError(
                         f"real async request ended in {snapshot['state']}: {snapshot['error']}"
                     )
@@ -95,14 +99,6 @@ def main() -> None:
                         "captured snapshot failed publication checks:\n- "
                         + "\n- ".join(errors)
                     )
-                for event in events:
-                    if (
-                        event["event"] == "completed"
-                        and event["data"].get("result_available")
-                    ):
-                        event["data"]["result"] = snapshot["result"]
-                _write_json(args.snapshot_output, snapshot)
-                _write_jsonl(args.events_output, events)
             finally:
                 manager.close()
     finally:
@@ -124,6 +120,26 @@ def _write_jsonl(path: str | Path, values: list[dict[str, object]]) -> None:
         "".join(json.dumps(value, ensure_ascii=False) + "\n" for value in values),
         encoding="utf-8",
     )
+
+
+def _persist_terminal_capture(
+    snapshot: dict[str, object],
+    events: list[dict[str, object]],
+    *,
+    snapshot_output: str | Path,
+    events_output: str | Path,
+) -> None:
+    """Persist the exact terminal run before deciding whether it is publishable."""
+    for event in events:
+        data = event.get("data")
+        if (
+            event.get("event") == "completed"
+            and isinstance(data, dict)
+            and data.get("result_available")
+        ):
+            data["result"] = snapshot.get("result")
+    _write_json(snapshot_output, snapshot)
+    _write_jsonl(events_output, events)
 
 
 if __name__ == "__main__":
