@@ -100,9 +100,9 @@ class DomainOnboardingConfig(BaseModel):
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
     planning_max_tokens: int = Field(default=1600, ge=256, le=4096)
     generation_max_tokens: int = Field(default=6000, ge=1024, le=12000)
-    generation_development_max_tokens: int = Field(default=2200, ge=800, le=5000)
-    generation_landscape_max_tokens: int = Field(default=1600, ge=600, le=4000)
-    generation_learning_path_max_tokens: int = Field(default=1800, ge=800, le=4000)
+    generation_development_max_tokens: int = Field(default=1600, ge=800, le=5000)
+    generation_landscape_max_tokens: int = Field(default=1200, ge=600, le=4000)
+    generation_learning_path_max_tokens: int = Field(default=1400, ge=800, le=4000)
     # Incremental generation runs development first, then landscape/path in
     # parallel. The default deadline fits two full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)

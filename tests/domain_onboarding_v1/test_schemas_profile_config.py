@@ -64,6 +64,14 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_timeout_seconds,
         )
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
+        self.assertEqual(
+            (
+                config.generation_development_max_tokens,
+                config.generation_landscape_max_tokens,
+                config.generation_learning_path_max_tokens,
+            ),
+            (1600, 1200, 1400),
+        )
         self.assertLessEqual(
             4 * config.generation_section_timeout_seconds,
             config.generation_timeout_seconds,

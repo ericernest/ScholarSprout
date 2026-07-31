@@ -354,14 +354,16 @@ class StructuredOnboardingGenerator:
         instructions = {
             "development": (
                 "Return domain, text, exactly 3 prerequisites, exactly 3 chronological development_stages, "
-                "paper_guidance and evidence_claims. historical_period must be real calendar years or eras, never learner weeks. "
+                "up to 3 paper_guidance items and exactly 3 evidence_claims. Keep every text field concise. "
+                "historical_period must be real calendar years or eras, never learner weeks. "
                 "Use start_year/end_year when known; stage 1 has empty transition, later stages explain the causal transition. "
-                "Every stage must include one or more breakthroughs. Each breakthrough has breakthrough_id, name, description, "
+                "Every stage must include exactly one breakthrough. Each breakthrough has breakthrough_id, name, description, "
                 "supporting_paper_ids, enabled_capabilities and limitation_problem_ids. Use only allowed paper IDs; "
                 "limitation_problem_ids may stay empty until the landscape section is resolved."
             ),
             "landscape": (
-                "Return current_landscape and evidence_claims. Include 3 problems and 3-5 subdirections. "
+                "Return current_landscape and up to 3 evidence_claims. Include exactly 3 problems and 3 subdirections. "
+                "Keep descriptions and research-question lists concise. "
                 "Each problem includes related papers, emerged_in_stage_id, affected_stage_ids and related_subdirection_ids. "
                 "Each subdirection includes related papers, emerged_in_stage_id and addresses_problem_ids. "
                 "Use research_plan.expected_subdirections as the intended domain taxonomy; do not replace it with generic "
@@ -369,7 +371,8 @@ class StructuredOnboardingGenerator:
                 "shared paper evidence supports that relation."
             ),
             "learning_path": (
-                "Return five learning_path steps and evidence_claims. Suggest papers according to the actual learning task: "
+                "Return exactly five concise learning_path steps and up to 3 evidence_claims. Use only 1-2 items in each list. "
+                "Suggest papers according to the actual learning task: "
                 "survey/foundational work for concepts, foundational/classic methods for architecture, method papers for improvements, "
                 "an implementable method as the experiment baseline, evaluation papers only for learning evaluation, and recent "
                 "problem-driven methods for the frontier. An evaluation or application paper must never be the sole baseline paper. "
