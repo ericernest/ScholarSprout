@@ -519,6 +519,22 @@ class StructuredOnboardingGenerator:
             completed["domain"] = default_domain
         if section == "development":
             self._sanitize_development_paper_ids(completed, papers)
+        if section == "landscape" and not isinstance(
+            completed.get("current_landscape"), dict
+        ):
+            landscape_keys = {
+                "problems",
+                "subdirections",
+                "problem_details",
+                "subdirection_details",
+            }
+            landscape = {
+                key: completed[key]
+                for key in landscape_keys
+                if key in completed
+            }
+            if any(isinstance(value, list) for value in landscape.values()):
+                completed["current_landscape"] = landscape
         self._validate_section_payload(section, completed, papers)
         return completed
 
