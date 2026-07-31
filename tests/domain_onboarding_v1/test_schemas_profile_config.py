@@ -59,6 +59,10 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertEqual(sum(first.dimension_weights.values()), 1.0)
         self.assertGreater(config.planning_timeout_seconds, 60.0)
+        self.assertLess(
+            config.planning_model_timeout_seconds,
+            config.planning_timeout_seconds,
+        )
 
     def test_quality_policy_requires_complete_normalized_weights(self) -> None:
         with self.assertRaises(ValidationError):

@@ -66,9 +66,12 @@ class DomainOnboardingConfig(BaseModel):
     # total 111-147s, planning 13-26s, generation 78-103s.
     request_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
-    # Must exceed the configured model client's 60s timeout so a timed-out LLM
+    # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
     planning_timeout_seconds: float = Field(default=75.0, gt=0.0, le=120.0)
+    planning_model_timeout_seconds: float = Field(
+        default=60.0, gt=0.0, le=115.0
+    )
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     ranking_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
     generation_timeout_seconds: float = Field(default=150.0, gt=0.0, le=180.0)
@@ -129,6 +132,10 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError("ranking weights must sum to 1.0")
         if self.retrieval_max_backoff_seconds < self.retrieval_backoff_seconds:
             raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
+        if self.planning_model_timeout_seconds >= self.planning_timeout_seconds:
+            raise ValueError(
+                "planning model timeout must be shorter than the planning stage deadline"
+            )
         if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
             raise ValueError("knowledge graph foundation supports shadow mode only")
         if len(self.ranking_required_roles) != len(set(self.ranking_required_roles)):

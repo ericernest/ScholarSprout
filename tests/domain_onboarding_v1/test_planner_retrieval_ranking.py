@@ -50,6 +50,14 @@ class PlannerTests(unittest.TestCase):
             plan.search_queries[1],
             "ARXIV:2310.11511",
         )
+        self.assertEqual(model.calls[0]["timeout"], 60.0)
+
+    def test_planning_model_timeout_must_precede_stage_deadline(self) -> None:
+        with self.assertRaises(ValueError):
+            DomainOnboardingConfig(
+                planning_timeout_seconds=60.0,
+                planning_model_timeout_seconds=60.0,
+            )
 
     def test_invalid_model_output_falls_back_without_fabricating_papers(self) -> None:
         planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
