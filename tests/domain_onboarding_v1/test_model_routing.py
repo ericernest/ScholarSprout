@@ -4,7 +4,10 @@ import unittest
 from unittest.mock import patch
 
 from handlers.domain_onboarding.llm import StructuredLLMError, invoke_json
-from handlers.domain_onboarding.model_routing import RoutedChatModel
+from handlers.domain_onboarding.model_routing import (
+    RoutedChatModel,
+    run_with_model_route,
+)
 from handlers.domain_onboarding.pipeline import create_default_pipeline
 
 from .fakes import FakeJSONModel
@@ -99,6 +102,38 @@ class ModelRoutingTests(unittest.TestCase):
             )
         finally:
             pipeline.close()
+
+    def test_caller_validation_failure_uses_next_model(self) -> None:
+        delegate = FakeJSONModel([{"wrong": True}, {"learning_path": []}])
+        model = RoutedChatModel(
+            delegate,
+            ["invalid-json-shape", "valid-backup"],
+            route_name="learning_path",
+        )
+
+        def operation(candidate, timeout):
+            payload, _ = invoke_json(
+                candidate,
+                system_prompt="Return JSON",
+                user_prompt="{}",
+                timeout_seconds=timeout,
+            )
+            if "learning_path" not in payload:
+                raise ValueError("missing learning_path")
+            return payload
+
+        payload = run_with_model_route(
+            model,
+            operation,
+            timeout_seconds=30.0,
+        )
+
+        self.assertEqual(payload, {"learning_path": []})
+        self.assertEqual(model.snapshot()["selected_model"], "valid-backup")
+        self.assertEqual(
+            [item["error_type"] for item in model.snapshot()["attempts"][:-1]],
+            ["ValueError"],
+        )
 
 
 if __name__ == "__main__":

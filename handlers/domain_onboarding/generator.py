@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from .config import DomainOnboardingConfig
 from .learning_bindings import LearningPaperBinder
 from .llm import StructuredLLMError, invoke_json
-from .model_routing import routing_snapshot
+from .model_routing import routing_snapshot, run_with_model_route
 from .relations import SemanticRelationResolver
 from .schemas import (
     CurrentLandscape,
@@ -405,9 +405,11 @@ class StructuredOnboardingGenerator:
             "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
             "completed_sections": completed,
         }
-        try:
+        section_model = self.section_models.get(section, self.model)
+
+        def generate_candidate(candidate: Any, timeout_seconds: float | None):
             payload, stats = invoke_json(
-                self.section_models.get(section, self.model),
+                candidate,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens={
@@ -415,7 +417,7 @@ class StructuredOnboardingGenerator:
                     "landscape": self.config.generation_landscape_max_tokens,
                     "learning_path": self.config.generation_learning_path_max_tokens,
                 }[section],
-                timeout_seconds=self.config.generation_section_timeout_seconds,
+                timeout_seconds=timeout_seconds,
             )
             try:
                 completed = self._complete_section_payload(section, payload, papers)
@@ -423,8 +425,30 @@ class StructuredOnboardingGenerator:
                 error.stats = stats
                 raise
             return completed, stats
+
+        try:
+            completed, stats = run_with_model_route(
+                section_model,
+                generate_candidate,
+                timeout_seconds=self.config.generation_section_timeout_seconds,
+            )
+            stats.model_calls = max(
+                stats.model_calls,
+                int(getattr(section_model, "last_attempt_count", 1)),
+            )
+            return completed, stats
         except StructuredLLMError as error:
+            error.stats.model_calls = max(
+                error.stats.model_calls,
+                int(getattr(section_model, "last_attempt_count", 1)),
+            )
             raise GenerationError(str(error), stats=error.stats) from error
+        except GenerationError as error:
+            error.stats.model_calls = max(
+                error.stats.model_calls,
+                int(getattr(section_model, "last_attempt_count", 1)),
+            )
+            raise
 
     def _complete_section_payload(
         self,
