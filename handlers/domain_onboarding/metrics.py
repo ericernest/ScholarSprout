@@ -177,6 +177,12 @@ class DomainOnboardingMetrics:
         self._graph_nodes = 0
         self._graph_edges = 0
         self._graph_durations: deque[float] = deque(maxlen=window_size)
+        self._async_job_events: Counter[str] = Counter()
+
+    def record_job_event(self, event: str, count: int = 1) -> None:
+        """Record async lifecycle signals that do not require a request trace."""
+        with self._lock:
+            self._async_job_events[event] += int(count)
 
     def record(self, trace: DomainOnboardingRequestTrace) -> None:
         with self._lock:
@@ -293,6 +299,7 @@ class DomainOnboardingMetrics:
                     "fingerprints": dict(self._policy_fingerprints),
                 },
                 "audit": {"write_failures": self._audit_write_failures},
+                "async_jobs": dict(self._async_job_events),
                 "adaptive_repair": {
                     "mode": "shadow",
                     "policy_versions": dict(self._adaptive_policy_versions),
@@ -393,6 +400,16 @@ class DomainOnboardingMetrics:
         for status, value in sorted(snapshot["statuses"].items()):
             lines.append(
                 f'novicesynapse_domain_onboarding_requests_total{{status="{_label(status)}"}} {value}'
+            )
+        lines.extend(
+            [
+                "# HELP novicesynapse_domain_onboarding_async_jobs_total Async job lifecycle events.",
+                "# TYPE novicesynapse_domain_onboarding_async_jobs_total counter",
+            ]
+        )
+        for event, value in sorted(snapshot["async_jobs"].items()):
+            lines.append(
+                f'novicesynapse_domain_onboarding_async_jobs_total{{event="{_label(event)}"}} {value}'
             )
         lines.extend(
             [

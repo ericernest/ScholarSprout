@@ -60,6 +60,23 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(result.stats.model_calls, 1)
         self.assertEqual(result.stats.total_tokens, 50)
 
+    def test_fallback_extracts_domain_from_full_learning_request(self) -> None:
+        planner = StormLitePlanner(
+            FakeJSONModel([TimeoutError("planner timeout")]),
+            DomainOnboardingConfig(),
+        )
+
+        plan = planner.plan(
+            "我已经学过 Transformer，希望六周入门检索增强生成并复现一个基线，偏向实践",
+            make_profile(),
+        ).plan
+
+        self.assertEqual(plan.normalized_domain, "检索增强生成")
+        self.assertTrue(
+            any("retrieval-augmented generation" in query for query in plan.search_queries)
+        )
+        self.assertTrue(all("我已经学过" not in query for query in plan.search_queries))
+
 
 class FakeResponse:
     def __init__(
@@ -334,6 +351,101 @@ class RankingTests(unittest.TestCase):
                 paper.paper_role,
                 {"survey", "foundational", "method", "evaluation", "application", "frontier", "other"},
             )
+
+    def test_citation_score_uses_absolute_saturation_not_batch_maximum(self) -> None:
+        paper = make_candidates(1)[0].model_copy(update={"citation_count": 2})
+
+        ranked = self.ranker.rank([paper], make_plan(), limit=1).papers[0]
+
+        self.assertAlmostEqual(ranked.citation_score, 0.159017, places=6)
+
+    def test_canonical_match_has_relevance_floor_when_tfidf_has_no_overlap(self) -> None:
+        class ZeroVectorizer:
+            name = "tfidf"
+
+            def vectorize(self, texts):
+                return [{} for _ in texts]
+
+        ranker = WeightedPaperRanker(
+            DomainOnboardingConfig(ranking_canonical_relevance_floor=0.1),
+            vectorizer=ZeroVectorizer(),
+        )
+
+        paper = ranker.rank([make_candidates(1)[0]], make_plan(), limit=1).papers[0]
+
+        self.assertTrue(paper.is_canonical)
+        self.assertEqual(paper.relevance_score, 0.1)
+
+    def test_role_classifier_does_not_treat_every_literature_review_as_survey(self) -> None:
+        literature_tool = make_candidates(1)[0].model_copy(
+            update={
+                "paper_id": "literature-tool",
+                "title": "Automated Literature Review Using Retrieval-Augmented Generation",
+                "arxiv_id": None,
+                "url": "https://example.org/literature-tool",
+                "source": "test",
+            }
+        )
+        image_generation = literature_tool.model_copy(
+            update={
+                "paper_id": "image-rag",
+                "title": "Autoregressive Retrieval Augmentation for Image Generation",
+                "url": "https://example.org/image-rag",
+            }
+        )
+
+        ranked = self.ranker.rank(
+            [literature_tool, image_generation], make_plan(), limit=2
+        ).papers
+        roles = {paper.paper_id: paper.paper_role for paper in ranked}
+
+        self.assertNotEqual(roles["literature-tool"], "survey")
+        self.assertEqual(roles["image-rag"], "application")
+
+    def test_selection_caps_surveys_instead_of_padding_the_result(self) -> None:
+        base = make_candidates(1)[0]
+        surveys = [
+            base.model_copy(
+                update={
+                    "paper_id": f"survey-{index}",
+                    "title": f"A Comprehensive Survey of RAG Systems {index}",
+                    "url": f"https://example.org/survey-{index}",
+                    "arxiv_id": None,
+                    "citation_count": 10 + index,
+                }
+            )
+            for index in range(7)
+        ]
+        ranker = WeightedPaperRanker(
+            DomainOnboardingConfig(ranking_max_survey_papers=2)
+        )
+
+        ranked = ranker.rank(surveys, make_plan(), limit=7).papers
+
+        self.assertLessEqual(
+            sum(paper.paper_role == "survey" for paper in ranked), 2
+        )
+
+    def test_noncanonical_missing_abstracts_are_dropped_when_grounded_pool_is_large(self) -> None:
+        ranker = WeightedPaperRanker(
+            DomainOnboardingConfig(ranking_min_abstract_candidates=5)
+        )
+        grounded = make_candidates(6)
+        missing = grounded[0].model_copy(
+            update={
+                "paper_id": "missing-abstract",
+                "title": "RAG Framework Without Abstract",
+                "abstract": None,
+                "arxiv_id": None,
+                "url": "https://example.org/missing-abstract",
+                "source": "test",
+                "citation_count": 100000,
+            }
+        )
+
+        result = ranker.rank([missing, *grounded], make_plan(), limit=10)
+
+        self.assertNotIn("missing-abstract", [paper.paper_id for paper in result.papers])
 
     def test_candidate_limit_is_shared_fairly_across_sources(self) -> None:
         config = DomainOnboardingConfig(candidate_paper_limit=6, selected_paper_limit=6)

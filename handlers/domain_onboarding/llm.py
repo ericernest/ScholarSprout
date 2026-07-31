@@ -50,6 +50,7 @@ def invoke_json(
     system_prompt: str,
     user_prompt: str,
     max_tokens: int | None = None,
+    timeout_seconds: float | None = None,
 ) -> tuple[dict[str, Any], ModelCallStats]:
     started = perf_counter()
     try:
@@ -59,6 +60,7 @@ def invoke_json(
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=max_tokens,
+            timeout=timeout_seconds,
         )
     except Exception as error:
         stats = ModelCallStats(

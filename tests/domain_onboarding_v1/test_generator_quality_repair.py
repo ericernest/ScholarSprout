@@ -48,6 +48,123 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(result.output.language, "zh-CN")
         self.assertTrue(result.output.learning_path[3].reproducibility_checklist)
 
+    def test_incremental_generation_uses_grounded_fallbacks_after_timeouts(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        model = FakeJSONModel(
+            [TimeoutError("slow development"), TimeoutError("slow landscape"), TimeoutError("slow path")]
+        )
+        events = []
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="检索增强生成"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda event, data, paths: events.append((event, data, paths)),
+        )
+
+        self.assertEqual(
+            result.output.reproducibility["generation_fallback_sections"],
+            ["development", "landscape", "learning_path"],
+        )
+        self.assertEqual(len(result.output.development_stages), 3)
+        self.assertGreaterEqual(len(result.output.current_landscape.problem_details), 3)
+        self.assertEqual(len(result.output.learning_path), 5)
+        self.assertTrue(all(step.papers for step in result.output.learning_path))
+        experiment_activities = result.output.learning_path[3].activities
+        self.assertEqual(
+            sum("复现" in activity for activity in experiment_activities), 1
+        )
+        for previous, current in zip(
+            result.output.development_stages,
+            result.output.development_stages[1:],
+        ):
+            if previous.end_year is not None and current.start_year is not None:
+                self.assertGreater(current.start_year, previous.end_year)
+        role_by_id = {paper.paper_id: paper.paper_role for paper in ranked}
+        direction_roles = {
+            "基础范式与核心架构": {"foundational"},
+            "方法改进与系统优化": {"method"},
+            "评测基准与可靠性": {"evaluation"},
+            "知识体系与工程实践": {"survey"},
+            "前沿扩展与应用边界": {"application", "frontier"},
+        }
+        for direction in result.output.current_landscape.subdirection_details:
+            expected_roles = direction_roles.get(direction.name)
+            if expected_roles:
+                self.assertTrue(
+                    all(role_by_id[paper_id] in expected_roles for paper_id in direction.related_paper_ids)
+                )
+        self.assertEqual(
+            [event[0] for event in events],
+            ["development_ready", "landscape_ready", "learning_path_ready"],
+        )
+
+    def test_sparse_fallback_reserves_basic_preparation_without_reusing_papers(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(4), make_plan(), limit=4
+        ).papers
+        model = FakeJSONModel(
+            [TimeoutError("development"), TimeoutError("landscape"), TimeoutError("path")]
+        )
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="检索增强生成"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        self.assertEqual(result.output.learning_path[0].paper_ids, [])
+        bound_ids = [
+            paper_id
+            for step in result.output.learning_path[1:]
+            for paper_id in step.paper_ids
+        ]
+        self.assertEqual(len(bound_ids), len(set(bound_ids)))
+        self.assertIn("可运行基线", result.output.learning_path[3].deliverables[0])
+
+    def test_three_paper_fallback_does_not_duplicate_stage_or_adjacent_route_bindings(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(3), make_plan(), limit=3
+        ).papers
+        result = StructuredOnboardingGenerator(
+            FakeJSONModel(
+                [TimeoutError("development"), TimeoutError("landscape"), TimeoutError("path")]
+            ),
+            config,
+        ).generate_incrementally(
+            DomainOnboardingRequest(query="检索增强生成"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        stage_ids = [
+            paper_id
+            for stage in result.output.development_stages
+            for paper_id in stage.related_paper_ids
+        ]
+        self.assertEqual(len(stage_ids), len(set(stage_ids)))
+        self.assertEqual(result.output.learning_path[0].paper_ids, [])
+        self.assertEqual(result.output.learning_path[-1].paper_ids, [])
+        self.assertFalse(
+            any(
+                set(previous.paper_ids) & set(current.paper_ids)
+                for previous, current in zip(
+                    result.output.learning_path,
+                    result.output.learning_path[1:],
+                )
+            )
+        )
+
     def setUp(self) -> None:
         self.config = DomainOnboardingConfig()
         self.ranked = WeightedPaperRanker(self.config).rank(
@@ -302,6 +419,48 @@ class QualityTests(unittest.TestCase):
                 and current.end_week >= previous.end_week
                 for previous, current in zip(steps, steps[1:])
             )
+        )
+
+    def test_stringified_structured_content_is_a_format_error(self) -> None:
+        self.output.learning_path[3].deliverables.append(
+            "{'experiment': {'evaluation_metrics': ['accuracy']}}"
+        )
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertLess(quality.dimensions["learning_path"], 1.0)
+        self.assertTrue(
+            any(issue.issue_type == "format_error" for issue in quality.issues)
+        )
+
+    def test_generation_fallback_is_an_explicit_quality_warning(self) -> None:
+        self.output.reproducibility["generation_fallback_sections"] = [
+            "development",
+            "landscape",
+            "learning_path",
+        ]
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertTrue(quality.passed_hard_gates)
+        self.assertEqual(quality.state, "warning")
+        self.assertTrue(
+            any(issue.issue_type == "generation_fallback" for issue in quality.issues)
+        )
+
+    def test_adjacent_steps_reusing_the_same_paper_reduce_route_quality(self) -> None:
+        self.output.learning_path[2].paper_ids = list(
+            self.output.learning_path[1].paper_ids
+        )
+        self.output.learning_path[2].papers = list(
+            self.output.learning_path[1].papers
+        )
+
+        quality = self.evaluator.evaluate(self.output, self.ranked)
+
+        self.assertLess(quality.dimensions["learning_path"], 1.0)
+        self.assertTrue(
+            any(issue.issue_type == "route_conflict" for issue in quality.issues)
         )
     def test_modified_paper_metadata_fails_hard_gate(self) -> None:
         self.output.papers[0].title = "Model invented title"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -32,6 +33,9 @@ _DOMAIN_ALIASES = {
     "扩散模型": "diffusion models",
     "大模型幻觉检测": "large language model hallucination detection",
 }
+_DOMAIN_CANONICAL_NAMES = {
+    "rag": "检索增强生成",
+}
 
 
 class StormLitePlanner:
@@ -59,6 +63,7 @@ class StormLitePlanner:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=self.config.planning_max_tokens,
+                timeout_seconds=self.config.planning_timeout_seconds,
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
@@ -71,10 +76,7 @@ class StormLitePlanner:
             return PlanningResult(plan=self._fallback_plan(query, profile), stats=stats)
 
     def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
-        domain = query.strip()
-        for prefix in ("我想入门", "我想学习", "请帮我入门", "学习"):
-            domain = domain.removeprefix(prefix).strip()
-        domain = domain.removesuffix("方向").strip() or query.strip()
+        domain = self._extract_domain(query)
         english = _DOMAIN_ALIASES.get(domain.lower(), _DOMAIN_ALIASES.get(domain, domain))
         perspectives = [
             ResearchPerspective(
@@ -107,6 +109,27 @@ class StormLitePlanner:
         )
         plan.search_queries = self._with_canonical_query(plan, profile or LearnerProfile())
         return plan
+
+    @staticmethod
+    def _extract_domain(query: str) -> str:
+        text = query.strip()
+        lowered = text.lower()
+        for alias in sorted(_DOMAIN_ALIASES, key=len, reverse=True):
+            if re.fullmatch(r"[a-z0-9-]+", alias):
+                matched = re.search(rf"\b{re.escape(alias)}\b", lowered)
+            else:
+                matched = alias in text
+            if matched:
+                return _DOMAIN_CANONICAL_NAMES.get(alias, alias)
+        match = re.search(
+            r"(?:入门|学习|了解|研究)([^，。；;]{2,50}?)(?:方向|并|希望|偏(?:向|重)|$)",
+            text,
+        )
+        if match:
+            return match.group(1).strip()
+        for prefix in ("我想入门", "我想学习", "请帮我入门", "学习"):
+            text = text.removeprefix(prefix).strip()
+        return text.removesuffix("方向").strip() or query.strip()
 
     def _with_canonical_query(
         self, plan: DomainResearchPlan, profile: LearnerProfile

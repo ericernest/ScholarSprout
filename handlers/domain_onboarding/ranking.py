@@ -90,7 +90,6 @@ class WeightedPaperRanker:
                 )
             )
 
-        max_citations = max((paper.citation_count or 0) for paper in valid)
         query_text = " ".join(
             [
                 plan.normalized_domain,
@@ -114,9 +113,10 @@ class WeightedPaperRanker:
             semantic_relevance = cosine_similarity(query_vector, paper_vector)
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
-            citations = (
-                math.log1p(paper.citation_count or 0) / math.log1p(max_citations)
-                if max_citations > 0 else 0.0
+            citations = min(
+                1.0,
+                math.log1p(paper.citation_count or 0)
+                / math.log1p(self.config.citation_saturation_count),
             )
             recency = self._recency_score(paper.year)
             nearest_neighbor = max(
@@ -129,6 +129,10 @@ class WeightedPaperRanker:
             )
             diversity = 1.0 - nearest_neighbor
             canonical = self.canonical_registry.match(paper, plan.normalized_domain)
+            if canonical is not None:
+                relevance = max(
+                    relevance, self.config.ranking_canonical_relevance_floor
+                )
             role = canonical.role if canonical else self._classify_role(paper)
             reading_priority = self._reading_priority(role, canonical is not None)
             final = (
@@ -137,6 +141,8 @@ class WeightedPaperRanker:
                 + self.config.recency_weight * recency
                 + self.config.diversity_weight * diversity
             )
+            if not (paper.abstract or "").strip() and canonical is None:
+                final *= self.config.ranking_missing_abstract_penalty
             ranked.append(
                 RankedPaper(
                     **paper.model_dump(),
@@ -164,6 +170,14 @@ class WeightedPaperRanker:
         if relevance_filtered:
             low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
             ranked = relevance_filtered
+        abstract_ready = [
+            paper
+            for paper in ranked
+            if paper.is_canonical or bool((paper.abstract or "").strip())
+        ]
+        if len(abstract_ready) >= self.config.ranking_min_abstract_candidates:
+            low_relevance_filtered_count += len(ranked) - len(abstract_ready)
+            ranked = abstract_ready
         selected, mmr_scores = self._select_mmr(
             ranked,
             vector_by_id,
@@ -311,14 +325,19 @@ class WeightedPaperRanker:
         return max(0.0, min(1.0, 1.0 - max(0, current - year) / 15.0))
 
     def _classify_role(self, paper: PaperCandidate) -> PaperRole:
-        text = f"{paper.title} {paper.abstract or ''}".lower()
-        if re.search(r"survey|review|overview|综述", text):
+        title = paper.title.lower()
+        text = f"{title} {paper.abstract or ''}".lower()
+        if re.search(
+            r"\bsurvey\b|systematic (?:literature )?review|\breview (?:of|on)\b|overview of|综述",
+            title,
+        ):
             return "survey"
-        if re.search(r"benchmark|evaluation|evaluating|dataset|评测", text):
+        if re.search(r"benchmark|evaluation|evaluating|dataset|评测", title):
             return "evaluation"
         if re.search(
             r"medical|imaging|remote sensing|segmentation|detection|forecasting|"
-            r"clinical|finance|industrial|application|应用|医学|遥感",
+            r"clinical|finance|industrial|application|legal|litigation|ehr|"
+            r"mammograph|image generation|应用|医学|遥感|法律",
             text,
         ):
             return "application"
@@ -370,12 +389,33 @@ class WeightedPaperRanker:
             application_count = sum(
                 item.paper_role == "application" for item in selected
             )
+            survey_count = sum(item.paper_role == "survey" for item in selected)
+            evaluation_count = sum(
+                item.paper_role == "evaluation" for item in selected
+            )
+            method_count = sum(item.paper_role == "method" for item in selected)
             eligible_remaining = [
                 paper
                 for paper in remaining
-                if paper.paper_role != "application"
-                or application_count < self.config.ranking_max_application_papers
-            ] or remaining
+                if (
+                    paper.paper_role != "application"
+                    or application_count < self.config.ranking_max_application_papers
+                )
+                and (
+                    paper.paper_role != "survey"
+                    or survey_count < self.config.ranking_max_survey_papers
+                )
+                and (
+                    paper.paper_role != "evaluation"
+                    or evaluation_count < self.config.ranking_max_evaluation_papers
+                )
+                and (
+                    paper.paper_role != "method"
+                    or method_count < self.config.ranking_max_method_papers
+                )
+            ]
+            if not eligible_remaining:
+                break
             for index, paper in enumerate(eligible_remaining):
                 redundancy = max(
                     (

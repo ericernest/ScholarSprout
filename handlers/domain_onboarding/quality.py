@@ -52,6 +52,24 @@ class CompositeQualityEvaluator:
         allowed_papers: list[RankedPaper],
     ) -> ContentQuality:
         issues: list[QualityIssue] = []
+        fallback_sections = output.reproducibility.get(
+            "generation_fallback_sections", []
+        )
+        if isinstance(fallback_sections, list) and fallback_sections:
+            issues.append(
+                QualityIssue(
+                    issue_type="generation_fallback",
+                    severity="warning",
+                    target_path="reproducibility.generation_fallback_sections",
+                    message=(
+                        "以下内容段未使用模型有效输出，已基于真实论文与确定性规则降级生成："
+                        f"{fallback_sections}。"
+                    ),
+                    recommended_action=(
+                        "前端应显示降级提示；如需更强语义内容，请重试模型生成或更换可用模型。"
+                    ),
+                )
+            )
         evidence = self.evidence_validator.validate(output, allowed_papers)
         issues.extend(evidence.issues)
         dimensions = {
@@ -385,6 +403,13 @@ class CompositeQualityEvaluator:
                 bool(stage.period.strip()),
                 not bool(re.search(r"\bweek\b|周", stage.historical_period, re.IGNORECASE)),
                 stage.start_year is None or stage.end_year is None or stage.start_year <= stage.end_year,
+                (
+                    index == 0
+                    or stage.start_year is None
+                    or output.development_stages[index - 1].end_year is None
+                    or stage.start_year
+                    >= output.development_stages[index - 1].end_year
+                ),
                 bool(stage.summary.strip()),
                 bool(stage.motivation.strip()),
                 (
@@ -442,12 +467,28 @@ class CompositeQualityEvaluator:
                             if step.step == "4"
                             else True
                         ),
+                        not self._learning_step_has_embedded_structure(step),
                     ]
                 )
-                / 8
+                / 9
                 for step in output.learning_path
             )
         )
+        malformed_steps = [
+            index
+            for index, step in enumerate(output.learning_path)
+            if self._learning_step_has_embedded_structure(step)
+        ]
+        if malformed_steps:
+            issues.append(
+                QualityIssue(
+                    issue_type="format_error",
+                    severity="error",
+                    target_path="learning_path",
+                    message=f"学习路径包含被字符串化的结构化内容；步骤索引：{malformed_steps}。",
+                    recommended_action="丢弃非字符串列表项，并重新生成对应学习步骤。",
+                )
+            )
         role_by_id = {paper.paper_id: paper.paper_role for paper in output.papers}
         priority_by_id = {
             paper.paper_id: paper.reading_priority for paper in output.papers
@@ -474,6 +515,12 @@ class CompositeQualityEvaluator:
         }
         route_fit = (not core_ids or bool(core_ids & early_ids)) and not (
             late_role_ids & first_two_ids
+        )
+        route_fit = route_fit and not any(
+            set(previous.paper_ids) & set(current.paper_ids)
+            for previous, current in zip(
+                output.learning_path, output.learning_path[1:]
+            )
         )
         if len(output.learning_path) >= 4:
             method_roles = {
@@ -505,6 +552,22 @@ class CompositeQualityEvaluator:
                 )
             )
         return score
+
+    @staticmethod
+    def _learning_step_has_embedded_structure(step: object) -> bool:
+        values = [
+            *getattr(step, "topics", []),
+            *getattr(step, "activities", []),
+            *getattr(step, "completion_criteria", []),
+            *getattr(step, "deliverables", []),
+            *getattr(step, "reproducibility_checklist", []),
+            *getattr(step, "evaluation_metrics", []),
+        ]
+        return any(
+            (text := str(value).strip()).startswith(("{", "["))
+            and text.endswith(("}", "]"))
+            for value in values
+        )
 
     def evaluate_language_alignment(
         self,
