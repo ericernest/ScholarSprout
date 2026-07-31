@@ -109,6 +109,63 @@ class RoutedChatModel:
             }
 
 
+class ModelOverrideChatModel:
+    """Bind one model ID without owning or closing the shared client."""
+
+    def __init__(self, delegate: Any, model_name: str) -> None:
+        self.delegate = delegate
+        self.model_name = model_name
+
+    def chat(self, **kwargs: Any) -> Any:
+        return self.delegate.chat(**kwargs, model_name=self.model_name)
+
+    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+        return self.delegate.embed(texts, model=model)
+
+
+def run_with_model_route(
+    model: Any,
+    operation: Any,
+    *,
+    timeout_seconds: float | None,
+) -> Any:
+    """Retry transport, JSON, and caller validation errors on the next model."""
+    if not isinstance(model, RoutedChatModel):
+        return operation(model, timeout_seconds)
+    attempt_timeout = model._attempt_timeout(timeout_seconds)
+    attempts: list[dict[str, Any]] = []
+    last_error: Exception | None = None
+    for model_name in model.model_names:
+        candidate = ModelOverrideChatModel(model.delegate, model_name)
+        started = perf_counter()
+        try:
+            result = operation(candidate, attempt_timeout)
+        except Exception as error:
+            last_error = error
+            attempts.append(
+                {
+                    "model": model_name,
+                    "status": "failed",
+                    "duration_ms": round((perf_counter() - started) * 1000, 3),
+                    "error_type": type(error).__name__,
+                }
+            )
+            continue
+        attempts.append(
+            {
+                "model": model_name,
+                "status": "selected",
+                "duration_ms": round((perf_counter() - started) * 1000, 3),
+            }
+        )
+        model._record(attempts, model_name)
+        return result
+    model._record(attempts, None)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"model route {model.route_name} has no candidates")
+
+
 def routed_model_from_env(
     delegate: Any,
     env_value: str | None,
