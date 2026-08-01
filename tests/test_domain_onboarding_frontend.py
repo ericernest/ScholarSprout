@@ -40,7 +40,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("formatPercentScore(paper.final_score)", script)
         self.assertIn("paperGuidance(paper)", script)
         self.assertIn("sectionStatusCopy", script)
-        self.assertIn("生成失败", script)
+        self.assertIn("待完善", script)
         self.assertIn("待生成", script)
         self.assertIn('action: "upload_paper"', script)
 

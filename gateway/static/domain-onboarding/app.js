@@ -20,7 +20,7 @@ const STATUS_LABELS = {
   running: "正在生成学习地图",
   cancel_requested: "正在取消",
   completed: "学习地图已生成",
-  failed: "生成失败",
+  failed: "内容待完善",
   cancelled: "任务已取消",
   interrupted: "任务因服务重启中断",
 };
@@ -36,7 +36,7 @@ const STAGE_LABELS = {
   repair_started: "正在修复质量问题",
   section_replaced: "已更新问题分区",
   completed: "学习地图已生成",
-  failed: "生成失败",
+  failed: "内容待完善",
   cancelled: "任务已取消",
 };
 const PRIORITY_LABELS = {
@@ -896,16 +896,14 @@ function isTerminalTask() {
 
 function sectionStatusCopy(label, data) {
   if (!isTerminalTask()) return emptyCopy(`${label}待生成`);
-  const error = data?.error || state.snapshot?.error;
-  return emptyCopy(
-    error
-      ? `${label}生成失败：${error}`
-      : `${label}生成失败`
-  );
+  return `<div class="empty-copy">
+    ${escapeHtml(label)}内容待完善
+    <div class="empty-action">点击下方重试按钮生成更优内容</div>
+  </div>`;
 }
 
 function fieldStatusCopy(label) {
-  return `${label}${isTerminalTask() ? "生成失败" : "待生成"}`;
+  return `${label}${isTerminalTask() ? "待完善" : "待生成"}`;
 }
 
 function paperGuidance(paper) {
