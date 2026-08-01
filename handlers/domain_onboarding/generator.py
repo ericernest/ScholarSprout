@@ -574,6 +574,13 @@ class StructuredOnboardingGenerator:
                 for value in landscape.values()
             ):
                 completed["current_landscape"] = landscape
+            else:
+                completed["current_landscape"] = {
+                    "problems": [],
+                    "subdirections": [],
+                    "problem_details": [],
+                    "subdirection_details": [],
+                }
         if section == "learning_path" and not isinstance(
             completed.get("learning_path"), list
         ):

@@ -366,7 +366,6 @@ function renderOverview(data) {
       : "";
   const tags = [
     data.schema_version ? `<span class="tag">${escapeHtml(data.schema_version)}</span>` : "",
-    data.language ? `<span class="tag">${escapeHtml(data.language)}</span>` : "",
     qualityState ? `<span class="tag ${qualityClass}">${escapeHtml(qualityStatusLabel(qualityState))}</span>` : "",
   ].join("");
   $("overview-content").classList.remove("loading-section");
@@ -490,9 +489,15 @@ function renderLearningPath(data) {
       const start = step.start_week || index + 1;
       const end = step.end_week || start;
       const week = start === end ? `W${start}` : `W${start}–${end}`;
+      const hasTimeBudget = data.learner_profile?.time_budget_weeks;
+      const timeCopy = step.estimated_hours
+        ? `${step.estimated_hours} 小时`
+        : hasTimeBudget
+          ? fieldStatusCopy("时间")
+          : "自由安排";
       return `
         <button class="interactive-card learning-card" type="button" data-detail-kind="learning" data-detail-id="${escapeHtml(String(index))}">
-          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(step.estimated_hours ? `${step.estimated_hours} 小时` : fieldStatusCopy("时间"))}</span></span>
+          <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(timeCopy)}</span></span>
           <span class="learning-main">
             <span class="card-index">STEP ${escapeHtml(step.step || String(index + 1))}</span>
             <h3>${escapeHtml(step.goal || fieldStatusCopy("目标"))}</h3>
