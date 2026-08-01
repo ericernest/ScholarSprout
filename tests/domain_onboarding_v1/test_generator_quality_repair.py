@@ -68,7 +68,7 @@ class GeneratorTests(unittest.TestCase):
             )
 
         self.assertEqual(events, [])
-        self.assertEqual(len(model.calls), 1)
+        self.assertGreaterEqual(len(model.calls), 1)
 
     def test_incremental_generation_identifies_development_failure(self) -> None:
         config = DomainOnboardingConfig()

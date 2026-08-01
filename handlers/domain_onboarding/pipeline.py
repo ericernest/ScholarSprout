@@ -698,6 +698,8 @@ def create_default_pipeline(
         route_name="planning",
     )
     configured_generation = os.getenv("DOMAIN_ONBOARDING_GENERATION_MODELS")
+    if not configured_generation:
+        configured_generation = getattr(getattr(model, "config", None), "model_name", "")
     generation_model = routed_model_from_env(
         model,
         configured_generation,
