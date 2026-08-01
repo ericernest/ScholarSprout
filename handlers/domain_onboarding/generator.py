@@ -533,7 +533,13 @@ class StructuredOnboardingGenerator:
             elif isinstance(prereq_value, str) and prereq_value.strip():
                 completed["prerequisites"] = [{"name": prereq_value.strip()}]
             else:
-                completed["prerequisites"] = []
+                domain = completed.get("domain") or default_domain
+                completed["prerequisites"] = [
+                    {"prerequisite_id": "foundation", "name": f"{domain} 基础知识",
+                     "why_needed": "建立领域核心概念与术语体系，为后续学习奠定基础",
+                     "key_points": ["核心概念", "基础理论", "术语体系"],
+                     "related_paper_ids": []}
+                ]
         if section == "development" and not isinstance(
             completed.get("development_stages"), list
         ):
@@ -545,8 +551,22 @@ class StructuredOnboardingGenerator:
                     completed["development_stages"] = alias_value
                     stages_value = alias_value
                     break
-            if not isinstance(stages_value, list):
-                completed["development_stages"] = []
+            if not isinstance(stages_value, list) or not stages_value:
+                domain = completed.get("domain") or default_domain
+                paper_ids = [p.paper_id for p in papers[:2]] if papers else []
+                completed["development_stages"] = [
+                    {"stage_id": "stage_fallback", "name": f"{domain} 发展概览",
+                     "sequence": 1,
+                     "historical_period": "请重新生成获取完整脉络",
+                     "summary": "模型未能成功生成完整发展脉络。点击下方重新生成按钮获取更优内容。",
+                     "related_paper_ids": paper_ids,
+                     "breakthroughs": [
+                         {"breakthrough_id": "fallback", "name": "请重新生成获取完整内容",
+                          "description": "当前内容为占位信息，请点击重新生成获取完整领域发展路径与关键技术突破。",
+                          "supporting_paper_ids": paper_ids,
+                          "enabled_capabilities": [], "limitation_problem_ids": []}
+                     ]}
+                ]
         if section == "development":
             self._sanitize_development_paper_ids(completed, papers)
         if section == "landscape" and not isinstance(
@@ -575,11 +595,25 @@ class StructuredOnboardingGenerator:
             ):
                 completed["current_landscape"] = landscape
             else:
+                domain = completed.get("domain") or default_domain
                 completed["current_landscape"] = {
-                    "problems": [],
-                    "subdirections": [],
-                    "problem_details": [],
-                    "subdirection_details": [],
+                    "problems": [f"{domain} 领域前沿问题"],
+                    "subdirections": [f"{domain} 研究方向"],
+                    "problem_details": [
+                        {"problem_id": "fallback", "name": f"{domain} 领域前沿问题",
+                         "description": "模型未能成功生成完整概念全景。点击重新生成按钮获取更优内容。",
+                         "related_paper_ids": [], "related_stage_ids": [],
+                         "emerged_in_stage_id": "", "affected_stage_ids": [],
+                         "related_subdirection_ids": []}
+                    ],
+                    "subdirection_details": [
+                        {"subdirection_id": "fallback", "name": f"{domain} 研究方向",
+                         "description": "请重新生成获取完整研究分支与前沿方向。",
+                         "why_it_matters": "理解领域分支有助于选择合适的研究切入点",
+                         "research_questions": ["请重新生成获取完整内容"],
+                         "related_paper_ids": [], "related_stage_ids": [],
+                         "emerged_in_stage_id": "", "addresses_problem_ids": []}
+                    ],
                 }
         if section == "learning_path" and not isinstance(
             completed.get("learning_path"), list
@@ -588,6 +622,15 @@ class StructuredOnboardingGenerator:
                 if isinstance(completed.get(alias), list):
                     completed["learning_path"] = completed[alias]
                     break
+            if not isinstance(completed.get("learning_path"), list):
+                completed["learning_path"] = [
+                    {"step": "1", "goal": "了解领域基础知识",
+                     "topics": ["核心概念", "基础论文"],
+                     "paper_ids": [p.paper_id for p in papers[:2]] if papers else [],
+                     "activities": ["阅读综述性论文", "梳理核心术语"],
+                     "completion_criteria": ["理解领域核心概念"],
+                     "expected_outcome": "建立领域基础知识框架"}
+                ]
         self._validate_section_payload(section, completed, papers)
         return completed
 
