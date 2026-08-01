@@ -441,29 +441,34 @@ class StructuredOnboardingGenerator:
                 raise
             return completed, stats
 
-        try:
-            completed, stats = run_with_model_route(
-                section_model,
-                generate_candidate,
-                timeout_seconds=self.config.generation_section_timeout_seconds,
-            )
-            stats.model_calls = max(
-                stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            return completed, stats
-        except StructuredLLMError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise GenerationError(str(error), stats=error.stats) from error
-        except GenerationError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                completed, stats = run_with_model_route(
+                    section_model,
+                    generate_candidate,
+                    timeout_seconds=self.config.generation_section_timeout_seconds,
+                )
+                stats.model_calls = max(
+                    stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                return completed, stats
+            except StructuredLLMError as error:
+                error.stats.model_calls = max(
+                    error.stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                last_error = error
+            except GenerationError as error:
+                error.stats.model_calls = max(
+                    error.stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                last_error = error
+        if isinstance(last_error, StructuredLLMError):
+            raise GenerationError(str(last_error), stats=last_error.stats) from last_error
+        raise last_error  # type: ignore[misc]
 
     def _complete_section_payload(
         self,
@@ -517,6 +522,31 @@ class StructuredOnboardingGenerator:
         # development response merely omits that redundant field.
         if section == "development" and not str(completed.get("domain") or "").strip():
             completed["domain"] = default_domain
+        if section == "development" and not isinstance(
+            completed.get("prerequisites"), list
+        ):
+            prereq_value = completed.get("prerequisites")
+            if isinstance(prereq_value, list):
+                completed["prerequisites"] = prereq_value
+            elif isinstance(prereq_value, dict):
+                completed["prerequisites"] = [prereq_value]
+            elif isinstance(prereq_value, str) and prereq_value.strip():
+                completed["prerequisites"] = [{"name": prereq_value.strip()}]
+            else:
+                completed["prerequisites"] = []
+        if section == "development" and not isinstance(
+            completed.get("development_stages"), list
+        ):
+            stages_value = completed.get("development_stages")
+            stage_aliases = ("stages", "phases", "history", "evolution")
+            for alias in stage_aliases:
+                alias_value = completed.get(alias)
+                if isinstance(alias_value, list) and alias_value:
+                    completed["development_stages"] = alias_value
+                    stages_value = alias_value
+                    break
+            if not isinstance(stages_value, list):
+                completed["development_stages"] = []
         if section == "development":
             self._sanitize_development_paper_ids(completed, papers)
         if section == "landscape" and not isinstance(
@@ -528,12 +558,21 @@ class StructuredOnboardingGenerator:
                 "problem_details",
                 "subdirection_details",
             }
-            landscape = {
-                key: completed[key]
-                for key in landscape_keys
-                if key in completed
-            }
-            if any(isinstance(value, list) for value in landscape.values()):
+            landscape = {}
+            for key in landscape_keys:
+                value = completed.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, list):
+                    landscape[key] = value
+                elif isinstance(value, str) and value.strip():
+                    landscape[key] = [value.strip()]
+                else:
+                    landscape[key] = []
+            if any(
+                isinstance(value, list) and len(value) > 0
+                for value in landscape.values()
+            ):
                 completed["current_landscape"] = landscape
         if section == "learning_path" and not isinstance(
             completed.get("learning_path"), list
