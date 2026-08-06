@@ -5,6 +5,7 @@ const EVENT_NAMES = [
   "profile_ready",
   "plan_ready",
   "papers_ready",
+  "llm_delta",
   "development_ready",
   "landscape_ready",
   "learning_path_ready",
@@ -20,9 +21,17 @@ const STATUS_LABELS = {
   running: "正在生成学习地图",
   cancel_requested: "正在取消",
   completed: "学习地图已生成",
-  failed: "内容待完善",
+  failed: "生成失败，可重试",
   cancelled: "任务已取消",
   interrupted: "任务因服务重启中断",
+};
+const STREAM_STAGE_LABELS = {
+  planning: "正在规划调研范围",
+  development: "正在生成前置知识与发展路径",
+  landscape: "正在梳理核心问题与研究方向",
+  learning_path: "正在生成个性化学习路线",
+  generation: "正在生成领域学习地图",
+  repair: "正在修复内容质量问题",
 };
 const STAGE_LABELS = {
   accepted: "任务已接收",
@@ -36,7 +45,7 @@ const STAGE_LABELS = {
   repair_started: "正在修复质量问题",
   section_replaced: "已更新问题分区",
   completed: "学习地图已生成",
-  failed: "内容待完善",
+  failed: "生成失败，可重试",
   cancelled: "任务已取消",
 };
 const PRIORITY_LABELS = {
@@ -67,6 +76,7 @@ const state = {
   lastEventId: 0,
   eventSource: null,
   pollTimer: null,
+  activeLLMStage: "",
   paperFilter: "all",
   selected: null,
 };
@@ -163,7 +173,7 @@ function bindInteractions() {
   });
 
   $("cancel-button").addEventListener("click", cancelTask);
-  $("retry-button").addEventListener("click", retryTask);
+  ["retry-button", "topbar-retry-button"].forEach((id) => $(id).addEventListener("click", retryTask));
   bindScrollSpy();
 }
 
@@ -226,6 +236,7 @@ function consumeSnapshot(snapshot, persist = true) {
   if (persist) saveWorkspace();
 
   if (TERMINAL_STATES.has(snapshot.state)) {
+    state.activeLLMStage = "";
     closeLiveUpdates();
     if (!state.result && !Object.keys(state.partial).length) {
       const message = snapshot.error || "任务没有生成可展示的内容。";
@@ -264,6 +275,12 @@ function handleEvent(event) {
   state.revision = revision;
 
   const data = payload.data || {};
+  const isLLMDelta = payload.event === "llm_delta";
+  if (isLLMDelta) {
+    state.activeLLMStage = String(data.stage || "generation");
+  } else {
+    state.activeLLMStage = "";
+  }
   if (data.result && typeof data.result === "object") {
     state.result = data.result;
   } else {
@@ -281,7 +298,9 @@ function handleEvent(event) {
     task_id: state.taskId,
     state: eventState || state.snapshot?.state || "running",
     revision,
-    current_stage: payload.event,
+    current_stage: isLLMDelta
+      ? state.snapshot?.current_stage || "accepted"
+      : payload.event,
     progress: payload.progress,
     partial_result: state.partial,
     result: state.result,
@@ -341,7 +360,10 @@ function renderStatus() {
   const terminal = TERMINAL_STATES.has(snapshot.state);
   const status = terminal
     ? STATUS_LABELS[snapshot.state]
-    : STAGE_LABELS[snapshot.current_stage] || STATUS_LABELS[snapshot.state] || "正在分析任务";
+    : STREAM_STAGE_LABELS[state.activeLLMStage]
+      || STAGE_LABELS[snapshot.current_stage]
+      || STATUS_LABELS[snapshot.state]
+      || "正在分析任务";
   $("status-label").textContent = status;
   $("progress-label").textContent = `${Math.round(progress * 100)}%`;
   $("progress-fill").style.transform = `scaleX(${progress})`;
@@ -353,7 +375,10 @@ function renderStatus() {
         : ""
   }`;
   $("cancel-button").disabled = terminal || !state.taskId;
-  $("cancel-button").hidden = snapshot.state === "completed";
+  $("cancel-button").hidden = terminal;
+  const canRetry = terminal && Boolean(snapshot.retryable) && Boolean(state.taskId);
+  $("topbar-retry-button").hidden = !canRetry;
+  $("topbar-retry-button").disabled = !canRetry;
 }
 
 function renderOverview(data) {
@@ -855,13 +880,20 @@ async function cancelTask() {
 
 async function retryTask() {
   const request = state.snapshot?.request || readWorkspace()?.request;
-  if (!request?.query) {
+  if (!state.taskId) {
     window.location.href = "/app?mode=domain_onboarding";
     return;
   }
-  $("retry-button").disabled = true;
+  setRetryButtonsDisabled(true);
   try {
-    const job = await submitTask(request);
+    const response = await fetch(
+      `/domain_onboarding/jobs/${encodeURIComponent(state.taskId)}/retry`,
+      { method: "POST", headers: jobAuthHeaders({ Accept: "application/json" }) },
+    );
+    const job = await readJson(response);
+    if (!response.ok || !job?.task_id) {
+      throw new Error(readError(job, `重试任务失败（HTTP ${response.status}）`));
+    }
     closeLiveUpdates();
     state.taskId = job.task_id;
     state.accessToken = job.access_token || "";
@@ -870,6 +902,7 @@ async function retryTask() {
     state.result = null;
     state.revision = 0;
     state.lastEventId = 0;
+    state.activeLLMStage = "";
     state.selected = null;
     history.replaceState(null, "", `/app/domain-onboarding?task_id=${encodeURIComponent(state.taskId)}`);
     $("empty-state").hidden = true;
@@ -879,8 +912,14 @@ async function retryTask() {
     connectEvents();
   } catch (error) {
     toast(error.message, true);
-    $("retry-button").disabled = false;
+    setRetryButtonsDisabled(false);
   }
+}
+
+function setRetryButtonsDisabled(disabled) {
+  ["retry-button", "topbar-retry-button"].forEach((id) => {
+    $(id).disabled = disabled;
+  });
 }
 
 function currentData() {

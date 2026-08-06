@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from pydantic import ValidationError
 
@@ -21,7 +21,12 @@ from .schemas import (
 
 
 class DomainPlanner(Protocol):
-    def plan(self, query: str, profile: LearnerProfile) -> PlanningResult: ...
+    def plan(
+        self,
+        query: str,
+        profile: LearnerProfile,
+        on_delta: Callable[[str, str], None] | None = None,
+    ) -> PlanningResult: ...
 
 
 _DOMAIN_ALIASES = {
@@ -47,7 +52,12 @@ class StormLitePlanner:
         self.config = config
         self.canonical_registry = CanonicalPaperRegistry()
 
-    def plan(self, query: str, profile: LearnerProfile) -> PlanningResult:
+    def plan(
+        self,
+        query: str,
+        profile: LearnerProfile,
+        on_delta: Callable[[str, str], None] | None = None,
+    ) -> PlanningResult:
         system_prompt = (
             "You are a STORM-lite research planner. Return one JSON object only. "
             "Decompose the domain from multiple research perspectives before retrieval. "
@@ -67,6 +77,8 @@ class StormLitePlanner:
                 user_prompt=user_prompt,
                 max_tokens=self.config.planning_max_tokens,
                 timeout_seconds=self.config.planning_model_timeout_seconds,
+                on_delta=on_delta,
+                stream_stage="planning",
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:

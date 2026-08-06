@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .generator import StructuredOnboardingGenerator
 from .schemas import (
     DomainOnboardingOutput,
@@ -26,6 +28,7 @@ class LLMRepairExecutor:
         allowed_papers: list[RankedPaper],
         previous_output: DomainOnboardingOutput,
         issues: list[QualityIssue],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> GenerationResult:
         return self.generator.repair(
             request,
@@ -34,4 +37,5 @@ class LLMRepairExecutor:
             allowed_papers,
             previous_output,
             issues,
+            on_delta,
         )

@@ -227,8 +227,11 @@ class StructuredOnboardingGenerator:
         profile: LearnerProfile,
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> GenerationResult:
-        payload, stats = self._call_model(request, profile, plan, papers)
+        payload, stats = self._call_model(
+            request, profile, plan, papers, on_delta=on_delta
+        )
         try:
             output = self._normalize(payload, request, profile, plan, papers)
         except GenerationError as error:
@@ -243,6 +246,7 @@ class StructuredOnboardingGenerator:
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
         on_section: Callable[[str, dict[str, Any], list[str]], None],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> GenerationResult:
         """Generate complete JSON sections independently and publish only validated boundaries."""
         payload: dict[str, Any] = {}
@@ -282,7 +286,7 @@ class StructuredOnboardingGenerator:
 
         try:
             development_payload, development_stats = self._call_section(
-                "development", request, profile, plan, papers, payload
+                "development", request, profile, plan, papers, payload, on_delta
             )
         except GenerationError as error:
             raise GenerationError(
@@ -301,6 +305,7 @@ class StructuredOnboardingGenerator:
                     plan,
                     papers,
                     completed_snapshot,
+                    on_delta,
                 ): section
                 for section in ("landscape", "learning_path")
             }
@@ -350,6 +355,7 @@ class StructuredOnboardingGenerator:
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
         completed: dict[str, Any],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> tuple[dict[str, Any], ModelCallStats]:
         instructions = {
             "development": (
@@ -416,18 +422,22 @@ class StructuredOnboardingGenerator:
             completed,
         )
         section_model = self.section_models.get(section, self.model)
+        section_max_tokens = {
+            "development": self.config.generation_development_max_tokens,
+            "landscape": self.config.generation_landscape_max_tokens,
+            "learning_path": self.config.generation_learning_path_max_tokens,
+        }[section]
+        attempt_max_tokens = section_max_tokens
 
         def generate_candidate(candidate: Any, timeout_seconds: float | None):
             payload, stats = invoke_json(
                 candidate,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens={
-                    "development": self.config.generation_development_max_tokens,
-                    "landscape": self.config.generation_landscape_max_tokens,
-                    "learning_path": self.config.generation_learning_path_max_tokens,
-                }[section],
+                max_tokens=attempt_max_tokens,
                 timeout_seconds=timeout_seconds,
+                on_delta=on_delta,
+                stream_stage=section,
             )
             try:
                 completed = self._complete_section_payload(
@@ -442,7 +452,11 @@ class StructuredOnboardingGenerator:
             return completed, stats
 
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt_index in range(2):
+            attempt_max_tokens = max(
+                section_max_tokens,
+                min(section_max_tokens * (attempt_index + 1), self.config.generation_max_tokens),
+            )
             try:
                 completed, stats = run_with_model_route(
                     section_model,
@@ -763,6 +777,7 @@ class StructuredOnboardingGenerator:
         papers: list[RankedPaper],
         previous_output: DomainOnboardingOutput,
         issues: list[QualityIssue],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> GenerationResult:
         payload, stats = self._call_model(
             request,
@@ -771,6 +786,7 @@ class StructuredOnboardingGenerator:
             papers,
             previous_output=previous_output,
             issues=issues,
+            on_delta=on_delta,
         )
         try:
             output = self._normalize(payload, request, profile, plan, papers)
@@ -788,6 +804,7 @@ class StructuredOnboardingGenerator:
         *,
         previous_output: DomainOnboardingOutput | None = None,
         issues: list[QualityIssue] | None = None,
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> tuple[dict[str, Any], ModelCallStats]:
         system_prompt = (
             f"You generate a beginner-friendly domain onboarding plan in {request.language}. Return one JSON object only. "
@@ -851,6 +868,8 @@ class StructuredOnboardingGenerator:
                     if previous_output is not None
                     else self.config.generation_timeout_seconds
                 ),
+                on_delta=on_delta,
+                stream_stage="repair" if previous_output is not None else "generation",
             )
             return payload, stats
         except StructuredLLMError as error:

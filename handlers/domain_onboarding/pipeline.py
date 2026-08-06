@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import inspect
 from collections.abc import Callable
 from typing import Any
 
@@ -104,6 +105,27 @@ class DomainOnboardingPipeline:
         partial_quality = None
         quality_attempts: list[QualityAttempt] = []
         partial_repair_record: RepairRecord | None = None
+
+        def publish_llm_delta(stage: str, delta: str) -> None:
+            if not delta or progress_callback is None:
+                return
+            progress = {
+                "planning": 0.18,
+                "development": 0.50,
+                "landscape": 0.62,
+                "learning_path": 0.72,
+                "generation": 0.50,
+                "repair": 0.93,
+            }.get(stage, 0.50)
+            self._emit(
+                progress_callback,
+                "llm_delta",
+                progress,
+                True,
+                [],
+                {"stage": stage, "delta": delta},
+            )
+
         try:
             profile, trace.profile_duration_ms = context.call(
                 "profile",
@@ -116,9 +138,11 @@ class DomainOnboardingPipeline:
                 planning_result, trace.planning_duration_ms = context.call(
                     "planning",
                     self.config.planning_timeout_seconds,
+                    self._call_with_optional_delta,
                     self.planner.plan,
                     request.query,
                     profile,
+                    on_delta=publish_llm_delta,
                 )
             except Exception as error:
                 if isinstance(error, PipelineExecutionHalted):
@@ -195,6 +219,7 @@ class DomainOnboardingPipeline:
                     generation_result, trace.generation_duration_ms = context.call(
                         "generation",
                         self.config.generation_timeout_seconds,
+                        self._call_with_optional_delta,
                         incremental,
                         request,
                         profile,
@@ -208,16 +233,19 @@ class DomainOnboardingPipeline:
                             paths,
                             data,
                         ),
+                        on_delta=publish_llm_delta,
                     )
                 else:
                     generation_result, trace.generation_duration_ms = context.call(
                         "generation",
                         self.config.generation_timeout_seconds,
+                        self._call_with_optional_delta,
                         self.generator.generate,
                         request,
                         profile,
                         plan,
                         ranked,
+                        on_delta=publish_llm_delta,
                     )
                 output = generation_result.output
             except GenerationError as error:
@@ -295,6 +323,7 @@ class DomainOnboardingPipeline:
             repair_result, trace.repair_duration_ms = context.call(
                 "repair",
                 self.config.repair_timeout_seconds,
+                self._call_with_optional_delta,
                 self.repairer.repair,
                 request,
                 profile,
@@ -302,6 +331,7 @@ class DomainOnboardingPipeline:
                 output,
                 first_quality,
                 ranked,
+                on_delta=publish_llm_delta,
             )
             repaired = repair_result.output
             partial_repair_record = repair_result.record
@@ -409,6 +439,26 @@ class DomainOnboardingPipeline:
         close = getattr(self.retriever, "close", None)
         if callable(close):
             close()
+
+    @staticmethod
+    def _call_with_optional_delta(
+        function: Callable[..., Any],
+        *args: Any,
+        on_delta: Callable[[str, str], None] | None = None,
+    ) -> Any:
+        """Preserve compatibility with test doubles and external implementations."""
+
+        try:
+            parameters = inspect.signature(function).parameters.values()
+            supports_delta = any(
+                item.name == "on_delta" or item.kind == inspect.Parameter.VAR_KEYWORD
+                for item in parameters
+            )
+        except (TypeError, ValueError):
+            supports_delta = False
+        if supports_delta:
+            return function(*args, on_delta=on_delta)
+        return function(*args)
 
     @staticmethod
     def _emit(
