@@ -2,10 +2,11 @@
 
 NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助科研新手建立第一批“科研知识连接”，把方向、论文、概念、方法和实验串联起来。
 
-当前项目使用 Python 开发，部署和运行标准以 Linux 为准。当前主要开发两个功能：
+当前项目使用 Python 开发，部署和运行标准以 Linux 为准。Web 端以聊天页作为统一入口，当前提供三个模式：
 
-- 论文精读：`paper_reading`
-- 领域入门：`domain_onboarding`
+- 日常聊天：支持 Markdown、表格、流式回答、思考过程折叠和生成中断。
+- 论文精读：从聊天卡片进入独立工作台，支持论文解析、章节索引、PDF 原文定位与缓存、高亮注释、阅读进度恢复、Copilot 问答和 Fork 探索。
+- 领域入门：从聊天卡片进入独立工作台，生成学习者画像、前置知识、发展路径、概念全景、学习路线、论文清单和质量评估，并支持任务进度、取消与重试。
 
 ## 团队文档
 
@@ -130,6 +131,21 @@ curl -X POST http://127.0.0.1:8000/paper_reading -H "Content-Type: application/j
 curl -X POST http://127.0.0.1:8000/domain_onboarding -H "Content-Type: application/json" -d '{"session_id":"s1","content":"我想入门多模态大模型方向","user_id":"local","metadata":{}}'
 ```
 
+聊天和论文精读同时提供 SSE 流式接口，使用 `curl -N` 可以直接查看增量输出：
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/chat/stream -H "Content-Type: application/json" -d '{"session_id":"s1","content":"解释一下 RAG","user_id":"local","metadata":{}}'
+curl -N -X POST http://127.0.0.1:8000/paper_reading/stream -H "Content-Type: application/json" -d '{"session_id":"s1","content":"总结当前章节","user_id":"local","metadata":{}}'
+```
+
+领域入门的独立工作台使用异步任务接口：
+
+- 创建任务：`POST /domain_onboarding/jobs`
+- 查询任务：`GET /domain_onboarding/jobs/{task_id}`
+- 订阅进度：`GET /domain_onboarding/jobs/{task_id}/events`
+- 取消任务：`DELETE /domain_onboarding/jobs/{task_id}`
+- 重试任务：`POST /domain_onboarding/jobs/{task_id}/retry`
+
 健康检查：
 
 ```bash
@@ -165,3 +181,20 @@ http://127.0.0.1:8000/app
 - 领域入门：`domain_onboarding`
 
 选择非默认模式后，输入框内会出现当前模式的小气泡，点击 `×` 可以取消并回到日常聊天。
+
+论文精读和领域入门都会先在聊天中返回任务卡片。论文解析或领域入门任务准备完成后，点击卡片进入对应工作台：
+
+```text
+http://127.0.0.1:8000/app/paper-reading
+http://127.0.0.1:8000/app/domain-onboarding
+```
+
+模型生成期间可以点击“中断”。流式输出结束后，页面只保留最终回答，思考过程默认折叠在回答上方；回答会定位到内容开头，便于从头阅读。
+
+## 测试
+
+运行完整测试：
+
+```bash
+python -m pytest -q
+```
