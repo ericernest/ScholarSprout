@@ -40,6 +40,10 @@ class RoutedChatModel:
         with self._lock:
             return max(1, len(self._last_call["attempts"]))
 
+    @property
+    def supports_streaming(self) -> bool:
+        return callable(getattr(self.delegate, "chat_stream", None))
+
     def chat(self, **kwargs: Any) -> Any:
         requested_timeout = kwargs.pop("timeout", None)
         attempt_timeout = self._attempt_timeout(requested_timeout)
@@ -79,6 +83,21 @@ class RoutedChatModel:
             f"{type(last_error).__name__ if last_error else 'unknown error'}"
         ) from last_error
 
+    def chat_stream(self, **kwargs: Any) -> Any:
+        requested_timeout = kwargs.pop("timeout", None)
+        attempt_timeout = self._attempt_timeout(requested_timeout)
+        last_error: Exception | None = None
+        for model_name in self.model_names:
+            try:
+                return self.delegate.chat_stream(
+                    **kwargs,
+                    timeout=attempt_timeout,
+                    model_name=model_name,
+                )
+            except Exception as error:
+                last_error = error
+        raise RuntimeError(f"all streaming models failed for route {self.route_name}") from last_error
+
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
         return self.delegate.embed(texts, model=model)
 
@@ -116,8 +135,15 @@ class ModelOverrideChatModel:
         self.delegate = delegate
         self.model_name = model_name
 
+    @property
+    def supports_streaming(self) -> bool:
+        return callable(getattr(self.delegate, "chat_stream", None))
+
     def chat(self, **kwargs: Any) -> Any:
         return self.delegate.chat(**kwargs, model_name=self.model_name)
+
+    def chat_stream(self, **kwargs: Any) -> Any:
+        return self.delegate.chat_stream(**kwargs, model_name=self.model_name)
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
         return self.delegate.embed(texts, model=model)

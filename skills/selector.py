@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from threading import Event
 from typing import Any
 
 from pydantic import ValidationError
@@ -85,6 +86,7 @@ class CapabilitySelector:
         role: str,
         user_task: str,
         skill_summaries: list[SkillSummary],
+        cancel_event: Event | None = None,
     ) -> CapabilitySelection:
         payload = {
             "agent_role": role,
@@ -112,7 +114,27 @@ class CapabilitySelector:
 
         for attempt in range(self.max_attempts):
             try:
-                response = model.chat(messages=messages)
+                if callable(getattr(model, "chat_stream", None)):
+                    stream = model.chat_stream(messages=messages)
+                    parts: list[str] = []
+                    try:
+                        for chunk in stream:
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise RuntimeError("capability selection cancelled")
+                            choices = _get_value(chunk, "choices", []) or []
+                            if not choices:
+                                continue
+                            delta = _get_value(choices[0], "delta", {}) or {}
+                            content = str(_get_value(delta, "content", "") or "")
+                            if content:
+                                parts.append(content)
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            close()
+                    response = {"choices": [{"message": {"content": "".join(parts)}}]}
+                else:
+                    response = model.chat(messages=messages)
                 content = _get_response_content(response)
                 raw_selection = _parse_json_object(content)
                 return CapabilitySelection.model_validate(raw_selection)

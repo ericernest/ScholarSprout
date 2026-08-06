@@ -117,6 +117,7 @@ class PDFParser:
             title=self.extract_title(full_text),
             authors=self.extract_authors(full_text),
             abstract=self.extract_abstract(full_text),
+            year=self.extract_year(full_text, document_metadata=doc.metadata),
             sections=sections,
             figures=figures,
             tables=tables,
@@ -125,6 +126,55 @@ class PDFParser:
             full_text=full_text,
             parse_status="done",
         )
+
+    @staticmethod
+    def extract_year(
+        text: str,
+        *,
+        document_metadata: dict[str, Any] | None = None,
+        source_hint: str = "",
+    ) -> int | None:
+        """Best-effort publication year from arXiv IDs, front matter, or PDF metadata.
+
+        A random four-digit number in the paper body is deliberately not accepted:
+        model names, dataset versions, and reference years are too easy to mistake
+        for the publication year.
+        """
+        current_limit = 2100
+        combined_hint = f"{source_hint}\n{text[:8000]}"
+
+        arxiv_match = re.search(r"(?:arxiv[:/]|/pdf/)(\d{2})(?:\d{2})?\.\d{4,5}", combined_hint, re.IGNORECASE)
+        if arxiv_match:
+            year = 2000 + int(arxiv_match.group(1))
+            if 2007 <= year <= current_limit:
+                return year
+
+        labeled_patterns = (
+            r"(?:published|accepted|received|copyright|proceedings|conference|journal|volume|©|\(c\))[^\n]{0,100}?\b((?:19|20)\d{2})\b",
+            r"\b((?:19|20)\d{2})\b[^\n]{0,80}?(?:IEEE|ACM|Springer|Elsevier|USENIX|NeurIPS|ICML|ICLR|AAAI|IJCAI|CVPR|ACL|EMNLP)",
+        )
+        for pattern in labeled_patterns:
+            match = re.search(pattern, text[:8000], re.IGNORECASE)
+            if match:
+                year = int(match.group(1))
+                if 1900 <= year <= current_limit:
+                    return year
+
+        metadata = document_metadata or {}
+        for key in ("creationDate", "modDate", "CreationDate", "ModDate"):
+            value = str(metadata.get(key) or "")
+            match = re.search(r"(?:D:)?((?:19|20)\d{2})", value)
+            if match:
+                year = int(match.group(1))
+                if 1900 <= year <= current_limit:
+                    return year
+
+        explicit_hint = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", source_hint)
+        if explicit_hint:
+            year = int(explicit_hint.group(1))
+            if 1900 <= year <= current_limit:
+                return year
+        return None
 
     @staticmethod
     def _extract_page_text(

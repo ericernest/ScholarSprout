@@ -8,7 +8,7 @@
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/paper-reading/styles.css" />
   </head>
-  <body class="paper-reading-body">
+  <body class="paper-reading-body is-booting">
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
     <div id="cursor-glow" aria-hidden="true"></div>
 
@@ -23,7 +23,12 @@
     </header>
 
     <main>
-      <section id="paper-intake" class="intake-view">
+      <section id="paper-boot" class="paper-boot" aria-live="polite">
+        <span class="loading-orb" aria-hidden="true"></span>
+        <div><strong>正在打开论文精读</strong><p>恢复论文、阅读进度和 PDF 缓存…</p></div>
+      </section>
+
+      <section id="paper-intake" class="intake-view" hidden>
         <div class="intake-hero">
           <p class="eyebrow">Deep Paper Reading</p>
           <h1>把一篇论文，拆成可理解的知识网络。</h1>
@@ -77,8 +82,8 @@
           <article id="paper-ready-card" class="paper-ready-card" tabindex="0" role="button">
             <div class="ready-topline"><span>解析完成</span><span id="ready-source">PDF</span></div>
             <h2 id="ready-title">论文标题</h2><p id="ready-authors">作者</p><p id="ready-abstract" class="ready-abstract"></p>
-            <div class="ready-stats">
-              <span><strong id="ready-sections">0</strong> 章节</span><span><strong id="ready-nodes">0</strong> KG 节点</span><span><strong id="ready-edges">0</strong> KG 关系</span>
+            <div class="ready-capabilities" aria-label="精读工作台能力">
+              <span>PDF 原文可划选</span><span>智能索引自动生成</span><span>阅读进度自动保存</span>
             </div>
             <div class="enter-hint">点击进入精读工作台 <span>↗</span></div>
           </article>
@@ -88,7 +93,7 @@
       <section id="paper-workbench" class="workbench" hidden>
         <header class="paper-ribbon">
           <div><p id="paper-ribbon-meta">正在阅读</p><h1 id="paper-ribbon-title">未命名论文</h1></div>
-          <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span><button id="refresh-session-button" class="icon-text-button" type="button">同步状态</button></div>
+          <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span></div>
         </header>
 
         <div id="workbench-grid" class="workbench-grid">
@@ -98,10 +103,7 @@
               <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
               <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
             </section>
-            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count">0</strong></div><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
-            <section class="session-actions">
-              <button id="pause-button" class="soft-button" type="button">暂停并保存</button><button id="resume-button" class="soft-button" type="button">恢复阅读</button><button id="progress-button" class="soft-button" type="button">刷新进度</button>
-            </section>
+            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
           </aside>
 
           <article class="workspace-panel reader-panel">
@@ -119,9 +121,9 @@
               </div>
             </header>
             <div id="selection-toolbar" class="selection-toolbar" hidden>
-              <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念脉络</button><button data-selection-action="fork" type="button">Fork 深入</button>
+              <button data-selection-action="explain" type="button">解释</button><button data-selection-action="formula" type="button">公式推导</button><button data-selection-action="concept" type="button">概念卡片</button><button data-selection-action="fork" type="button">Fork 深入</button>
             </div>
-            <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>划选解释 / 公式推导 / 概念脉络需切回「论文重排」视图；此处可用左侧目录跳转、分析本节、⑂ Fork 探索与右侧提问。</div>
+            <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>PDF 原文支持划选解释、概念卡片、高亮和注释；智能索引用于快速浏览章节导读。</div>
             <div id="structured-reader" class="structured-reader"></div>
             <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
           </article>
@@ -138,7 +140,7 @@
             </div>
             <form id="reading-chat-form" class="reading-composer">
               <textarea id="reading-chat-input" rows="3" placeholder="针对当前章节提问，或让专家继续分析…" required></textarea>
-              <div class="composer-row"><span id="composer-context">当前：全文</span><button class="accent-button" type="submit">发送</button></div>
+              <div class="composer-row"><span id="composer-context">当前：全文</span><button id="reading-stop-button" class="mini-button is-stop" type="button" hidden>中断</button><button class="accent-button" type="submit">发送</button></div>
             </form>
           </aside>
         </div>
@@ -175,6 +177,23 @@
         <label>探索问题<textarea id="fork-question-input" rows="2" placeholder="希望这个分支重点回答什么？"></textarea></label>
         <p class="fork-hint">创建后会在右侧协作区生成独立选项卡，可继续追问，随时合并回主流程。</p>
         <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button></footer>
+      </section>
+    </div>
+
+    <div id="note-modal" class="annotation-modal" hidden>
+      <div class="annotation-modal-backdrop" data-note-close></div>
+      <section id="note-panel" class="annotation-panel" role="dialog" aria-modal="true" aria-labelledby="note-modal-title">
+        <header>
+          <div><p class="panel-label">PDF annotation</p><h2 id="note-modal-title">添加注释</h2></div>
+          <button id="note-close-button" class="dialog-close" type="button" aria-label="关闭注释弹窗">×</button>
+        </header>
+        <p id="note-selection-copy" class="annotation-selection"></p>
+        <label for="note-text-input">注释内容</label>
+        <textarea id="note-text-input" rows="5" placeholder="记录你的理解、疑问或后续验证事项"></textarea>
+        <footer>
+          <button class="mini-button" type="button" data-note-close>取消</button>
+          <button id="note-save-button" class="accent-button" type="button">保存注释</button>
+        </footer>
       </section>
     </div>
 

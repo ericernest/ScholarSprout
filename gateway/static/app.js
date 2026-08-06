@@ -14,6 +14,7 @@ const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_5";
 
 let currentMode = "chat";
 let isGenerating = false;
+let activeResponseController = null;
 let selectedPaperFile = null;
 const sessionId = getSessionId();
 
@@ -154,6 +155,7 @@ function setMode(mode) {
 // Send user message to current backend endpoint.
 async function sendMessage() {
   if (isGenerating) {
+    activeResponseController?.abort();
     return;
   }
 
@@ -176,7 +178,7 @@ async function sendMessage() {
   if (requestMode !== "chat") {
     setMode("chat");
   }
-  setLoading(true);
+  setLoading(true, requestMode === "chat");
 
   try {
     if (requestMode === "domain_onboarding") {
@@ -186,7 +188,10 @@ async function sendMessage() {
       return;
     }
 
-    const response = await fetch(endpoint, {
+    const controller = new AbortController();
+    activeResponseController = controller;
+    const streaming = appendStreamingMessage();
+    const response = await fetch(`${endpoint}/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -197,17 +202,23 @@ async function sendMessage() {
         user_id: "local-web",
         metadata: {},
       }),
+      signal: controller.signal,
     });
-
-    if (!response.ok) {
-      throw new Error(`请求失败：${response.status}`);
-    }
-
-    const data = await response.json();
-    appendMessage("assistant", extractReply(data));
+    const data = await streamSseJson(
+      response,
+      (delta) => streaming.append(delta),
+      (delta) => streaming.appendReasoning(delta),
+    );
+    streaming.finish(extractReply(data), data?.reasoning || "");
   } catch (error) {
-    appendMessage("assistant", `请求失败：${error.message}`);
+    if (error.name === "AbortError") {
+      finishInterruptedMessage();
+    } else {
+      if (activeStreamingMessage) activeStreamingMessage.finish(`请求失败：${error.message}`);
+      else appendMessage("assistant", `请求失败：${error.message}`);
+    }
   } finally {
+    activeResponseController = null;
     setLoading(false);
   }
 }
@@ -271,7 +282,25 @@ function appendDomainOnboardingCard(job, query) {
   card.addEventListener("click", () => {
     window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`;
   });
-  item.appendChild(card);
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "domain-card-cancel";
+  cancel.textContent = "中断生成";
+  cancel.addEventListener("click", async () => {
+    cancel.disabled = true;
+    try {
+      const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(job.task_id)}`, {
+        method: "DELETE",
+        headers: job.access_token ? { Authorization: `Bearer ${job.access_token}` } : {},
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      cancel.textContent = "正在中断";
+    } catch (error) {
+      cancel.disabled = false;
+      cancel.textContent = "重试中断";
+    }
+  });
+  item.append(card, cancel);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
 }
@@ -304,6 +333,8 @@ function watchDomainOnboardingCard(taskId, accessToken) {
       item.querySelector(".domain-card-progress-fill").style.transform = `scaleX(${progress})`;
       item.querySelector(".paper-card-kicker").textContent =
         snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
+      const cancel = item.querySelector(".domain-card-cancel");
+      if (cancel) cancel.hidden = ["completed", "failed", "cancelled", "interrupted"].includes(snapshot.state);
       const saved = loadDomainWorkspace() || {};
       saveDomainWorkspace({
         ...saved,
@@ -392,11 +423,12 @@ async function submitPaper() {
       content: "",
       metadata: {},
     });
-    appendPaperCard(detail.data?.paper, {
+    const paperCard = appendPaperCard(detail.data?.paper, {
       paperId,
       sourceLabel,
       kgBuild: upload.data?.kg_build || {},
     });
+    watchPaperCard(paperCard, paperId, sourceLabel);
     resetPaperComposer();
   } catch (error) {
     appendMessage("assistant", `论文解析失败：${error.message}`);
@@ -446,18 +478,7 @@ function appendPaperCard(paper, context) {
   const card = document.createElement("button");
   card.type = "button";
   card.className = "paper-chat-card";
-  card.innerHTML = `
-    <span class="paper-card-kicker">${escapeHtml(context.sourceLabel)} · 解析完成</span>
-    <strong>${escapeHtml(paper?.title || "未命名论文")}</strong>
-    <span class="paper-card-authors">${escapeHtml((paper?.authors || []).join("、") || "作者信息暂无")}</span>
-    <span class="paper-card-abstract">${escapeHtml(paper?.abstract || "论文已经完成结构化解析，点击进入精读工作台。")}</span>
-    <span class="paper-card-stats">
-      <span>${paper?.sections?.length || 0} 章节</span>
-      <span>${context.kgBuild?.new_nodes ?? "—"} 节点</span>
-      <span>${context.kgBuild?.new_edges ?? "—"} 关系</span>
-    </span>
-    <span class="paper-card-enter">进入论文精读 <b>↗</b></span>
-  `;
+  updatePaperCard(card, paper, context);
   card.addEventListener("click", () => {
     localStorage.setItem("paper_reading_paper_id", context.paperId);
     window.location.href = "/app/paper-reading";
@@ -465,6 +486,50 @@ function appendPaperCard(paper, context) {
   item.appendChild(card);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
+  return card;
+}
+
+function updatePaperCard(card, paper, context) {
+  const parseStatus = paper?.parse_status || "";
+  const isParsing = ["queued", "pending", "parsing"].includes(parseStatus);
+  const failed = parseStatus === "failed";
+  const authors = Array.isArray(paper?.authors) ? paper.authors.filter(Boolean) : [];
+  const sections = Array.isArray(paper?.sections) ? paper.sections : [];
+  const metadata = [];
+  if (authors.length) metadata.push(`<span class="paper-card-authors">${escapeHtml(authors.join("、"))}</span>`);
+  if (!isParsing && paper?.abstract) metadata.push(`<span class="paper-card-abstract">${escapeHtml(paper.abstract)}</span>`);
+  if (!isParsing && sections.length) {
+    metadata.push(`<span class="paper-card-stats"><span>${sections.length} 章节</span></span>`);
+  }
+  card.innerHTML = `
+    <span class="paper-card-kicker">${escapeHtml(context.sourceLabel)} · ${failed ? "解析失败" : (isParsing ? "正在解析" : "解析完成")}</span>
+    <strong>${escapeHtml(paper?.title || "论文已上传")}</strong>
+    ${metadata.join("")}
+    ${isParsing ? '<span class="paper-card-abstract">正在提取作者、摘要和章节结构，完成后会自动显示。</span>' : ""}
+    ${failed ? '<span class="paper-card-abstract">论文结构解析失败，可进入精读工作台查看原因或重新导入。</span>' : ""}
+    <span class="paper-card-enter">进入论文精读 <b>↗</b></span>
+  `;
+}
+
+function watchPaperCard(card, paperId, sourceLabel = "论文") {
+  let attempts = 0;
+  const poll = async () => {
+    if (!card?.isConnected || attempts >= 120) return;
+    attempts += 1;
+    try {
+      const detail = await callPaperReading({
+        action: "get_paper_detail", session_id: "", paper_id: paperId, content: "", metadata: {},
+      });
+      const paper = detail.data?.paper || null;
+      updatePaperCard(card, paper, { paperId, sourceLabel, kgBuild: {} });
+      if (["queued", "pending", "parsing"].includes(paper?.parse_status || "")) {
+        window.setTimeout(poll, 1800);
+      }
+    } catch {
+      window.setTimeout(poll, 2500);
+    }
+  };
+  window.setTimeout(poll, 900);
 }
 
 function clearPreviousPaperSession() {
@@ -545,6 +610,211 @@ function escapeHtml(value) {
   return span.innerHTML;
 }
 
+// Render the Markdown subset used by model answers with DOM nodes only.
+// Raw HTML is intentionally treated as text so model output cannot inject markup.
+function renderSafeMarkdown(source, className = "markdown-content") {
+  const root = document.createElement("div");
+  root.className = className;
+  const lines = String(source || "").replace(/\r\n?/g, "\n").split("\n");
+  let paragraph = [];
+  let list = null;
+  let listType = "";
+  let code = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const node = document.createElement("p");
+    appendSafeInlineMarkdown(node, paragraph.join(" ").trim());
+    root.append(node);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list) root.append(list);
+    list = null;
+    listType = "";
+  };
+  const flushCode = () => {
+    if (!code) return;
+    const pre = document.createElement("pre");
+    pre.className = "markdown-code";
+    const codeNode = document.createElement("code");
+    codeNode.textContent = code.lines.join("\n");
+    pre.append(codeNode);
+    root.append(pre);
+    code = null;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const line = rawLine.trimEnd();
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (code) flushCode();
+      else code = { lines: [] };
+      continue;
+    }
+    if (code) {
+      code.lines.push(rawLine);
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const nextLine = lines[index + 1] || "";
+    if (line.includes("|") && isMarkdownTableDivider(nextLine)) {
+      flushParagraph();
+      flushList();
+      const headers = splitMarkdownTableRow(line);
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      headers.forEach((value) => {
+        const cell = document.createElement("th");
+        appendSafeInlineMarkdown(cell, value);
+        headerRow.append(cell);
+      });
+      thead.append(headerRow);
+      const tbody = document.createElement("tbody");
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+        const row = document.createElement("tr");
+        const values = splitMarkdownTableRow(lines[index]);
+        headers.forEach((_, cellIndex) => {
+          const cell = document.createElement("td");
+          appendSafeInlineMarkdown(cell, values[cellIndex] || "");
+          row.append(cell);
+        });
+        tbody.append(row);
+        index += 1;
+      }
+      index -= 1;
+      table.append(thead, tbody);
+      const wrapper = document.createElement("div");
+      wrapper.className = "markdown-table-wrap";
+      wrapper.append(table);
+      root.append(wrapper);
+      continue;
+    }
+    if (/^\s*(?:\*{3,}|-{3,}|_{3,})\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      root.append(document.createElement("hr"));
+      continue;
+    }
+    const heading = line.match(/^\s*(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const node = document.createElement(`h${Math.min(heading[1].length + 2, 6)}`);
+      appendSafeInlineMarkdown(node, heading[2]);
+      root.append(node);
+      continue;
+    }
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      const node = document.createElement("blockquote");
+      appendSafeInlineMarkdown(node, quote[1]);
+      root.append(node);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-+*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (bullet || ordered) {
+      flushParagraph();
+      const nextType = ordered ? "ol" : "ul";
+      if (!list || listType !== nextType) {
+        flushList();
+        list = document.createElement(nextType);
+        listType = nextType;
+      }
+      const item = document.createElement("li");
+      appendSafeInlineMarkdown(item, (bullet || ordered)[1]);
+      list.append(item);
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+
+  flushParagraph();
+  flushList();
+  flushCode();
+  if (!root.childNodes.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "暂无内容。";
+    root.append(empty);
+  }
+  return root;
+}
+
+function splitMarkdownTableRow(line) {
+  return String(line || "")
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.replace(/\\\|/g, "|").trim());
+}
+
+function isMarkdownTableDivider(line) {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function appendSafeInlineMarkdown(target, text) {
+  const value = String(text || "");
+  const pattern = /(\[[^\]\n]+\]\([^\s)]+(?:\s+"[^"]*")?\)|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+  let cursor = 0;
+  for (const match of value.matchAll(pattern)) {
+    if (match.index > cursor) target.append(document.createTextNode(value.slice(cursor, match.index)));
+    const token = match[0];
+    const link = token.match(/^\[([^\]]+)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)$/);
+    if (link) {
+      const href = safeMarkdownHref(link[2]);
+      if (href) {
+        const anchor = document.createElement("a");
+        anchor.textContent = link[1];
+        anchor.href = href;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        if (link[3]) anchor.title = link[3];
+        target.append(anchor);
+      } else {
+        target.append(document.createTextNode(link[1]));
+      }
+    } else if (token.startsWith("`")) {
+      const node = document.createElement("code");
+      node.textContent = token.slice(1, -1);
+      target.append(node);
+    } else if (token.startsWith("**") || token.startsWith("__")) {
+      const node = document.createElement("strong");
+      node.textContent = token.slice(2, -2);
+      target.append(node);
+    } else {
+      const node = document.createElement("em");
+      node.textContent = token.slice(1, -1);
+      target.append(node);
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < value.length) target.append(document.createTextNode(value.slice(cursor)));
+}
+
+function safeMarkdownHref(rawHref) {
+  try {
+    const url = new URL(rawHref, window.location.origin);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+window.renderSafeMarkdown = renderSafeMarkdown;
+
 // Extract assistant text from common response shapes.
 function extractReply(response) {
   const value =
@@ -572,18 +842,163 @@ function appendMessage(role, content) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = content;
+  if (role === "assistant") {
+    bubble.classList.add("markdown-bubble");
+    bubble.append(renderSafeMarkdown(content));
+  } else {
+    bubble.textContent = content;
+  }
 
   item.appendChild(bubble);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
 }
 
+let activeStreamingMessage = null;
+
+function appendStreamingMessage() {
+  const item = document.createElement("article");
+  item.className = "message assistant";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble markdown-bubble streaming-bubble";
+  item.append(bubble);
+  messages.append(item);
+  let text = "";
+  let reasoning = "";
+  let streaming = true;
+  const render = () => {
+    const inline = splitVisibleThinking(text);
+    const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
+    const answer = inline.answer;
+    bubble.replaceChildren();
+    if (visibleReasoning) {
+      bubble.append(createThinkingDetails(visibleReasoning, streaming));
+    } else if (streaming && !answer) {
+      const status = document.createElement("p");
+      status.className = "thinking-status";
+      status.textContent = "正在思考…";
+      bubble.append(status);
+    }
+    if (answer) bubble.append(renderSafeMarkdown(answer));
+    messages.scrollTop = messages.scrollHeight;
+  };
+  render();
+  const api = {
+    append(delta) {
+      text += String(delta || "");
+      render();
+    },
+    appendReasoning(delta) {
+      reasoning += String(delta || "");
+      render();
+    },
+    finish(finalText, finalReasoning = "") {
+      text = String(finalText || text || "后端没有返回内容。");
+      reasoning = String(finalReasoning || reasoning || splitVisibleThinking(text).reasoning || "");
+      streaming = false;
+      bubble.classList.remove("streaming-bubble");
+      render();
+      requestAnimationFrame(() => scrollMessageToTop(item));
+      if (activeStreamingMessage === api) activeStreamingMessage = null;
+    },
+    interrupt() {
+      text = text ? `${text}\n\n_回答已中断。_` : "回答已中断。";
+      streaming = false;
+      bubble.classList.remove("streaming-bubble");
+      render();
+      if (activeStreamingMessage === api) activeStreamingMessage = null;
+    },
+  };
+  activeStreamingMessage = api;
+  return api;
+}
+
+function scrollMessageToTop(item) {
+  if (!item?.isConnected) return;
+  const top = messages.scrollTop
+    + item.getBoundingClientRect().top
+    - messages.getBoundingClientRect().top
+    - 12;
+  messages.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+}
+
+function splitVisibleThinking(value) {
+  const text = String(value || "");
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("<think>")) return { reasoning: "", answer: text };
+  const start = text.indexOf("<think>") + "<think>".length;
+  const end = text.indexOf("</think>", start);
+  if (end < 0) return { reasoning: text.slice(start), answer: "" };
+  return {
+    reasoning: text.slice(start, end).trim(),
+    answer: text.slice(end + "</think>".length).trimStart(),
+  };
+}
+
+function createThinkingDetails(content, open) {
+  const details = document.createElement("details");
+  details.className = "thinking-details";
+  details.open = Boolean(open);
+  const summary = document.createElement("summary");
+  summary.textContent = open ? "正在思考…" : "思考过程";
+  const body = document.createElement("div");
+  body.className = "thinking-details-body";
+  body.append(renderSafeMarkdown(content));
+  details.append(summary, body);
+  return details;
+}
+
+window.splitVisibleThinking = splitVisibleThinking;
+window.createThinkingDetails = createThinkingDetails;
+
+function finishInterruptedMessage() {
+  if (activeStreamingMessage) activeStreamingMessage.interrupt();
+  else appendMessage("assistant", "回答已中断。");
+}
+
+async function streamSseJson(response, onDelta = () => {}, onReasoning = () => {}) {
+  if (!response.ok) throw new Error(`请求失败：${response.status}`);
+  if (!response.body) throw new Error("当前浏览器不支持流式响应。");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  const consume = (block) => {
+    let eventName = "message";
+    const data = [];
+    block.split(/\r?\n/).forEach((line) => {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    });
+    if (!data.length) return;
+    const payload = JSON.parse(data.join("\n"));
+    if (eventName === "delta") onDelta(payload.text || "");
+    if (eventName === "reasoning") onReasoning(payload.text || "");
+    if (eventName === "result") result = payload;
+    if (eventName === "error") throw new Error(payload.message || "流式请求失败。");
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || "";
+    blocks.forEach(consume);
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer);
+  return result;
+}
+
+window.streamSseJson = streamSseJson;
+
 // Toggle request state.
-function setLoading(isLoading) {
+function setLoading(isLoading, interruptible = false) {
   isGenerating = isLoading;
-  sendButton.disabled = isLoading;
-  sendButton.textContent = isLoading ? (currentMode === "paper_reading" ? "解析中" : "生成中") : (currentMode === "paper_reading" ? "解析论文" : "发送");
+  sendButton.disabled = isLoading && !interruptible;
+  sendButton.classList.toggle("is-stop", isLoading && interruptible);
+  sendButton.textContent = isLoading
+    ? (interruptible ? "中断" : (currentMode === "paper_reading" ? "解析中" : "生成中"))
+    : (currentMode === "paper_reading" ? "解析论文" : "发送");
 }
 
 // Get persistent local session id.

@@ -50,15 +50,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "upload_paper",
             "get_paper_detail",
             "start_reading",
-            "pause_reading",
-            "resume_reading",
             "fork",
             "merge",
-            "load_skill",
-            "unload_skill",
             "kg_query",
             "get_session_state",
-            "get_progress",
         }
 
         for action in actions:
@@ -80,9 +75,13 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "kg-graph",
             "fork-panel",
             "pdf-fit-select",
+            "paper-boot",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
+
+        self.assertIn('id="paper-intake" class="intake-view" hidden', html)
+        self.assertIn('class="paper-reading-body is-booting"', html)
 
     def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:
         html = (STATIC / "chat.html").read_text(encoding="utf-8")
@@ -112,6 +111,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertEqual(response.media_type, "application/pdf")
         self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+        self.assertEqual(
+            response.headers["cache-control"],
+            "private, max-age=31536000, immutable",
+        )
 
     def test_extracted_figure_is_served_inline(self) -> None:
         with TemporaryDirectory() as directory:
@@ -126,19 +129,50 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
     def test_agent_answers_use_markdown_renderer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        shared_javascript = (STATIC / "app.js").read_text(encoding="utf-8")
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
 
         self.assertIn("function renderMarkdown(source)", javascript)
         self.assertIn("card.append(header, renderMarkdown(text))", javascript)
-        self.assertIn('"page=1&zoom=75"', javascript)
-        self.assertIn('"page=1&zoom=55"', javascript)
-        self.assertIn('"page=1&zoom=100"', javascript)
-        self.assertIn('classList.toggle("is-pdf-mode", isPdf)', javascript)
+        self.assertIn("window.renderSafeMarkdown", shared_javascript)
+        self.assertIn("isMarkdownTableDivider", shared_javascript)
+        self.assertIn('bubble.append(renderSafeMarkdown(content))', shared_javascript)
+        self.assertIn("scrollMessageToTop(item)", shared_javascript)
+        self.assertIn("scrollAnalysisCardToTop(target, card)", javascript)
+        self.assertIn("loadCachedPdfSource", javascript)
+        self.assertIn("pdf-page-placeholder", javascript)
+        self.assertIn("updateCurrentSectionFromPdfScroll", javascript)
         self.assertIn("function renderPaperFigure(figure)", javascript)
         self.assertIn("figure.image_url", javascript)
         self.assertIn('id="fork-panel"', html)
         self.assertNotIn("<dialog", html)
         self.assertNotIn(".showModal()", javascript)
+
+    def test_low_value_manual_session_controls_are_not_rendered(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        for element_id in ("pause-button", "resume-button", "progress-button"):
+            self.assertNotIn(f'id="{element_id}"', html)
+        self.assertNotIn('action: "pause_reading"', javascript)
+        self.assertIn("function saveBeforeUnload()", javascript)
+
+    def test_annotation_and_pdf_jump_use_workspace_ui(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="note-modal"', html)
+        self.assertIn('id="note-text-input"', html)
+        self.assertNotIn("window.prompt", javascript)
+        self.assertIn("normalizePdfMarkRects", javascript)
+        self.assertIn("scrollPageToPdfReader", javascript)
+        self.assertIn('window.scrollTo({ top: 0, left: 0, behavior: "auto" })', javascript)
+        self.assertIn("document.scrollingElement", javascript)
+        self.assertIn("document.fullscreenElement", javascript)
+        self.assertIn('jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "")', javascript)
+        self.assertNotIn('id="ready-nodes"', html)
+        self.assertNotIn('id="ready-edges"', html)
+        self.assertIn("智能索引自动生成", html)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,24 @@ class PDFParserTests(unittest.TestCase):
     def setUp(self) -> None:
         self.parser = PDFParser()
 
+    def test_extract_year_prefers_arxiv_identifier(self) -> None:
+        self.assertEqual(
+            self.parser.extract_year(
+                "A paper that compares methods from 2023.",
+                source_hint="https://arxiv.org/pdf/2506.07398.pdf",
+            ),
+            2025,
+        )
+
+    def test_extract_year_uses_pdf_creation_metadata_as_fallback(self) -> None:
+        self.assertEqual(
+            self.parser.extract_year(
+                "Paper title without a publication line",
+                document_metadata={"creationDate": "D:20240203112200Z"},
+            ),
+            2024,
+        )
+
     def test_split_number_and_title_lines_form_sections(self) -> None:
         sections = self.parser.extract_sections(SAMPLE_TEXT)
 

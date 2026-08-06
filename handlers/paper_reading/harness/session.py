@@ -225,6 +225,7 @@ class SessionManager:
                 statuses[section_id] = "reading"
 
         session.updated_at = datetime.now(timezone.utc).isoformat()
+        self._persist(session)
         return session
 
     def set_total_sections(self, session_id: str, total: int) -> None:
@@ -232,6 +233,8 @@ class SessionManager:
         session = self._active_sessions.get(session_id)
         if session:
             session.progress["total_sections"] = total
+            session.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist(session)
 
     # ── Skill 管理 ──
 
@@ -244,6 +247,7 @@ class SessionManager:
             if sid not in session.active_skills:
                 session.active_skills.append(sid)
         session.updated_at = datetime.now(timezone.utc).isoformat()
+        self._persist(session)
         return session
 
     def deactivate_skills(self, session_id: str, skill_ids: list[str]) -> ReadingSession | None:
@@ -253,6 +257,7 @@ class SessionManager:
             return None
         session.active_skills = [s for s in session.active_skills if s not in skill_ids]
         session.updated_at = datetime.now(timezone.utc).isoformat()
+        self._persist(session)
         return session
 
     # ── Checkpoint ──
