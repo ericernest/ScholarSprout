@@ -31,10 +31,17 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertNotIn('initialMode === "paper_reading"', script)
 
     def test_workspace_consumes_snapshot_sse_and_paper_import(self) -> None:
+        html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(
+            encoding="utf-8"
+        )
         script = (STATIC_DIR / "domain-onboarding" / "app.js").read_text(encoding="utf-8")
 
+        self.assertIn('id="topbar-retry-button"', html)
         self.assertIn("new EventSource", script)
         self.assertIn("/domain_onboarding/jobs/", script)
+        self.assertIn('}/retry`', script)
+        self.assertIn("terminal && Boolean(snapshot.retryable)", script)
+        self.assertIn('failed: "生成失败，可重试"', script)
         self.assertIn("replace_paths", script)
         self.assertIn("return { ...partial, ...result };", script)
         self.assertIn("formatPercentScore(paper.final_score)", script)

@@ -416,17 +416,19 @@ class StructuredOnboardingGenerator:
             completed,
         )
         section_model = self.section_models.get(section, self.model)
+        section_max_tokens = {
+            "development": self.config.generation_development_max_tokens,
+            "landscape": self.config.generation_landscape_max_tokens,
+            "learning_path": self.config.generation_learning_path_max_tokens,
+        }[section]
+        attempt_max_tokens = section_max_tokens
 
         def generate_candidate(candidate: Any, timeout_seconds: float | None):
             payload, stats = invoke_json(
                 candidate,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens={
-                    "development": self.config.generation_development_max_tokens,
-                    "landscape": self.config.generation_landscape_max_tokens,
-                    "learning_path": self.config.generation_learning_path_max_tokens,
-                }[section],
+                max_tokens=attempt_max_tokens,
                 timeout_seconds=timeout_seconds,
             )
             try:
@@ -442,7 +444,11 @@ class StructuredOnboardingGenerator:
             return completed, stats
 
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt_index in range(2):
+            attempt_max_tokens = max(
+                section_max_tokens,
+                min(section_max_tokens * (attempt_index + 1), self.config.generation_max_tokens),
+            )
             try:
                 completed, stats = run_with_model_route(
                     section_model,
