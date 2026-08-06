@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from typing import Protocol
 
 from .config import DomainOnboardingConfig
@@ -36,6 +38,7 @@ class OnboardingRepairer(Protocol):
         previous_output: DomainOnboardingOutput,
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> RepairResult: ...
 
 
@@ -63,6 +66,7 @@ class TargetedRepairer:
         previous_output: DomainOnboardingOutput,
         quality: ContentQuality,
         allowed_papers: list[RankedPaper],
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> RepairResult:
         repair_plan = self.planner.plan(
             quality,
@@ -107,6 +111,7 @@ class TargetedRepairer:
                 allowed_papers,
                 normalized,
                 selected_issues,
+                on_delta,
             )
             full_candidate = self.code_executor.execute(generation.output, allowed_papers)
             repair_targets = self._repair_scope_targets(

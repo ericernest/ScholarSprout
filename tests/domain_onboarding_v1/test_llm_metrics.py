@@ -8,6 +8,36 @@ from .fakes import FakeJSONModel
 
 
 class FailedLLMCallMetricsTests(unittest.TestCase):
+    def test_streaming_json_forwards_batched_deltas(self) -> None:
+        class StreamingModel:
+            supports_streaming = True
+
+            def chat_stream(self, **kwargs):
+                self.kwargs = kwargs
+                yield {"choices": [{"delta": {"content": '{"ok"'}}]}
+                yield {
+                    "choices": [{"delta": {"content": ":true}"}}],
+                    "usage": {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 3,
+                        "total_tokens": 5,
+                    },
+                }
+
+        deltas: list[tuple[str, str]] = []
+        payload, stats = invoke_json(
+            StreamingModel(),
+            system_prompt="system",
+            user_prompt="user",
+            on_delta=lambda stage, delta: deltas.append((stage, delta)),
+            stream_stage="planning",
+        )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual("".join(delta for _, delta in deltas), '{"ok":true}')
+        self.assertEqual({stage for stage, _ in deltas}, {"planning"})
+        self.assertEqual(stats.total_tokens, 5)
+
     def test_max_tokens_is_forwarded_to_model(self) -> None:
         model = FakeJSONModel([{"ok": True}])
 

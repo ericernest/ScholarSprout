@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from runtime.agent_runner import get_message_content, get_response_message, get_response_usage
 
@@ -52,6 +52,8 @@ def invoke_json(
     user_prompt: str,
     max_tokens: int | None = None,
     timeout_seconds: float | None = None,
+    on_delta: Callable[[str, str], None] | None = None,
+    stream_stage: str = "generation",
 ) -> tuple[dict[str, Any], ModelCallStats]:
     started = perf_counter()
     try:
@@ -69,7 +71,23 @@ def invoke_json(
                 response_format={"type": "json_object"},
             )
             parts: list[str] = []
+            pending_parts: list[str] = []
+            pending_chars = 0
+            last_emitted_at = perf_counter()
             usage = None
+
+            def flush_delta(*, force: bool = False) -> None:
+                nonlocal pending_chars, last_emitted_at
+                if on_delta is None or not pending_parts:
+                    return
+                if not force and pending_chars < 64 and perf_counter() - last_emitted_at < 0.12:
+                    return
+                delta_text = "".join(pending_parts)
+                pending_parts.clear()
+                pending_chars = 0
+                last_emitted_at = perf_counter()
+                on_delta(stream_stage, delta_text)
+
             try:
                 for chunk in stream:
                     cancel_event = current_cancel_event()
@@ -91,11 +109,18 @@ def invoke_json(
                         delta.get("content", "") if isinstance(delta, dict) else ""
                     )
                     if content:
-                        parts.append(str(content))
+                        text = str(content)
+                        parts.append(text)
+                        pending_parts.append(text)
+                        pending_chars += len(text)
+                        flush_delta()
             finally:
-                close = getattr(stream, "close", None)
-                if callable(close):
-                    close()
+                try:
+                    flush_delta(force=True)
+                finally:
+                    close = getattr(stream, "close", None)
+                    if callable(close):
+                        close()
             response = {
                 "choices": [{"message": {"role": "assistant", "content": "".join(parts)}}],
                 "usage": usage,

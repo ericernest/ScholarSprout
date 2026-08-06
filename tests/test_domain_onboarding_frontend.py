@@ -39,6 +39,8 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn('id="topbar-retry-button"', html)
         self.assertIn("new EventSource", script)
         self.assertIn("/domain_onboarding/jobs/", script)
+        self.assertIn('"llm_delta"', script)
+        self.assertIn("STREAM_STAGE_LABELS[state.activeLLMStage]", script)
         self.assertIn('}/retry`', script)
         self.assertIn("terminal && Boolean(snapshot.retryable)", script)
         self.assertIn('failed: "生成失败，可重试"', script)
