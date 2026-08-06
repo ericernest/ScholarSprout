@@ -10,6 +10,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 LAYOUT_PARSER_VERSION = "section-first-v7-bbox-text"
 READING_MAP_VERSION = "novice-reading-map-v1"
 READING_MAP_SKILL_ID = "reading.novice_map_builder"
+PAPER_READING_AGENT_MAX_STEPS = 7
 
 
 # ── 主入口 ──
@@ -90,7 +92,16 @@ def handle_paper_reading_message(
         return _error(f"未知 action: {request.action}")
 
     try:
-        result = handler_fn(request, app_state)
+        if request.action == "start_reading":
+            result = handler_fn(
+                request,
+                app_state,
+                on_text_delta=message.metadata.get("_stream_text_delta"),
+                on_reasoning_delta=message.metadata.get("_stream_reasoning_delta"),
+                cancel_event=message.metadata.get("_stream_cancel_event"),
+            )
+        else:
+            result = handler_fn(request, app_state)
         return result
     except Exception as e:
         logger.exception("Handler action '%s' failed", request.action)
@@ -222,6 +233,9 @@ def _build_quick_paper_payload(
     title = str(metadata.get("original_filename") or "Parsing paper").removesuffix(".pdf")
     first_text = ""
     page_count = 0
+    year = _optional_year(metadata.get("year"))
+    arxiv_id = _arxiv_id_from_url(pdf_url)
+    source = "arxiv" if arxiv_id else "upload"
     try:
         import fitz
 
@@ -238,21 +252,26 @@ def _build_quick_paper_payload(
                         if len(cleaned) >= 8:
                             title = cleaned[:180]
                             break
+            year = year or PDFParser.extract_year(
+                first_text,
+                document_metadata=doc.metadata,
+                source_hint=f"{pdf_url} {metadata.get('original_filename', '')}",
+            )
     except Exception as error:
         logger.warning("Quick PDF metadata extraction failed for %s: %s", paper_id, error)
 
     now = datetime.now(timezone.utc).isoformat()
     return {
         "paper_id": paper_id,
-        "source": "upload",
-        "source_id": "",
+        "source": source,
+        "source_id": arxiv_id,
         "title": title or "Parsing paper",
         "authors": [],
         "abstract": "",
-        "year": None,
+        "year": year,
         "categories": [],
         "keywords": [],
-        "arxiv_id": "",
+        "arxiv_id": arxiv_id,
         "doi": "",
         "url": pdf_url,
         "pdf_url": pdf_url,
@@ -271,6 +290,19 @@ def _build_quick_paper_payload(
         "reading_map": _empty_reading_map("parsing"),
         "reading_map_status": "pending",
     }
+
+
+def _optional_year(value: Any) -> int | None:
+    try:
+        year = int(value)
+    except (TypeError, ValueError):
+        return None
+    return year if 1900 <= year <= 2100 else None
+
+
+def _arxiv_id_from_url(value: str) -> str:
+    match = re.search(r"(?:arxiv\.org/(?:abs|pdf)/|arxiv:)(\d{4}\.\d{4,5})(?:v\d+)?", value or "", re.IGNORECASE)
+    return match.group(1) if match else ""
 
 
 def _schedule_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> None:
@@ -311,6 +343,10 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         payload["paper_id"] = paper_id
         payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
         payload["page_count"] = paper.get("page_count", 0)
+        payload["year"] = payload.get("year") or paper.get("year")
+        payload["source"] = paper.get("source") if paper.get("source") == "arxiv" else payload.get("source", "upload")
+        payload["source_id"] = payload.get("source_id") or paper.get("source_id", "")
+        payload["arxiv_id"] = payload.get("arxiv_id") or paper.get("arxiv_id", "")
         payload["url"] = payload.get("url") or paper.get("url", "")
         payload["pdf_url"] = payload.get("pdf_url") or paper.get("pdf_url", "")
         payload["figure_extraction_status"] = "done"
@@ -340,7 +376,14 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         storage.save_paper(paper_id, paper)
 
 
-def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
+def _handle_start_reading(
+    request: PaperReadingRequest,
+    app_state: Any,
+    *,
+    on_text_delta: Any | None = None,
+    on_reasoning_delta: Any | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict:
     """开始/继续阅读 — 核心阅读逻辑。"""
     session_mgr = getattr(app_state, "session_manager", None)
     kg_builder = getattr(app_state, "kg_builder", None)
@@ -397,8 +440,36 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
         tool_registry=app_state.tool_registry,
         skill_registry=app_state.skill_registry,
         capability_selector=app_state.capability_selector,
-        max_steps=5,
+        max_steps=PAPER_READING_AGENT_MAX_STEPS,
+        on_text_delta=on_text_delta,
+        on_reasoning_delta=on_reasoning_delta,
+        cancel_event=cancel_event,
     )
+
+    if result.cancelled:
+        return _ok(
+            "start_reading",
+            {
+                "session_id": session.session_id,
+                "agent_response": "",
+                "model_calls": result.model_calls,
+                "duration_ms": result.duration_ms,
+                "current_section": current_section,
+                "interrupted": True,
+                "reasoning": result.reasoning,
+            },
+            session={
+                "session_id": session.session_id,
+                "paper_id": session.paper_id,
+                "paper_title": session.paper_title,
+                "state": session.state,
+                "current_section": current_section,
+                "active_skills": session.active_skills,
+            },
+            progress=session.progress,
+            kg_update={"new_nodes": [], "new_edges": [], "updated_nodes": [], "fusion_events": []},
+            skill_outputs=[],
+        )
 
     active_skill_ids = _active_skill_ids_for_context(
         session.active_skills,
@@ -425,6 +496,7 @@ def _handle_start_reading(request: PaperReadingRequest, app_state: Any) -> dict:
     data = {
         "session_id": session.session_id,
         "agent_response": result.text,
+        "reasoning": result.reasoning,
         "model_calls": result.model_calls,
         "duration_ms": result.duration_ms,
         "current_section": current_section,
@@ -735,8 +807,19 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
         if not paper:
             return paper
         full_text = str(paper.get("full_text", ""))
+        if not paper.get("year"):
+            inferred_year = PDFParser.extract_year(
+                full_text,
+                source_hint=" ".join(
+                    str(paper.get(key) or "")
+                    for key in ("pdf_url", "url", "source_id", "arxiv_id")
+                ),
+            )
+            if inferred_year:
+                paper = dict(paper)
+                paper["year"] = inferred_year
         if (
-            paper.get("parse_status") == "done"
+            paper.get("parse_status") in (None, "", "done")
             and full_text
             and PDFParser.sections_need_repair(paper.get("sections"))
         ):

@@ -30,6 +30,7 @@ const NODE_COLORS = {
 const KG_STAGE_ORDER = ["abstract", "introduction", "method", "experiment", "conclusion", "general"];
 const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
 
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
@@ -42,6 +43,9 @@ const state = {
   forks: [], activeFeedId: "main", kgMaxStageIndex: 0,
   readerMode: "pdf", pdfDoc: null, pdfDocUrl: "", pdfRenderedKey: "", pdfjsLoading: null,
   pdfZoom: null, pdfMarks: [], pdfMarkColor: "yellow", pdfMarkHistory: [],
+  pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
+  pendingPdfNoteMark: null, editingPdfNoteId: "",
+  activeResponseController: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -109,10 +113,6 @@ function bindIntake() {
 
 function bindWorkbench() {
   $("new-paper-button").addEventListener("click", showIntake);
-  $("refresh-session-button").addEventListener("click", refreshSessionState);
-  $("pause-button").addEventListener("click", pauseReading);
-  $("resume-button").addEventListener("click", resumeReading);
-  $("progress-button").addEventListener("click", refreshProgress);
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
@@ -126,6 +126,7 @@ function bindWorkbench() {
     if (fork) runForkTurn(fork, question);
     else startReading(question);
   });
+  $("reading-stop-button").addEventListener("click", interruptReadingResponse);
   window.addEventListener("beforeunload", saveBeforeUnload);
 }
 
@@ -147,6 +148,9 @@ function bindReader() {
   $("pdf-reader").addEventListener("mouseup", captureSelection);
   bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
+  $("note-save-button").addEventListener("click", savePdfNote);
+  $("note-close-button").addEventListener("click", closePdfNoteModal);
+  document.querySelectorAll("[data-note-close]").forEach((element) => element.addEventListener("click", closePdfNoteModal));
   document.addEventListener("mousedown", (event) => {
     if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#pdf-reader")) {
       $("selection-toolbar").hidden = true;
@@ -236,6 +240,18 @@ function createPdfToolbar() {
   save.type = "button";
   save.title = "下载原始 PDF";
   save.addEventListener("click", downloadCurrentPdf);
+  const divider = create("span", "pdf-toolbar-divider");
+  const colorLabel = create("span", "pdf-tool-label", "高亮");
+  const colors = createPdfColorPicker();
+  const undo = create("button", "pdf-tool-button", "撤销标注");
+  undo.type = "button";
+  undo.title = "撤销最近一次高亮或注释";
+  undo.addEventListener("click", undoLastPdfMark);
+  toolbar.append(zoomOut, zoomInput, zoomUnit, zoomIn, fitWidth, fitPage, save, divider, colorLabel, colors, undo);
+  return toolbar;
+}
+
+function createPdfColorPicker() {
   const colors = create("div", "pdf-color-picker");
   [
     ["yellow", "黄"],
@@ -243,31 +259,19 @@ function createPdfToolbar() {
     ["blue", "蓝"],
     ["pink", "粉"],
   ].forEach(([color, label]) => {
-    const swatch = create("button", `pdf-color-swatch pdf-color-${color}${state.pdfMarkColor === color ? " is-active" : ""}`, "");
+    const swatch = create("button", `pdf-color-swatch pdf-color-${color}${state.pdfMarkColor === color ? " is-active" : ""}`);
     swatch.type = "button";
-    swatch.title = `高亮颜色：${label}`;
+    swatch.setAttribute("aria-label", `使用${label}色标注`);
     swatch.addEventListener("click", () => setPdfMarkColor(color));
     colors.append(swatch);
   });
-  const highlight = create("button", "pdf-tool-button", "高亮");
-  highlight.type = "button";
-  highlight.title = "高亮当前选区";
-  highlight.addEventListener("click", () => addPdfMarkFromSelection("highlight"));
-  const note = create("button", "pdf-tool-button", "注释");
-  note.type = "button";
-  note.title = "给当前选区添加注释";
-  note.addEventListener("click", () => addPdfMarkFromSelection("note"));
-  const undo = create("button", "pdf-tool-button", "撤销");
-  undo.type = "button";
-  undo.title = "撤销最近一次高亮或注释";
-  undo.addEventListener("click", undoLastPdfMark);
-  toolbar.append(zoomOut, zoomInput, zoomUnit, zoomIn, fitWidth, fitPage, save, colors, highlight, note, undo);
-  return toolbar;
+  return colors;
 }
 
 function ensureSelectionPdfActions() {
   const toolbar = $("selection-toolbar");
   if (!toolbar || toolbar.querySelector('[data-selection-action="highlight"]')) return;
+  toolbar.append(create("span", "selection-toolbar-divider"));
   const highlight = create("button", "", "高亮");
   highlight.type = "button";
   highlight.dataset.selectionAction = "highlight";
@@ -302,6 +306,7 @@ function bindFork() {
   document.querySelectorAll("[data-fork-close]").forEach((element) => element.addEventListener("click", closeFork));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !$("fork-modal").hidden) closeFork();
+    if (event.key === "Escape" && !$("note-modal").hidden) closePdfNoteModal();
   });
 }
 
@@ -402,7 +407,8 @@ function renderSearchResults(papers) {
     [paper.source, paper.year, paper.venue].filter(Boolean).forEach((value) => tags.append(create("span", "", String(value))));
     if (paper.citation_count != null) tags.append(create("span", "", `引用 ${paper.citation_count}`));
     card.append(tags, create("h3", "", paper.title || "未命名论文"));
-    card.append(create("p", "", (paper.authors || []).join("、") || "作者信息暂无"));
+    const authors = (paper.authors || []).filter(Boolean);
+    if (authors.length) card.append(create("p", "", authors.join("、")));
     card.append(create("p", "", truncate(paper.abstract || "暂无摘要", 230)));
     const actions = create("div", "paper-result-actions");
     const importButton = create("button", "", paper.pdf_url ? "导入精读" : "缺少 PDF");
@@ -523,6 +529,7 @@ function startParsePolling() {
     try {
       await loadPaperDetail();
       if (!$("paper-workbench").hidden) {
+        renderPaperMetadata();
         renderOutline();
         renderSections();
         renderProgress();
@@ -552,11 +559,12 @@ function stopParsePolling() {
 function renderReadyCard(sourceLabel = "已保存论文") {
   if (!state.paper) return;
   $("ready-title").textContent = state.paper.title || "未命名论文";
-  $("ready-authors").textContent = (state.paper.authors || []).join("、") || "作者信息暂无";
-  $("ready-abstract").textContent = state.paper.abstract || "解析完成，点击进入工作台查看 PDF 原文与智能索引。";
-  $("ready-sections").textContent = state.paper.sections?.length || 0;
-  $("ready-nodes").textContent = state.uploadSummary?.new_nodes ?? "—";
-  $("ready-edges").textContent = state.uploadSummary?.new_edges ?? "—";
+  const authors = (state.paper.authors || []).filter(Boolean);
+  $("ready-authors").textContent = authors.join("、");
+  $("ready-authors").hidden = !authors.length;
+  $("ready-abstract").textContent = state.paper.abstract || (shouldPollPaperDetail()
+    ? "正在解析论文信息，完成后会自动补充摘要与章节结构。"
+    : "点击进入工作台查看 PDF 原文与智能索引。");
   $("ready-source").textContent = state.restored ? "继续阅读" : sourceLabel;
 }
 
@@ -572,6 +580,8 @@ async function enterWorkbench() {
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
+  $("paper-boot").hidden = true;
+  document.body.classList.remove("is-booting");
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
@@ -592,11 +602,8 @@ function syncFullscreenButton() {
 }
 
 function renderPaperWorkspace() {
+  renderPaperMetadata();
   const paper = state.paper || {};
-  $("paper-ribbon-title").textContent = paper.title || "未命名论文";
-  $("paper-ribbon-meta").textContent = `${paper.source || "upload"} · ${paper.year || "年份未知"} · ${paper.sections?.length || 0} sections`;
-  $("side-paper-title").textContent = paper.title || "未命名论文";
-  $("side-paper-authors").textContent = (paper.authors || []).join("、") || "作者信息暂无";
   const tags = $("side-paper-tags");
   tags.replaceChildren();
   [...(paper.categories || []).slice(0, 3), paper.venue].filter(Boolean).forEach((tag) => tags.append(create("span", "", tag)));
@@ -605,10 +612,27 @@ function renderPaperWorkspace() {
   renderProgress();
   syncSkillControls();
   setReaderMode(state.readerMode || "pdf");
-  renderPdf();
   renderReadingMap();
   startParsePolling();
   updateSessionBadge();
+}
+
+function renderPaperMetadata() {
+  const paper = state.paper || {};
+  const parsing = ["queued", "pending", "parsing"].includes(paper.parse_status || state.parseStatus);
+  const sections = Array.isArray(paper.sections) ? paper.sections : [];
+  const meta = [paperSourceLabel(paper.source)];
+  if (parsing) meta.push("正在解析论文信息");
+  else {
+    if (paper.year) meta.push(String(paper.year));
+    if (sections.length) meta.push(`${sections.length} sections`);
+  }
+  $("paper-ribbon-title").textContent = paper.title || "论文已上传";
+  $("paper-ribbon-meta").textContent = meta.join(" · ");
+  $("side-paper-title").textContent = paper.title || "论文已上传";
+  const authors = (paper.authors || []).filter(Boolean);
+  $("side-paper-authors").textContent = authors.join("、");
+  $("side-paper-authors").hidden = !authors.length;
 }
 
 function renderOutline() {
@@ -618,7 +642,8 @@ function renderOutline() {
   if (!sections.length && ["queued", "pending", "parsing"].includes(state.parseStatus)) {
     const pending = create("div", "outline-pending", "正在生成章节索引…");
     container.append(pending);
-    $("outline-count").textContent = "0";
+    $("outline-count").textContent = "";
+    $("outline-count").hidden = true;
     return;
   }
   const statuses = state.progress?.section_statuses || {};
@@ -631,7 +656,8 @@ function renderOutline() {
     button.addEventListener("click", () => selectSection(section.section_id, false));
     container.append(button);
   });
-  $("outline-count").textContent = String(sections.length);
+  $("outline-count").textContent = sections.length ? String(sections.length) : "";
+  $("outline-count").hidden = !sections.length;
 }
 
 function renderSections() {
@@ -839,30 +865,99 @@ async function renderPdf(force = false, options = {}) {
   }
   const renderKey = `${baseUrl}::${fit}::${host.clientWidth}`;
   if (!force && state.pdfRenderedKey === renderKey && host.childElementCount) {
+    if (state.pendingPdfPage) scrollPdfToPage(state.pendingPdfPage, false);
+    state.pendingPdfPage = null;
     return;
   }
+  if (!force && state.pdfRenderingKey === renderKey) {
+    requestAnimationFrame(() => scrollPdfToPage(state.pendingPdfPage || currentPdfPage(), false));
+    return;
+  }
+  const generation = state.pdfRenderGeneration + 1;
+  state.pdfRenderGeneration = generation;
+  state.pdfRenderingKey = renderKey;
   if (!preserveViewport) host.replaceChildren(create("div", "pdf-loading", "正在加载 PDF 原文…"));
   try {
     const pdfjsLib = await ensurePdfJs();
     if (!state.pdfDoc || state.pdfDocUrl !== baseUrl) {
-      state.pdfDoc = await pdfjsLib.getDocument(baseUrl).promise;
+      const source = await loadCachedPdfSource(baseUrl);
+      state.pdfDoc = await pdfjsLib.getDocument(source).promise;
       state.pdfDocUrl = baseUrl;
     }
-    const target = document.createDocumentFragment();
+    if (generation !== state.pdfRenderGeneration) return;
+
+    const firstPage = await state.pdfDoc.getPage(1);
+    const fallbackViewport = pdfViewportForPage(firstPage, fit, host);
+    const placeholders = [];
     for (let pageNumber = 1; pageNumber <= state.pdfDoc.numPages; pageNumber += 1) {
-      await renderPdfPage(pdfjsLib, state.pdfDoc, pageNumber, fit, host, target);
+      const placeholder = create("section", "pdf-page pdf-page-placeholder");
+      placeholder.dataset.pageNumber = String(pageNumber);
+      placeholder.style.width = `${fallbackViewport.width}px`;
+      placeholder.style.height = `${fallbackViewport.height}px`;
+      placeholder.append(create("span", "pdf-page-placeholder-label", `第 ${pageNumber} 页`));
+      placeholders.push(placeholder);
     }
-    host.replaceChildren(target);
+    host.replaceChildren(...placeholders);
+    const targetPage = Number(state.pendingPdfPage || anchor?.page || currentPdfPage()) || 1;
+    scrollPdfToPage(targetPage, false);
+    const pageOrder = Array.from({ length: state.pdfDoc.numPages }, (_, index) => index + 1)
+      .sort((left, right) => Math.abs(left - targetPage) - Math.abs(right - targetPage));
+    for (const pageNumber of pageOrder) {
+      if (generation !== state.pdfRenderGeneration) return;
+      const placeholder = host.querySelector(`[data-page-number="${pageNumber}"]`);
+      await renderPdfPage(pdfjsLib, state.pdfDoc, pageNumber, fit, host, host, placeholder);
+      if (pageNumber === targetPage) scrollPdfToPage(targetPage, false);
+    }
     state.pdfRenderedKey = renderKey;
+    state.pdfRenderingKey = "";
     $("pdf-frame").hidden = true;
     if (preserveViewport) restorePdfViewportAnchor(anchor);
-    else scrollPdfToPage(currentPdfPage(), false);
+    else scrollPdfToPage(targetPage, false);
+    state.pendingPdfPage = null;
   } catch (error) {
+    if (generation !== state.pdfRenderGeneration) return;
+    state.pdfRenderingKey = "";
     console.warn("PDF.js render failed, fallback to iframe.", error);
     host.replaceChildren(create("div", "pdf-loading", "PDF.js 加载失败，已切换到浏览器原生 PDF 预览。"));
     const nextUrl = `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}`;
     if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
     $("pdf-frame").hidden = false;
+  }
+}
+
+function paperSourceLabel(source) {
+  const labels = {
+    upload: "本地上传",
+    arxiv: "arXiv",
+    semantic_scholar: "Semantic Scholar",
+    dblp: "DBLP",
+    openalex: "OpenAlex",
+  };
+  return labels[source] || source || "论文";
+}
+
+function paperYearLabel(paper) {
+  if (paper?.year) return String(paper.year);
+  return ["queued", "pending", "parsing"].includes(paper?.parse_status || state.parseStatus)
+    ? "年份解析中"
+    : "";
+}
+
+async function loadCachedPdfSource(baseUrl) {
+  if (!window.caches || !window.fetch) return baseUrl;
+  try {
+    const request = new Request(baseUrl, { credentials: "same-origin" });
+    const cache = await window.caches.open(PDF_CACHE_NAME);
+    let response = await cache.match(request);
+    if (!response) {
+      response = await fetch(request, { cache: "force-cache" });
+      if (!response.ok) throw new Error(`PDF 请求失败（HTTP ${response.status}）`);
+      await cache.put(request, response.clone());
+    }
+    return { data: new Uint8Array(await response.arrayBuffer()) };
+  } catch (error) {
+    console.warn("PDF cache unavailable; loading from URL.", error);
+    return baseUrl;
   }
 }
 
@@ -940,6 +1035,7 @@ function syncPdfToSection(sectionId) {
   const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
   const page = section?.start_page;
   if (!page) return;
+  state.pendingPdfPage = page;
   scrollPdfToPage(page);
   if (!$("pdf-frame").hidden) {
     const fit = $("pdf-fit-select").value || "width";
@@ -960,6 +1056,8 @@ function setReaderMode(mode) {
   if (isPdf) {
     renderPdf();
     syncPdfToSection(state.currentSection);
+  } else {
+    requestAnimationFrame(() => scrollReaderToSection(state.currentSection, false));
   }
 }
 
@@ -984,20 +1082,22 @@ function ensurePdfJs() {
   return state.pdfjsLoading;
 }
 
-async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, appendTarget = measureHost) {
-  const page = await pdfDoc.getPage(pageNumber);
+function pdfViewportForPage(page, fit, measureHost) {
   const baseViewport = page.getViewport({ scale: 1 });
   const availableWidth = Math.max(360, measureHost.clientWidth - 34);
   const widthScale = availableWidth / baseViewport.width;
   const numericZoom = /^\d+$/.test(String(fit)) ? Number(fit) : 0;
   const scale = numericZoom
     ? numericZoom / 100 * 1.35
-    : fit === "100"
-    ? 1.35
     : fit === "page"
       ? Math.min(widthScale, Math.max(0.7, (measureHost.clientHeight - 42) / baseViewport.height))
       : widthScale;
-  const viewport = page.getViewport({ scale });
+  return page.getViewport({ scale });
+}
+
+async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, appendTarget = measureHost, placeholder = null) {
+  const page = await pdfDoc.getPage(pageNumber);
+  const viewport = pdfViewportForPage(page, fit, measureHost);
   const pageShell = create("section", "pdf-page");
   pageShell.dataset.pageNumber = String(pageNumber);
   pageShell.style.width = `${viewport.width}px`;
@@ -1014,7 +1114,6 @@ async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, app
   textLayer.style.height = `${viewport.height}px`;
   const markLayer = create("div", "pdf-mark-layer");
   pageShell.append(canvas, textLayer, markLayer);
-  appendTarget.append(pageShell);
   await page.render({
     canvasContext: context,
     viewport,
@@ -1030,6 +1129,8 @@ async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, app
   });
   await (task.promise || task);
   renderPdfMarks(pageShell, pageNumber);
+  if (placeholder?.isConnected) placeholder.replaceWith(pageShell);
+  else appendTarget.append(pageShell);
 }
 
 function scrollPdfToPage(page, smooth = true) {
@@ -1042,10 +1143,34 @@ function scrollPdfToPage(page, smooth = true) {
 
 function jumpToPdfPage(page, sectionId = "") {
   if (sectionId) state.currentSection = sectionId;
+  state.pendingPdfPage = Number(page) || currentPdfPage();
   setReaderMode("pdf");
   renderOutline();
   syncComposerContext();
-  requestAnimationFrame(() => scrollPdfToPage(page || currentPdfPage()));
+  scrollPageToPdfReader();
+  requestAnimationFrame(() => {
+    scrollPageToPdfReader();
+    scrollPdfToPage(state.pendingPdfPage || currentPdfPage());
+  });
+  window.setTimeout(scrollPageToPdfReader, 120);
+  window.setTimeout(scrollPageToPdfReader, 360);
+}
+
+function scrollPageToPdfReader() {
+  // The reading map sits below the fixed-height workbench. Returning every
+  // possible outer scroll root to zero is deterministic across browsers and
+  // guarantees that the PDF reader is visible after a source jump.
+  const scrollRoots = [
+    document.scrollingElement,
+    document.documentElement,
+    document.body,
+    document.fullscreenElement,
+  ].filter(Boolean);
+  scrollRoots.forEach((root) => {
+    root.scrollTop = 0;
+    if (typeof root.scrollTo === "function") root.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  });
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
 }
 
 async function selectSection(sectionId, analyze) {
@@ -1057,7 +1182,11 @@ async function selectSection(sectionId, analyze) {
   if (state.readerMode === "pdf" || $("structured-reader").hidden) syncPdfToSection(sectionId);
   else scrollReaderToSection(sectionId);
   syncComposerContext();
-  if (analyze) await startReading(`请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`);
+  if (analyze) await startReading(
+    `请精读“${sectionTitle(sectionId)}”，说明核心内容、论证结构和需要重点理解的概念。`,
+    state.sessionId,
+    { sectionAnalysis: true },
+  );
 }
 
 function moveSection(offset) {
@@ -1068,27 +1197,54 @@ function moveSection(offset) {
   if (target) selectSection(target.section_id, false);
 }
 
-async function startReading(content, sessionId = state.sessionId) {
+async function startReading(content, sessionId = state.sessionId, options = {}) {
   if (!state.paperId || state.busy) return;
   state.busy = true;
-  const thinking = showThinkingCard(`正在分析 ${sectionTitle(state.currentSection) || "当前内容"}…`);
+  const detail = options.sectionAnalysis
+    ? `正在分析 ${sectionTitle(state.currentSection) || "当前章节"}…`
+    : "正在分析…";
+  const streaming = showStreamingAnalysisCard(detail);
+  const controller = new AbortController();
+  state.activeResponseController = controller;
+  $("reading-stop-button").hidden = false;
   try {
-    const { payload } = await callPaperReading({
-      action: "start_reading", session_id: sessionId || "", paper_id: state.paperId,
-      target_section: state.currentSection || "", content,
-      metadata: selectionMetadata(),
+    const response = await fetch("/paper_reading/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "start_reading", session_id: sessionId || "", paper_id: state.paperId,
+        target_section: state.currentSection || "", content,
+        metadata: selectionMetadata(),
+      }),
+      signal: controller.signal,
     });
-    thinking.remove();
-    applyReadingPayload(payload);
+    const payload = await window.streamSseJson(
+      response,
+      (delta) => streaming.append(delta),
+      (delta) => streaming.appendReasoning(delta),
+    );
+    streaming.finish(payload?.data?.agent_response || "", payload?.data?.reasoning || "");
+    applyReadingPayload(payload, { appendAgent: false });
     toast("章节分析已更新。");
     return payload;
   } catch (error) {
-    thinking.remove();
-    toast(error.message, true);
+    if (error.name === "AbortError") {
+      streaming.interrupt();
+      toast("回答已中断。");
+    } else {
+      streaming.remove();
+      toast(error.message, true);
+    }
     return null;
   } finally {
+    if (state.activeResponseController === controller) state.activeResponseController = null;
+    $("reading-stop-button").hidden = true;
     state.busy = false;
   }
+}
+
+function interruptReadingResponse() {
+  state.activeResponseController?.abort();
 }
 
 function showThinkingCard(detail, target = $("analysis-feed")) {
@@ -1104,10 +1260,70 @@ function showThinkingCard(detail, target = $("analysis-feed")) {
 }
 
 async function analyzeCurrentSection() {
-  await startReading(`请分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出核心内容、论证结构、关键证据与需要重点理解的概念。`);
+  await startReading(
+    `请分析“${sectionTitle(state.currentSection) || "当前章节"}”，给出核心内容、论证结构、关键证据与需要重点理解的概念。`,
+    state.sessionId,
+    { sectionAnalysis: true },
+  );
 }
 
-function applyReadingPayload(payload) {
+function showStreamingAnalysisCard(detail, target = $("analysis-feed")) {
+  const card = create("article", "analysis-card streaming-analysis-card");
+  const header = create("header");
+  header.append(create("strong", "", "Synapse Copilot"), create("span", "", detail || "正在分析…"));
+  const body = create("div", "streaming-analysis-body");
+  body.append(create("p", "thinking-status", "正在思考…"));
+  card.append(header, body);
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
+  let text = "";
+  let reasoning = "";
+  let streaming = true;
+  const render = () => {
+    const inline = window.splitVisibleThinking?.(text) || { reasoning: "", answer: text };
+    const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
+    body.replaceChildren();
+    if (visibleReasoning && typeof window.createThinkingDetails === "function") {
+      body.append(window.createThinkingDetails(visibleReasoning, streaming));
+    } else if (streaming && !inline.answer) {
+      body.append(create("p", "thinking-status", detail || "正在思考…"));
+    }
+    if (inline.answer) body.append(renderMarkdown(inline.answer));
+    target.scrollTop = target.scrollHeight;
+  };
+  return {
+    append(delta) { text += String(delta || ""); render(); },
+    appendReasoning(delta) { reasoning += String(delta || ""); render(); },
+    finish(finalText, finalReasoning = "") {
+      text = String(finalText || text || "后端没有返回内容。");
+      reasoning = String(finalReasoning || reasoning || "");
+      streaming = false;
+      card.classList.remove("streaming-analysis-card");
+      header.lastElementChild.textContent = "Agent";
+      render();
+      requestAnimationFrame(() => scrollAnalysisCardToTop(target, card));
+    },
+    interrupt() {
+      text = text ? `${text}\n\n_回答已中断。_` : "回答已中断。";
+      streaming = false;
+      card.classList.remove("streaming-analysis-card");
+      header.lastElementChild.textContent = "已中断";
+      render();
+    },
+    remove() { card.remove(); },
+  };
+}
+
+function scrollAnalysisCardToTop(target, card) {
+  if (!target || !card?.isConnected) return;
+  const top = target.scrollTop
+    + card.getBoundingClientRect().top
+    - target.getBoundingClientRect().top
+    - 8;
+  target.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+}
+
+function applyReadingPayload(payload, options = {}) {
   const data = payload.data || {};
   const session = payload.session || {};
   state.sessionId = session.session_id || data.session_id || state.sessionId;
@@ -1121,7 +1337,7 @@ function applyReadingPayload(payload) {
   if (stageIndex > state.kgMaxStageIndex) state.kgMaxStageIndex = stageIndex;
   state.queryKgElements = [];
   persistState();
-  appendAnalysis(data.agent_response || "后端已完成本次阅读操作。", data);
+  if (options.appendAgent !== false) appendAnalysis(data.agent_response || "后端已完成本次阅读操作。", data);
   renderSkillOutputs(state.skillOutputs, $("analysis-feed"));
   renderProgress();
   renderOutline();
@@ -1289,113 +1505,11 @@ function renderCompactObject(value, depth = 0, hiddenKeys = new Set()) {
   return grid;
 }
 
-// Render the Markdown subset used by model answers without injecting raw HTML.
 function renderMarkdown(source) {
-  const root = create("div", "markdown-content");
-  const lines = String(source || "").replace(/\r\n?/g, "\n").split("\n");
-  let paragraph = [];
-  let list = null;
-  let listType = "";
-  let code = null;
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    const node = create("p");
-    appendInlineMarkdown(node, paragraph.join(" ").trim());
-    root.append(node);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (list) root.append(list);
-    list = null;
-    listType = "";
-  };
-  const flushCode = () => {
-    if (!code) return;
-    const pre = create("pre", "markdown-code");
-    pre.append(create("code", "", code.lines.join("\n")));
-    root.append(pre);
-    code = null;
-  };
-
-  lines.forEach((rawLine) => {
-    const line = rawLine.trimEnd();
-    if (line.trim().startsWith("```")) {
-      flushParagraph();
-      flushList();
-      if (code) flushCode();
-      else code = { lines: [] };
-      return;
-    }
-    if (code) {
-      code.lines.push(rawLine);
-      return;
-    }
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      return;
-    }
-    if (/^\s*(?:\*{3,}|-{3,}|_{3,})\s*$/.test(line)) {
-      flushParagraph();
-      flushList();
-      root.append(create("hr"));
-      return;
-    }
-    const heading = line.match(/^\s*(#{1,4})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const node = create(`h${Math.min(heading[1].length + 2, 6)}`);
-      appendInlineMarkdown(node, heading[2]);
-      root.append(node);
-      return;
-    }
-    const quote = line.match(/^\s*>\s?(.*)$/);
-    if (quote) {
-      flushParagraph();
-      flushList();
-      const node = create("blockquote");
-      appendInlineMarkdown(node, quote[1]);
-      root.append(node);
-      return;
-    }
-    const bullet = line.match(/^\s*[-+*]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (bullet || ordered) {
-      flushParagraph();
-      const nextType = ordered ? "ol" : "ul";
-      if (!list || listType !== nextType) {
-        flushList();
-        list = create(nextType);
-        listType = nextType;
-      }
-      const item = create("li");
-      appendInlineMarkdown(item, (bullet || ordered)[1]);
-      list.append(item);
-      return;
-    }
-    paragraph.push(line.trim());
-  });
-  flushParagraph();
-  flushList();
-  flushCode();
-  if (!root.childNodes.length) root.append(create("p", "", "暂无内容。"));
-  return root;
-}
-
-function appendInlineMarkdown(target, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
-  let cursor = 0;
-  for (const match of String(text || "").matchAll(pattern)) {
-    if (match.index > cursor) target.append(document.createTextNode(text.slice(cursor, match.index)));
-    const token = match[0];
-    if (token.startsWith("`")) target.append(create("code", "", token.slice(1, -1)));
-    else if (token.startsWith("**") || token.startsWith("__")) target.append(create("strong", "", token.slice(2, -2)));
-    else target.append(create("em", "", token.slice(1, -1)));
-    cursor = match.index + token.length;
+  if (typeof window.renderSafeMarkdown === "function") {
+    return window.renderSafeMarkdown(source, "markdown-content");
   }
-  if (cursor < text.length) target.append(document.createTextNode(text.slice(cursor)));
+  return create("div", "markdown-content", String(source || "暂无内容。"));
 }
 
 function renderSkillControls() {
@@ -1406,45 +1520,6 @@ function renderQuickActions() {}
 
 function syncSkillControls() {
   // No frontend skill controls are rendered; skill choice is handled server-side.
-}
-
-async function pauseReading(showToast = true) {
-  if (!state.sessionId) return toast("当前还没有可暂停的阅读会话。", true);
-  setBusy(true, "正在保存阅读进度", "创建 checkpoint…");
-  try {
-    const { payload } = await callPaperReading({
-      action: "pause_reading", session_id: state.sessionId,
-      metadata: { viewport_section: state.currentSection, scroll_top: $("structured-reader").scrollTop, selected_node_id: state.selectedNode?.id || "" },
-    });
-    state.sessionState = "paused";
-    updateSessionBadge();
-    if (showToast) toast(payload.data?.message || "阅读进度已保存。");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function resumeReading(showToast = true) {
-  if (!state.sessionId) return toast("没有找到可恢复的阅读会话。", true);
-  setBusy(true, "正在恢复会话", "同步章节、Skill 与 checkpoint…");
-  try {
-    const { payload } = await callPaperReading({ action: "resume_reading", session_id: state.sessionId });
-    state.sessionState = "active";
-    state.currentSection = payload.data?.current_section || state.currentSection;
-    state.activeSkills = payload.data?.active_skills || state.activeSkills;
-    await refreshProgress(false);
-    renderOutline();
-    jumpToSection(state.currentSection);
-    syncSkillControls();
-    updateSessionBadge();
-    if (showToast) toast(payload.data?.message || "阅读已恢复。");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
 }
 
 async function refreshSessionState(showToast = true) {
@@ -1466,21 +1541,6 @@ async function refreshSessionState(showToast = true) {
   } catch (error) {
     if (showToast) toast(error.message, true);
     throw error;
-  }
-}
-
-async function refreshProgress(showToast = true) {
-  if (!state.sessionId) return;
-  try {
-    const { payload } = await callPaperReading({ action: "get_progress", session_id: state.sessionId });
-    state.progress = payload.data?.progress || state.progress;
-    state.currentSection = state.progress?.current_position?.section_id || state.currentSection;
-    persistState();
-    renderProgress();
-    renderOutline();
-    if (showToast) toast(payload.data?.formatted || "进度已刷新。");
-  } catch (error) {
-    if (showToast) toast(error.message, true);
   }
 }
 
@@ -1524,9 +1584,10 @@ function captureSelection() {
   syncComposerContext();
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   const toolbar = $("selection-toolbar");
-  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - 430, rect.left))}px`;
-  toolbar.style.top = `${Math.max(72, rect.top - 52)}px`;
   toolbar.hidden = false;
+  const toolbarWidth = toolbar.offsetWidth || 430;
+  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, rect.left))}px`;
+  toolbar.style.top = `${Math.max(72, rect.top - toolbar.offsetHeight - 10)}px`;
 }
 
 async function handleSelectionAction(event) {
@@ -1535,7 +1596,7 @@ async function handleSelectionAction(event) {
   $("selection-toolbar").hidden = true;
   const quoted = `\n\n选中内容：\n${state.selectedText}`;
   if (action === "explain") await startReading(`请解释这段内容的直觉、上下文和关键假设。${quoted}`);
-  if (action === "concept") await startReading(`请解释选中概念的定义、前置知识和领域脉络。${quoted}`);
+  if (action === "concept") await startReading(`请把选中概念整理为简洁概念卡片：定义、本文语境、必要前置知识、与当前方法的关系、一个易混淆概念。${quoted}`);
   if (action === "formula") openFork("请对选中公式做直觉、逐步推导和数值例子三层分析。");
   if (action === "fork") openFork("请围绕选中内容进行深入探索。");
   if (action === "highlight") addPdfMarkFromSelection("highlight");
@@ -1548,16 +1609,8 @@ function addPdfMarkFromSelection(type) {
   const page = selection.anchorNode?.parentElement?.closest(".pdf-page");
   if (!page) return toast("高亮和注释目前只支持 PDF 原文选区。", true);
   const pageRect = page.getBoundingClientRect();
-  const rects = Array.from(selection.getRangeAt(0).getClientRects())
-    .filter((rect) => rect.width > 1 && rect.height > 1)
-    .map((rect) => ({
-      left: round2((rect.left - pageRect.left) / pageRect.width),
-      top: round2((rect.top - pageRect.top) / pageRect.height),
-      width: round2(rect.width / pageRect.width),
-      height: round2(rect.height / pageRect.height),
-    }));
+  const rects = normalizePdfMarkRects(selection.getRangeAt(0), pageRect);
   if (!rects.length) return;
-  const note = type === "note" ? window.prompt("添加注释", "") || "" : "";
   const mark = {
     id: `mark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type,
@@ -1565,17 +1618,102 @@ function addPdfMarkFromSelection(type) {
     page: Number(page.dataset.pageNumber || 1),
     rects,
     text: state.selectedText,
-    note,
+    note: "",
     section_id: state.currentSection,
     created_at: new Date().toISOString(),
   };
-  state.pdfMarks.push(mark);
-  state.pdfMarkHistory.push(mark.id);
-  persistPdfMarks();
-  renderPdfMarks(page, mark.page);
-  selection.removeAllRanges();
+
   $("selection-toolbar").hidden = true;
-  toast(type === "note" ? "注释已添加。" : "高亮已添加。");
+  if (type === "note") {
+    openPdfNoteModal(mark);
+    return;
+  }
+  commitPdfMark(mark);
+}
+
+function normalizePdfMarkRects(range, pageRect) {
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+  const raw = Array.from(range.getClientRects())
+    .filter((rect) => rect.width > 1 && rect.height > 1)
+    .map((rect) => {
+      const left = clamp((rect.left - pageRect.left) / pageRect.width);
+      const top = clamp((rect.top - pageRect.top) / pageRect.height);
+      const right = clamp((rect.right - pageRect.left) / pageRect.width);
+      const bottom = clamp((rect.bottom - pageRect.top) / pageRect.height);
+      return { left, top, width: right - left, height: bottom - top };
+    })
+    .filter((rect) => rect.width > 0 && rect.height > 0)
+    .sort((left, right) => left.top - right.top || left.left - right.left);
+
+  const merged = [];
+  raw.forEach((rect) => {
+    const previous = merged.at(-1);
+    if (!previous) {
+      merged.push({ ...rect });
+      return;
+    }
+    const overlap = Math.min(previous.top + previous.height, rect.top + rect.height) - Math.max(previous.top, rect.top);
+    const sameLine = overlap >= Math.min(previous.height, rect.height) * 0.55;
+    const horizontalGap = rect.left - (previous.left + previous.width);
+    if (sameLine && horizontalGap <= 0.012) {
+      const right = Math.max(previous.left + previous.width, rect.left + rect.width);
+      const bottom = Math.max(previous.top + previous.height, rect.top + rect.height);
+      previous.left = Math.min(previous.left, rect.left);
+      previous.top = Math.min(previous.top, rect.top);
+      previous.width = right - previous.left;
+      previous.height = bottom - previous.top;
+    } else {
+      merged.push({ ...rect });
+    }
+  });
+
+  return merged.map((rect) => ({
+    left: round2(rect.left),
+    top: round2(rect.top + rect.height * 0.14),
+    width: round2(rect.width),
+    height: round2(rect.height * 0.72),
+  }));
+}
+
+function commitPdfMark(mark, editingId = "") {
+  if (editingId) {
+    const index = state.pdfMarks.findIndex((item) => item.id === editingId);
+    if (index >= 0) state.pdfMarks[index] = mark;
+  } else {
+    state.pdfMarks.push(mark);
+    state.pdfMarkHistory.push(mark.id);
+  }
+  persistPdfMarks();
+  const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
+  renderPdfMarks(page, mark.page);
+  window.getSelection()?.removeAllRanges();
+  toast(mark.type === "note" ? (editingId ? "注释已更新。" : "注释已添加。") : "高亮已添加。");
+}
+
+function openPdfNoteModal(mark, editing = false) {
+  state.pendingPdfNoteMark = { ...mark };
+  state.editingPdfNoteId = editing ? mark.id : "";
+  $("note-modal-title").textContent = editing ? "编辑注释" : "添加注释";
+  $("note-selection-copy").textContent = truncate(mark.text || "未记录选中原文", 420);
+  $("note-text-input").value = mark.note || "";
+  $("note-modal").hidden = false;
+  requestAnimationFrame(() => $("note-text-input").focus());
+}
+
+function closePdfNoteModal() {
+  $("note-modal").hidden = true;
+  state.pendingPdfNoteMark = null;
+  state.editingPdfNoteId = "";
+}
+
+function savePdfNote() {
+  if (!state.pendingPdfNoteMark) return;
+  const note = $("note-text-input").value.trim();
+  if (!note) return toast("请先填写注释内容。", true);
+  const mark = { ...state.pendingPdfNoteMark, note, updated_at: new Date().toISOString() };
+  const editingId = state.editingPdfNoteId;
+  closePdfNoteModal();
+  commitPdfMark(mark, editingId);
 }
 
 function setPdfMarkColor(color) {
@@ -1601,6 +1739,7 @@ function undoLastPdfMark() {
 }
 
 function renderPdfMarks(pageShell, pageNumber) {
+  if (!pageShell) return;
   const layer = pageShell.querySelector(".pdf-mark-layer");
   if (!layer) return;
   layer.replaceChildren();
@@ -1614,18 +1753,12 @@ function renderPdfMarks(pageShell, pageNumber) {
         item.style.top = `${rect.top * 100}%`;
         item.style.width = `${rect.width * 100}%`;
         item.style.height = `${rect.height * 100}%`;
-        item.title = mark.type === "note" && mark.note ? mark.note : mark.text;
-        item.addEventListener("click", () => showPdfMark(mark));
+        item.setAttribute("aria-label", mark.type === "note" ? "编辑此处注释" : "PDF 高亮");
+        if (mark.type === "note") item.addEventListener("click", () => openPdfNoteModal(mark, true));
+        else item.tabIndex = -1;
         layer.append(item);
       });
     });
-}
-
-function showPdfMark(mark) {
-  const detail = mark.type === "note" && mark.note
-    ? `注释：${mark.note}\n\n原文：${mark.text}`
-    : `高亮原文：${mark.text}`;
-  toast(detail);
 }
 
 function persistPdfMarks() {
@@ -1703,6 +1836,7 @@ async function createFork() {
     skillId: "",
     label: `Fork ${state.forks.length + 1}`,
     feedEl: null,
+    containerEl: null,
   };
   addForkTab(fork);
   switchFeed(fork.id);
@@ -1716,13 +1850,13 @@ async function createFork() {
     });
     fork.sessionId = payload.data?.fork_session_id || "";
     if (!fork.sessionId) throw new Error("Fork 响应缺少 fork_session_id。");
-    const result = await callPaperReading({
+    thinking.remove();
+    const result = await streamPaperTurn({
       action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
-    });
-    thinking.remove();
-    appendAnalysis(result.payload.data?.agent_response || "分支分析完成。", {}, fork.feedEl);
-    renderSkillOutputs(result.payload.skill_outputs || [], fork.feedEl);
+    }, fork.feedEl, `正在分析 ${fork.label}…`);
+    if (!result) return;
+    renderSkillOutputs(result.skill_outputs || [], fork.feedEl);
     toast("Fork 分支已创建，可在此选项卡继续追问。");
   } catch (error) {
     thinking.remove();
@@ -1732,18 +1866,44 @@ async function createFork() {
 
 async function runForkTurn(fork, question) {
   if (!fork.sessionId) return toast("分支会话尚未就绪，请稍候再试。", true);
-  const thinking = showThinkingCard(`正在追问 ${fork.label}…`, fork.feedEl);
+  const payload = await streamPaperTurn({
+    action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
+    target_section: state.currentSection, content: question,
+  }, fork.feedEl, `正在追问 ${fork.label}…`);
+  if (payload) renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+}
+
+async function streamPaperTurn(body, target, detail) {
+  const streaming = showStreamingAnalysisCard(detail, target);
+  const controller = new AbortController();
+  state.activeResponseController = controller;
+  $("reading-stop-button").hidden = false;
   try {
-    const { payload } = await callPaperReading({
-      action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
-      target_section: state.currentSection, content: question,
+    const response = await fetch("/paper_reading/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
     });
-    thinking.remove();
-    appendAnalysis(payload.data?.agent_response || "分支已完成本次回答。", {}, fork.feedEl);
-    renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+    const payload = await window.streamSseJson(
+      response,
+      (delta) => streaming.append(delta),
+      (delta) => streaming.appendReasoning(delta),
+    );
+    streaming.finish(payload?.data?.agent_response || "", payload?.data?.reasoning || "");
+    return payload;
   } catch (error) {
-    thinking.remove();
-    toast(error.message, true);
+    if (error.name === "AbortError") {
+      streaming.interrupt();
+      toast("回答已中断。");
+    } else {
+      streaming.remove();
+      toast(error.message, true);
+    }
+    return null;
+  } finally {
+    if (state.activeResponseController === controller) state.activeResponseController = null;
+    $("reading-stop-button").hidden = true;
   }
 }
 
@@ -1772,8 +1932,8 @@ async function mergeFork(fork) {
 }
 
 function addForkTab(fork) {
-  const feed = create("div", "analysis-feed copilot-feed fork-feed");
-  feed.dataset.feedId = fork.id;
+  const container = create("div", "copilot-feed fork-feed");
+  container.dataset.feedId = fork.id;
   const toolbar = create("div", "fork-feed-toolbar");
   toolbar.append(create("span", "fork-feed-label", `⑂ ${fork.label}`));
   const mergeButton = create("button", "mini-button is-accent", "合并回主流程");
@@ -1783,9 +1943,11 @@ function addForkTab(fork) {
   closeButton.type = "button";
   closeButton.addEventListener("click", () => closeForkTab(fork.id));
   toolbar.append(mergeButton, closeButton);
-  feed.append(toolbar);
-  $("copilot-feeds").append(feed);
+  const feed = create("div", "analysis-feed fork-feed-content");
+  container.append(toolbar, feed);
+  $("copilot-feeds").append(container);
   fork.feedEl = feed;
+  fork.containerEl = container;
   state.forks.push(fork);
   renderCopilotTabs();
 }
@@ -1799,7 +1961,7 @@ function closeForkTab(forkId) {
 function removeForkTab(forkId) {
   const index = state.forks.findIndex((item) => item.id === forkId);
   if (index === -1) return;
-  state.forks[index].feedEl?.remove();
+  state.forks[index].containerEl?.remove();
   state.forks.splice(index, 1);
   renderCopilotTabs();
 }
@@ -1985,8 +2147,8 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   jump.type = "button";
   jump.disabled = !source.page && !source.section_id;
   jump.addEventListener("click", () => {
-    if (source.section_id) selectSection(source.section_id, false);
-    else if (source.page) jumpToPdfPage(source.page);
+    const section = state.paper?.sections?.find((item) => item.section_id === source.section_id);
+    jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "");
   });
   const ask = create("button", "mini-button is-accent", "让 Agent 解释");
   ask.type = "button";
@@ -2349,6 +2511,17 @@ function bindScrollSpy() {
       updateCurrentSectionFromScroll();
     });
   }, { passive: true });
+
+  const pdfHost = $("pdf-document");
+  let pdfTicking = false;
+  pdfHost?.addEventListener("scroll", () => {
+    if (pdfTicking) return;
+    pdfTicking = true;
+    requestAnimationFrame(() => {
+      pdfTicking = false;
+      updateCurrentSectionFromPdfScroll();
+    });
+  }, { passive: true });
 }
 
 function updateCurrentSectionFromScroll() {
@@ -2369,6 +2542,21 @@ function updateCurrentSectionFromScroll() {
     item.classList.toggle("is-active", (state.paper?.sections?.[index]?.section_id) === current);
   });
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === current));
+  syncComposerContext();
+}
+
+function updateCurrentSectionFromPdfScroll() {
+  if ($("pdf-reader").hidden) return;
+  const page = visiblePdfPage();
+  const section = sectionForPage(page);
+  const current = section?.section_id || "";
+  if (!current || current === state.currentSection) return;
+  state.currentSection = current;
+  persistState();
+  renderOutline();
+  document.querySelectorAll(".paper-section").forEach((item) => {
+    item.classList.toggle("is-current", item.dataset.sectionId === current);
+  });
   syncComposerContext();
 }
 
@@ -2407,6 +2595,8 @@ async function restoreLocalState() {
   }
   if (isDedicatedWorkspace && state.paper) {
     await enterWorkbench();
+  } else if (isDedicatedWorkspace) {
+    window.location.replace("/app?mode=paper_reading");
   }
 }
 
@@ -2421,12 +2611,6 @@ function persistState() {
 
 function saveBeforeUnload() {
   persistState();
-  if (!state.sessionId || state.sessionState === "paused") return;
-  const body = JSON.stringify({
-    action: "pause_reading", session_id: state.sessionId, paper_id: state.paperId,
-    metadata: { viewport_section: state.currentSection, scroll_top: $("structured-reader")?.scrollTop || 0 },
-  });
-  navigator.sendBeacon?.(API_ENDPOINT, new Blob([body], { type: "application/json" }));
 }
 
 function setBusy(active, title = "", detail = "") {

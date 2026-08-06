@@ -8,6 +8,7 @@ from typing import Any
 
 from runtime.agent_runner import get_message_content, get_response_message, get_response_usage
 
+from .execution import current_cancel_event
 from .schemas import ModelCallStats
 
 
@@ -54,15 +55,58 @@ def invoke_json(
 ) -> tuple[dict[str, Any], ModelCallStats]:
     started = perf_counter()
     try:
-        response = model.chat(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=max_tokens,
-            timeout=timeout_seconds,
-            response_format={"type": "json_object"},
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        if callable(getattr(model, "chat_stream", None)) and getattr(
+            model, "supports_streaming", True
+        ):
+            stream = model.chat_stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                timeout=timeout_seconds,
+                response_format={"type": "json_object"},
+            )
+            parts: list[str] = []
+            usage = None
+            try:
+                for chunk in stream:
+                    cancel_event = current_cancel_event()
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError("LLM call cancelled")
+                    usage = getattr(chunk, "usage", None) or (
+                        chunk.get("usage") if isinstance(chunk, dict) else None
+                    ) or usage
+                    choices = getattr(chunk, "choices", None) or (
+                        chunk.get("choices", []) if isinstance(chunk, dict) else []
+                    )
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None) or (
+                        choice.get("delta", {}) if isinstance(choice, dict) else {}
+                    )
+                    content = getattr(delta, "content", None) or (
+                        delta.get("content", "") if isinstance(delta, dict) else ""
+                    )
+                    if content:
+                        parts.append(str(content))
+            finally:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
+            response = {
+                "choices": [{"message": {"role": "assistant", "content": "".join(parts)}}],
+                "usage": usage,
+            }
+        else:
+            response = model.chat(
+                messages=messages,
+                max_tokens=max_tokens,
+                timeout=timeout_seconds,
+                response_format={"type": "json_object"},
+            )
     except Exception as error:
         attempt_count = int(getattr(model, "last_attempt_count", 1))
         stats = ModelCallStats(

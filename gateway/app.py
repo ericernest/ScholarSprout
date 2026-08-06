@@ -33,7 +33,7 @@ from handlers.domain_onboarding.schemas import DomainOnboardingRequest
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
-from gateway.message_flow import process_channel_input
+from gateway.message_flow import process_channel_input, process_channel_stream
 from models.client import OpenAIClient
 from handlers.paper_reading.harness.session import SessionManager
 from handlers.paper_reading.harness.storage import PaperReadingStorage
@@ -139,10 +139,30 @@ async def chat(request: Request) -> ChannelMessage:
     )
 
 
+@app.post("/chat/stream")
+async def chat_stream(request: Request) -> StreamingResponse:
+    return await process_channel_stream(
+        source=request,
+        mode="chat",
+        handler=handle_chat_message,
+        app_state=request.app.state,
+    )
+
+
 # paper_reading 功能入口。
 @app.post("/paper_reading")
 async def paper_reading(request: Request) -> ChannelMessage:
     return await process_channel_input(
+        source=request,
+        mode="paper_reading",
+        handler=handle_paper_reading_message,
+        app_state=request.app.state,
+    )
+
+
+@app.post("/paper_reading/stream")
+async def paper_reading_stream(request: Request) -> StreamingResponse:
+    return await process_channel_stream(
         source=request,
         mode="paper_reading",
         handler=handle_paper_reading_message,
@@ -165,6 +185,7 @@ def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
         media_type="application/pdf",
         filename=f"{paper_id}.pdf",
         content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
     )
 
 

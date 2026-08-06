@@ -35,6 +35,58 @@ class OpenAIClient:
         response_format: dict[str, Any] | None = None,
         model_name: str | None = None,
     ) -> Any:
+        kwargs = self._chat_kwargs(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            model_name=model_name,
+        )
+        client = (
+            self.client.with_options(timeout=timeout, max_retries=0)
+            if timeout is not None
+            else self.client
+        )
+        return client.chat.completions.create(**kwargs)
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        model_name: str | None = None,
+    ) -> Any:
+        """Yield native Chat Completions chunks from OpenAI-compatible providers."""
+        kwargs = self._chat_kwargs(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            model_name=model_name,
+        )
+        kwargs["stream"] = True
+        client = (
+            self.client.with_options(timeout=timeout, max_retries=0)
+            if timeout is not None
+            else self.client
+        )
+        return client.chat.completions.create(**kwargs)
+
+    def _chat_kwargs(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        tool_choice: str | None,
+        max_tokens: int | None,
+        response_format: dict[str, Any] | None,
+        model_name: str | None,
+    ) -> dict[str, Any]:
         selected_model = (model_name or self.config.model_name).strip()
         if not selected_model:
             raise ValueError("model_name is empty. Please run config and choose a model.")
@@ -52,12 +104,7 @@ class OpenAIClient:
         if response_format is not None:
             kwargs["response_format"] = response_format
 
-        client = (
-            self.client.with_options(timeout=timeout, max_retries=0)
-            if timeout is not None
-            else self.client
-        )
-        return client.chat.completions.create(**kwargs)
+        return kwargs
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
         """Create dense vectors through an OpenAI-compatible embedding endpoint."""

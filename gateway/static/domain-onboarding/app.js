@@ -341,7 +341,7 @@ function renderStatus() {
   const terminal = TERMINAL_STATES.has(snapshot.state);
   const status = terminal
     ? STATUS_LABELS[snapshot.state]
-    : STAGE_LABELS[snapshot.current_stage] || STATUS_LABELS[snapshot.state] || "正在连接任务";
+    : STAGE_LABELS[snapshot.current_stage] || STATUS_LABELS[snapshot.state] || "正在分析任务";
   $("status-label").textContent = status;
   $("progress-label").textContent = `${Math.round(progress * 100)}%`;
   $("progress-fill").style.transform = `scaleX(${progress})`;

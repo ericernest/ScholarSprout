@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from threading import Event
 from time import perf_counter
 from typing import Any, Callable
+
+
+_CURRENT_CANCEL_EVENT: ContextVar[Event | None] = ContextVar(
+    "domain_onboarding_cancel_event", default=None
+)
+
+
+def current_cancel_event() -> Event | None:
+    return _CURRENT_CANCEL_EVENT.get()
 
 
 class PipelineExecutionHalted(RuntimeError):
@@ -79,12 +89,15 @@ class PipelineExecutionContext:
         self.checkpoint(stage)
         allowed_seconds = min(stage_timeout_seconds, self.remaining_seconds)
         started = self.clock()
+        token = _CURRENT_CANCEL_EVENT.set(self.cancel_event)
         try:
             result = function(*args, **kwargs)
         except Exception as error:
             duration_ms = self._record_duration(stage, started)
             self._check_after_call(stage, started, allowed_seconds, duration_ms, cause=error)
             raise
+        finally:
+            _CURRENT_CANCEL_EVENT.reset(token)
         duration_ms = self._record_duration(stage, started)
         self._check_after_call(stage, started, allowed_seconds, duration_ms)
         return result, duration_ms

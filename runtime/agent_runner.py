@@ -6,7 +6,8 @@ import json
 import logging
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from threading import Event
+from typing import Any, Callable
 
 from skills.selector import validate_capability_selection
 
@@ -33,6 +34,12 @@ class AgentRunResult:
     duration_ms: float
     usage: TokenUsage
     model_calls: int
+    cancelled: bool = False
+    reasoning: str = ""
+
+
+class AgentRunCancelled(RuntimeError):
+    """Raised internally when the browser asks an in-flight model stream to stop."""
 
 
 # 从对象或字典中读取字段。
@@ -79,6 +86,94 @@ def get_response_usage(response: Any) -> TokenUsage:
         total_tokens=total_tokens,
         reported=raw_usage is not None,
     )
+
+
+def stream_model_response(
+    model: Any,
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict] | None,
+    tool_choice: str | None,
+    on_text_delta: Callable[[str], None],
+    on_reasoning_delta: Callable[[str], None] | None,
+    cancel_event: Event | None,
+) -> dict[str, Any]:
+    """Aggregate one native model stream while forwarding visible text deltas."""
+    if not hasattr(model, "chat_stream"):
+        response = model.chat(messages=messages, tools=tools, tool_choice=tool_choice)
+        text = get_message_content(get_response_message(response))
+        if text:
+            on_text_delta(text)
+        return response
+
+    stream = model.chat_stream(messages=messages, tools=tools, tool_choice=tool_choice)
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tool_buffers: dict[int, dict[str, Any]] = {}
+    usage: Any = None
+    try:
+        for chunk in stream:
+            if cancel_event is not None and cancel_event.is_set():
+                raise AgentRunCancelled("generation cancelled")
+            usage = get_value(chunk, "usage", None) or usage
+            choices = get_value(chunk, "choices", []) or []
+            if not choices:
+                continue
+            delta = get_value(choices[0], "delta", {}) or {}
+            reasoning = str(
+                get_value(
+                    delta,
+                    "reasoning_content",
+                    get_value(delta, "reasoning", get_value(delta, "thinking", "")),
+                )
+                or ""
+            )
+            if reasoning:
+                reasoning_parts.append(reasoning)
+                if on_reasoning_delta is not None:
+                    on_reasoning_delta(reasoning)
+            text = str(get_value(delta, "content", "") or "")
+            if text:
+                content_parts.append(text)
+                on_text_delta(text)
+            for tool_call in list(get_value(delta, "tool_calls", []) or []):
+                index = int(get_value(tool_call, "index", 0) or 0)
+                buffered = tool_buffers.setdefault(
+                    index,
+                    {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                buffered["id"] += str(get_value(tool_call, "id", "") or "")
+                buffered["type"] = str(get_value(tool_call, "type", buffered["type"]) or buffered["type"])
+                function = get_value(tool_call, "function", {}) or {}
+                buffered["function"]["name"] += str(get_value(function, "name", "") or "")
+                buffered["function"]["arguments"] += str(get_value(function, "arguments", "") or "")
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+    if tool_buffers:
+        message["tool_calls"] = [tool_buffers[index] for index in sorted(tool_buffers)]
+    return {
+        "choices": [{"message": message}],
+        "usage": usage,
+        "_reasoning": "".join(reasoning_parts),
+    }
+
+
+def split_inline_thinking(text: str) -> tuple[str, str]:
+    """Separate providers that encode reasoning inside <think> tags."""
+    stripped = text.lstrip()
+    if not stripped.startswith("<think>"):
+        return "", text
+    offset = len(text) - len(stripped)
+    end = text.find("</think>", offset + len("<think>"))
+    if end < 0:
+        return text[offset + len("<think>"):].strip(), ""
+    reasoning = text[offset + len("<think>"):end].strip()
+    answer = text[end + len("</think>"):].lstrip()
+    return reasoning, answer
 
 
 # 从 assistant message 中读取 tool calls。
@@ -200,6 +295,7 @@ def resolve_runtime_capabilities(
     user_content: str,
     skill_registry: Any | None,
     capability_selector: Any | None,
+    cancel_event: Event | None = None,
 ) -> str:
     profile = agent.profile
     default_skill_id = str(getattr(profile, "default_skill", "") or "").strip()
@@ -245,12 +341,15 @@ def resolve_runtime_capabilities(
             return build_system_prompt(profile.system_prompt, default_skill=default_skill)
 
         candidate_skill_ids = [summary.id for summary in skill_summaries]
-        selection = capability_selector.select(
-            model=agent.llm,
-            role=profile.role,
-            user_task=user_content,
-            skill_summaries=skill_summaries,
-        )
+        selection_kwargs = {
+            "model": agent.llm,
+            "role": profile.role,
+            "user_task": user_content,
+            "skill_summaries": skill_summaries,
+        }
+        if cancel_event is not None:
+            selection_kwargs["cancel_event"] = cancel_event
+        selection = capability_selector.select(**selection_kwargs)
         validate_capability_selection(
             selection,
             allowed_skill_ids=candidate_skill_ids,
@@ -282,17 +381,23 @@ def run_agent_detailed(
     skill_registry: Any | None = None,
     capability_selector: Any | None = None,
     max_steps: int = 3,
+    on_text_delta: Callable[[str], None] | None = None,
+    on_reasoning_delta: Callable[[str], None] | None = None,
+    cancel_event: Event | None = None,
 ) -> AgentRunResult:
     started_at = perf_counter()
     usage = TokenUsage()
     model_calls = 0
+    reasoning_parts: list[str] = []
 
-    def build_result(text: str) -> AgentRunResult:
+    def build_result(text: str, *, cancelled: bool = False) -> AgentRunResult:
         return AgentRunResult(
             text=text,
             duration_ms=round((perf_counter() - started_at) * 1000, 3),
             usage=usage,
             model_calls=model_calls,
+            cancelled=cancelled,
+            reasoning="\n\n".join(part for part in reasoning_parts if part),
         )
 
     model = agent.llm
@@ -301,6 +406,7 @@ def run_agent_detailed(
         user_content=user_content,
         skill_registry=skill_registry,
         capability_selector=capability_selector,
+        cancel_event=cancel_event,
     )
     active_tool_names = list(agent.profile.tools)
     tool_schemas = tool_registry.to_openai_tools(active_tool_names)
@@ -316,22 +422,41 @@ def run_agent_detailed(
         },
     ]
 
-    for _ in range(max_steps):
+    for step in range(max_steps):
         model_calls += 1
         try:
-            if tool_schemas:
-                response = model.chat(
+            # Reserve the final model turn for synthesis. Without this guard an
+            # agent can spend its last turn requesting another tool and return
+            # only the generic "too many calls" message instead of an answer.
+            if on_text_delta is not None:
+                response = stream_model_response(
+                    model,
                     messages=messages,
-                    tools=tool_schemas,
-                    tool_choice="auto",
+                    tools=tool_schemas if step < max_steps - 1 else None,
+                    tool_choice="auto" if tool_schemas and step < max_steps - 1 else None,
+                    on_text_delta=on_text_delta,
+                    on_reasoning_delta=on_reasoning_delta,
+                    cancel_event=cancel_event,
                 )
+            elif tool_schemas and step < max_steps - 1:
+                response = model.chat(messages=messages, tools=tool_schemas, tool_choice="auto")
             else:
                 response = model.chat(messages=messages)
+        except AgentRunCancelled:
+            return build_result("", cancelled=True)
         except Exception as error:
             return build_result(f"LLM 调用失败：{error}")
 
         usage.add(get_response_usage(response))
         assistant_message = get_response_message(response)
+        explicit_reasoning = str(get_value(response, "_reasoning", "") or "").strip()
+        inline_reasoning, clean_content = split_inline_thinking(get_message_content(assistant_message))
+        if explicit_reasoning:
+            reasoning_parts.append(explicit_reasoning)
+        if inline_reasoning:
+            reasoning_parts.append(inline_reasoning)
+            if isinstance(assistant_message, dict):
+                assistant_message = {**assistant_message, "content": clean_content}
         tool_calls = get_tool_calls(assistant_message)
 
         if not tool_calls:
@@ -347,7 +472,7 @@ def run_agent_detailed(
                 )
             )
 
-    return build_result("工具调用次数过多，已停止。")
+    return build_result("Agent 已达到最大执行轮次，仍未生成最终回答。")
 
 
 # 保持原有调用接口，只返回 assistant 文本。
@@ -358,6 +483,9 @@ def run_agent(
     skill_registry: Any | None = None,
     capability_selector: Any | None = None,
     max_steps: int = 3,
+    on_text_delta: Callable[[str], None] | None = None,
+    on_reasoning_delta: Callable[[str], None] | None = None,
+    cancel_event: Event | None = None,
 ) -> str:
     return run_agent_detailed(
         agent=agent,
@@ -366,4 +494,7 @@ def run_agent(
         skill_registry=skill_registry,
         capability_selector=capability_selector,
         max_steps=max_steps,
+        on_text_delta=on_text_delta,
+        on_reasoning_delta=on_reasoning_delta,
+        cancel_event=cancel_event,
     ).text
