@@ -19,7 +19,7 @@ from .graph_path_planner import GraphBasedPathPlanner
 from .graph_validator import DomainKnowledgeGraphValidator
 from .knowledge_graph import DomainKnowledgeGraphBuilder
 from .metrics import DomainOnboardingRequestTrace
-from .model_routing import RoutedChatModel, routed_model_from_env, routing_snapshot
+from .model_routing import routed_model_from_env, routing_snapshot
 from .planner import StormLitePlanner
 from .profile import RuleBasedProfileBuilder
 from .quality import CompositeQualityEvaluator
@@ -774,33 +774,6 @@ def create_default_pipeline(
         configured_repair,
         route_name="repair",
     )
-    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-    if deepseek_key:
-        from config.schema import OpenAIClientConfig
-        from models.client import OpenAIClient
-
-        deepseek_client = OpenAIClient(
-            OpenAIClientConfig(
-                api_key=deepseek_key,
-                base_url="https://api.deepseek.com/v1",
-                model_name="deepseek-chat",
-            )
-        )
-        deepseek_names = [
-            n.strip()
-            for n in os.getenv("DEEPSEEK_GENERATION_MODELS", "").split(",")
-            if n.strip()
-        ]
-        if deepseek_names:
-            for route in (
-                generation_model,
-                repair_model,
-                *section_models.values(),
-            ):
-                if isinstance(route, RoutedChatModel):
-                    route.model_names.extend(deepseek_names)
-                    for name in deepseek_names:
-                        route.fallback_delegates[name] = deepseek_client
     generator = StructuredOnboardingGenerator(
         generation_model,
         settings,
