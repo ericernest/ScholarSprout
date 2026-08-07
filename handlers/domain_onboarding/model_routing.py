@@ -8,11 +8,7 @@ from typing import Any
 
 
 class RoutedChatModel:
-    """Try configured model IDs inside one caller-owned timeout budget.
-
-    Optional ``fallback_delegates`` maps model names to alternate API
-    clients, enabling cross-endpoint fallback.
-    """
+    """Try configured model IDs inside one caller-owned timeout budget."""
 
     def __init__(
         self,
@@ -21,7 +17,6 @@ class RoutedChatModel:
         *,
         route_name: str,
         timeout_reserve_seconds: float = 2.0,
-        fallback_delegates: dict[str, Any] | None = None,
     ) -> None:
         normalized = list(
             dict.fromkeys(name.strip() for name in model_names if name.strip())
@@ -32,7 +27,6 @@ class RoutedChatModel:
         self.model_names = normalized
         self.route_name = route_name
         self.timeout_reserve_seconds = timeout_reserve_seconds
-        self.fallback_delegates = fallback_delegates or {}
         self._lock = Lock()
         self._last_call: dict[str, Any] = {
             "route": route_name,
@@ -48,14 +42,7 @@ class RoutedChatModel:
 
     @property
     def supports_streaming(self) -> bool:
-        for model_name in self.model_names:
-            d = self._delegate_for(model_name)
-            if callable(getattr(d, "chat_stream", None)):
-                return True
-        return False
-
-    def _delegate_for(self, model_name: str) -> Any:
-        return self.fallback_delegates.get(model_name, self.delegate)
+        return callable(getattr(self.delegate, "chat_stream", None))
 
     def chat(self, **kwargs: Any) -> Any:
         requested_timeout = kwargs.pop("timeout", None)
@@ -65,7 +52,7 @@ class RoutedChatModel:
         for model_name in self.model_names:
             started = perf_counter()
             try:
-                response = self._delegate_for(model_name).chat(
+                response = self.delegate.chat(
                     **kwargs,
                     timeout=attempt_timeout,
                     model_name=model_name,
@@ -102,7 +89,7 @@ class RoutedChatModel:
         last_error: Exception | None = None
         for model_name in self.model_names:
             try:
-                return self._delegate_for(model_name).chat_stream(
+                return self.delegate.chat_stream(
                     **kwargs,
                     timeout=attempt_timeout,
                     model_name=model_name,
@@ -144,27 +131,22 @@ class RoutedChatModel:
 class ModelOverrideChatModel:
     """Bind one model ID without owning or closing the shared client."""
 
-    def __init__(self, delegate: Any, model_name: str, *, fallback_delegate: Any = None) -> None:
+    def __init__(self, delegate: Any, model_name: str) -> None:
         self.delegate = delegate
         self.model_name = model_name
-        self._fallback_delegate = fallback_delegate
 
     @property
     def supports_streaming(self) -> bool:
-        d = self._fallback_delegate or self.delegate
-        return callable(getattr(d, "chat_stream", None))
-
-    def _resolve(self) -> Any:
-        return self._fallback_delegate or self.delegate
+        return callable(getattr(self.delegate, "chat_stream", None))
 
     def chat(self, **kwargs: Any) -> Any:
-        return self._resolve().chat(**kwargs, model_name=self.model_name)
+        return self.delegate.chat(**kwargs, model_name=self.model_name)
 
     def chat_stream(self, **kwargs: Any) -> Any:
-        return self._resolve().chat_stream(**kwargs, model_name=self.model_name)
+        return self.delegate.chat_stream(**kwargs, model_name=self.model_name)
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
-        return self._resolve().embed(texts, model=model)
+        return self.delegate.embed(texts, model=model)
 
 
 def run_with_model_route(
@@ -185,8 +167,7 @@ def run_with_model_route(
     attempts: list[dict[str, Any]] = []
     last_error: Exception | None = None
     for model_name in model.model_names:
-        fallback = model.fallback_delegates.get(model_name)
-        candidate = ModelOverrideChatModel(model.delegate, model_name, fallback_delegate=fallback)
+        candidate = ModelOverrideChatModel(model.delegate, model_name)
         started = perf_counter()
         try:
             result = operation(candidate, attempt_timeout)

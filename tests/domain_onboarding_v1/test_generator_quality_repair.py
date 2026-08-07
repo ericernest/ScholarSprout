@@ -90,6 +90,30 @@ class GeneratorTests(unittest.TestCase):
                 lambda *_: None,
             )
 
+    def test_incremental_generation_expands_token_budget_on_retry(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        model = FakeJSONModel(["not json", payload, payload, payload])
+
+        StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            lambda *_: None,
+        )
+
+        self.assertEqual(
+            [call["max_tokens"] for call in model.calls[:2]],
+            [
+                config.generation_development_max_tokens,
+                config.generation_development_max_tokens * 2,
+            ],
+        )
+
     def test_incremental_generation_restores_planner_owned_domain(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(

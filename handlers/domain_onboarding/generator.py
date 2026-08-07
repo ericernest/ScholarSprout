@@ -451,29 +451,38 @@ class StructuredOnboardingGenerator:
                 raise
             return completed, stats
 
-        try:
-            completed, stats = run_with_model_route(
-                section_model,
-                generate_candidate,
-                timeout_seconds=self.config.generation_section_timeout_seconds,
+        last_error: Exception | None = None
+        for attempt_index in range(2):
+            attempt_max_tokens = max(
+                section_max_tokens,
+                min(section_max_tokens * (attempt_index + 1), self.config.generation_max_tokens),
             )
-            stats.model_calls = max(
-                stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            return completed, stats
-        except StructuredLLMError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise GenerationError(str(error), stats=error.stats) from error
-        except GenerationError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise
+            try:
+                completed, stats = run_with_model_route(
+                    section_model,
+                    generate_candidate,
+                    timeout_seconds=self.config.generation_section_timeout_seconds,
+                )
+                stats.model_calls = max(
+                    stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                return completed, stats
+            except StructuredLLMError as error:
+                error.stats.model_calls = max(
+                    error.stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                last_error = error
+            except GenerationError as error:
+                error.stats.model_calls = max(
+                    error.stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                last_error = error
+        if isinstance(last_error, StructuredLLMError):
+            raise GenerationError(str(last_error), stats=last_error.stats) from last_error
+        raise last_error  # type: ignore[misc]
 
     def _complete_section_payload(
         self,
