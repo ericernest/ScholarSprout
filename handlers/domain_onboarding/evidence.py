@@ -116,7 +116,7 @@ class ClaimEvidenceValidator:
             backend = str(
                 getattr(active_vectorizer, "name", type(active_vectorizer).__name__)
             ).lower()
-            semantic_cross_language = cross_language and backend == "embedding"
+            semantic_cross_language = cross_language and backend.startswith("embedding")
             bridged_cross_language = (
                 cross_language
                 and backend == "multilingual_tfidf"

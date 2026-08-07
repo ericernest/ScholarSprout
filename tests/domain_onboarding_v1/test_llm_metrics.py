@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import unittest
 
-from handlers.domain_onboarding.llm import StructuredLLMError, invoke_json
+from handlers.domain_onboarding.llm import StructuredLLMError, invoke_json, parse_json_object
 
 from .fakes import FakeJSONModel
 
 
 class FailedLLMCallMetricsTests(unittest.TestCase):
+    def test_parser_accepts_prefixed_complete_object(self) -> None:
+        self.assertEqual(
+            parse_json_object('result: {"domain":"检索增强生成"}\nfinished'),
+            {"domain": "检索增强生成"},
+        )
+
+    def test_parser_rejects_inner_object_from_truncated_outer_object(self) -> None:
+        raw_text = (
+            '{"domain":"检索增强生成","prerequisites":['
+            '{"name":"信息检索","why_needed":"理解召回"}'
+        )
+
+        self.assertIsNone(parse_json_object(raw_text))
+
     def test_streaming_json_forwards_batched_deltas(self) -> None:
         class StreamingModel:
             supports_streaming = True

@@ -78,18 +78,34 @@ class TextSimilarityTests(unittest.TestCase):
         self.assertEqual(cosine_similarity(vectors[0], vectors[1]), 1.0)
         self.assertEqual(cosine_similarity(vectors[0], vectors[2]), 0.0)
 
-    def test_default_pipeline_enables_embedding_only_with_explicit_model(self) -> None:
+    def test_default_pipeline_uses_qwen3_embedding_by_default(self) -> None:
         class Model:
             def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
                 return [[1.0] for _ in texts]
 
-        with patch.dict(
-            "os.environ",
-            {"DOMAIN_ONBOARDING_EMBEDDING_MODEL": "multilingual-embedding"},
-        ):
+        with patch.dict("os.environ", {}, clear=True):
             pipeline = create_default_pipeline(Model())
         try:
-            self.assertEqual(pipeline.ranker.vectorizer.name, "embedding")
+            self.assertEqual(
+                pipeline.ranker.vectorizer.name,
+                "embedding:qwen3-embedding",
+            )
+            self.assertIs(
+                pipeline.coverage_analyzer.vectorizer,
+                pipeline.ranker.vectorizer,
+            )
+        finally:
+            pipeline.close()
+
+    def test_default_pipeline_can_disable_embeddings(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"DOMAIN_ONBOARDING_EMBEDDING_ENABLED": "false"},
+            clear=True,
+        ):
+            pipeline = create_default_pipeline(object())
+        try:
+            self.assertEqual(pipeline.ranker.vectorizer.name, "tfidf")
         finally:
             pipeline.close()
 
@@ -286,6 +302,9 @@ class MMRRankingTests(unittest.TestCase):
                 return [
                     {"topic": 1.0},
                     {"topic": 1.0},
+                    {"topic": 1.0},
+                    {"evaluation": 1.0},
+                    {"topic": 1.0},
                     {"topic": 0.99, "duplicate": 0.14},
                     {"topic": 0.8, "evaluation": 0.6},
                 ]
@@ -324,6 +343,12 @@ class MMRRankingTests(unittest.TestCase):
             ["primary", "evaluation"],
         )
         self.assertEqual(set(result.stats.mmr_scores), {"primary", "evaluation"})
+        self.assertEqual(result.stats.ranking_strategy, "per_path_rrf_then_global_mmr")
+        self.assertEqual(
+            set(result.stats.per_path_candidate_counts),
+            {"path-1", "path-2", "path-3"},
+        )
+        self.assertTrue(result.papers[0].path_relevance_scores)
 
     def test_diversity_scores_do_not_depend_on_input_order(self) -> None:
         papers = [

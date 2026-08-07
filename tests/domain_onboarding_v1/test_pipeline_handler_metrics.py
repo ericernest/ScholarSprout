@@ -17,6 +17,7 @@ from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
 from handlers.domain_onboarding.retrieval import PaperRetrievalError
 from handlers.domain_onboarding.schemas import (
+    DevelopmentStageResearchPlan,
     DomainOnboardingRequest,
     GenerationResult,
     ModelCallStats,
@@ -60,7 +61,9 @@ def make_pipeline(
     config: DomainOnboardingConfig | None = None,
     repair_advisor: object | None = None,
 ) -> DomainOnboardingPipeline:
-    config = config or DomainOnboardingConfig()
+    config = (config or DomainOnboardingConfig()).model_copy(
+        update={"staged_development_enabled": False}
+    )
     generator = StructuredOnboardingGenerator(FakeJSONModel(responses), config)
     return DomainOnboardingPipeline(
         profile_builder=RuleBasedProfileBuilder(),
@@ -76,6 +79,51 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_stage_research_retrieves_and_binds_each_stage_independently(self) -> None:
+        pipeline = make_pipeline([make_generation_payload(["paper-0"])])
+        pipeline.config.staged_development_enabled = True
+        plan = make_plan()
+        plan.development_stage_plans = [
+            DevelopmentStageResearchPlan(
+                stage_id=f"era-{index}",
+                sequence=index,
+                name=f"阶段 {index}",
+                period=f"20{index}0-20{index}3",
+                focus=f"阶段 {index} 研究重点",
+                transition_from_previous="" if index == 1 else "继承并解决上一阶段局限",
+                search_queries=[f"retrieval augmented generation stage {index}"],
+            )
+            for index in range(1, 4)
+        ]
+        candidates = make_candidates()
+        ranked = WeightedPaperRanker(pipeline.config).rank(
+            candidates, plan, limit=6
+        ).papers
+        trace = DomainOnboardingRequestTrace()
+        events: list[str] = []
+
+        merged = pipeline._research_development_stages(
+            plan,
+            candidates,
+            ranked,
+            trace,
+            PipelineExecutionContext(timeout_seconds=60),
+            lambda event, *_: events.append(event),
+        )
+
+        self.assertEqual(pipeline.retriever.calls, 3)
+        self.assertEqual(events, ["stage_retrieval_ready"] * 3)
+        self.assertTrue(all(stage.selected_paper_ids for stage in plan.development_stage_plans))
+        self.assertTrue(
+            all(
+                set(stage.selected_paper_ids) <= {paper.paper_id for paper in merged}
+                for stage in plan.development_stage_plans
+            )
+        )
+        self.assertEqual(trace.development_stage_count, 3)
+        self.assertEqual(trace.stage_retrieval_query_count, 3)
+        self.assertGreater(trace.stage_bound_paper_count, 0)
+
     def test_cancelled_request_stops_before_first_stage(self) -> None:
         pipeline = make_pipeline([make_generation_payload(["unused-paper"])])
         context = PipelineExecutionContext(timeout_seconds=30)
@@ -230,6 +278,9 @@ class PipelineTests(unittest.TestCase):
         trace = DomainOnboardingRequestTrace()
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
         self.assertEqual(result.status, "ok")
+        self.assertIsNotNone(result.final_quality)
+        self.assertEqual(result.final_quality.final_score, result.quality.score)
+        self.assertEqual(result.to_response()["final_quality"]["verdict"], "passed")
         self.assertIsNotNone(result.output)
         self.assertEqual(len(result.quality_attempts), 1)
         self.assertEqual(result.quality_attempts[0].source, "initial")
@@ -559,7 +610,8 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         response = handle_domain_onboarding_message(message, app_state)
         self.assertEqual(response["status"], "ok")
-        self.assertEqual(response["learner_profile"]["preference"], "experiment_first")
+        self.assertEqual(response["learner_profile"]["preference"], "balanced")
+        self.assertIsNone(response["learner_profile"]["time_budget_weeks"])
         self.assertEqual(len(response["quality_attempts"]), 1)
         self.assertEqual(response["quality_attempts"][0]["source"], "initial")
         self.assertFalse(response["repair_record"]["triggered"])
@@ -583,9 +635,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         )
         self.assertEqual(
             snapshot["policies"]["versions"],
-            {"domain-quality-v1.5.0": 1},
+            {"domain-quality-v1.8.0": 1},
         )
-        self.assertEqual(response["policy_version"], "domain-quality-v1.5.0")
+        self.assertEqual(response["policy_version"], "domain-quality-v1.8.0")
         self.assertEqual(
             response["quality"]["policy_fingerprint"],
             response["policy_fingerprint"],

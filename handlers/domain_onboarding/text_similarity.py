@@ -173,8 +173,6 @@ class TfidfTextVectorizer:
 class CachedEmbeddingTextVectorizer:
     """对任意 embedding provider 提供批处理和有界进程内缓存。"""
 
-    name = "embedding"
-
     def __init__(
         self,
         provider: EmbeddingProvider,
@@ -191,6 +189,13 @@ class CachedEmbeddingTextVectorizer:
         self.cache_max_entries = cache_max_entries
         self._cache: OrderedDict[str, SparseVector] = OrderedDict()
         self._lock = Lock()
+
+    @property
+    def name(self) -> str:
+        model_name = getattr(self.provider, "embedding_model", None) or getattr(
+            self.provider, "model_name", None
+        )
+        return f"embedding:{model_name}" if model_name else "embedding"
 
     def vectorize(self, texts: list[str]) -> list[SparseVector]:
         vectors: list[SparseVector | None] = [None] * len(texts)

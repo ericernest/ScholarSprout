@@ -10,7 +10,7 @@ const modeEndpoints = {
   paper_reading: "/paper_reading",
 };
 
-const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_5";
+const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
 
 let currentMode = "chat";
 let isGenerating = false;
@@ -247,7 +247,7 @@ async function submitDomainOnboardingJob(content) {
     throw new Error(detail || `创建领域入门任务失败（HTTP ${response.status}）`);
   }
   saveDomainWorkspace({
-    schema_version: "1.5",
+    schema_version: "1.9",
     saved_at: new Date().toISOString(),
     task_id: payload.task_id,
     access_token: payload.access_token,

@@ -81,9 +81,9 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
         "domain": "检索增强生成",
         "text": "检索增强生成通过外部知识检索增强语言模型生成，入门需要理解检索、生成、评测与工程实践之间的联系。",
         "prerequisites": [
-            {"name": "信息检索", "why_needed": "理解召回与排序", "key_points": ["BM25", "向量检索"]},
-            {"name": "自然语言处理", "why_needed": "理解生成模型", "key_points": ["Transformer"]},
-            {"name": "机器学习评测", "why_needed": "评价端到端效果", "key_points": ["离线指标"]},
+            {"name": "信息检索", "why_needed": "理解召回与排序", "key_points": [{"name": "向量检索", "explanation": "把查询与文档编码到同一空间进行近邻搜索。", "why_it_matters": "它决定证据召回质量。", "related_paper_ids": [paper_ids[0]]}]},
+            {"name": "自然语言处理", "why_needed": "理解生成模型", "key_points": [{"name": "Transformer", "explanation": "使用注意力机制建模序列上下文。", "why_it_matters": "它是生成器的基础架构。", "related_paper_ids": [paper_ids[1 % len(paper_ids)]]}]},
+            {"name": "机器学习评测", "why_needed": "评价端到端效果", "key_points": [{"name": "离线指标", "explanation": "用固定数据集量化系统表现。", "why_it_matters": "它使方法比较可重复。", "related_paper_ids": [paper_ids[2 % len(paper_ids)]]}]},
         ],
         "development_stages": [
             {
@@ -99,8 +99,8 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                     else f"阶段 {index - 1} 的局限推动了阶段 {index}。"
                 ),
                 "related_paper_ids": [paper_ids[(index - 1) % len(paper_ids)]],
-                "core_concepts": ["检索增强"],
-                "main_techniques": ["检索与生成"],
+                "core_concepts": [{"name": "检索增强", "explanation": "生成前从外部知识库召回相关证据。", "why_it_matters": "它缓解参数知识过时与不可追踪问题。", "related_paper_ids": [paper_ids[(index - 1) % len(paper_ids)]]}],
+                "main_techniques": [{"name": "检索与生成", "explanation": "将检索结果作为生成模型的条件上下文。", "mechanism": "检索器返回文档，生成器基于文档产生答案。", "why_it_matters": "它构成 RAG 的端到端主链路。", "related_paper_ids": [paper_ids[(index - 1) % len(paper_ids)]]}],
                 "open_problems": ["事实一致性"],
                 "breakthroughs": [
                     {
@@ -141,6 +141,13 @@ def make_generation_payload(paper_ids: list[str]) -> dict[str, Any]:
                     "name": name,
                     "description": f"{name}是当前可证据化的技术方向。",
                     "why_it_matters": "直接影响召回、生成或评测质量。",
+                    "typical_tasks": [f"分析并改进{name}模块"],
+                    "prerequisites": ["信息检索", "语言模型基础"],
+                    "common_techniques": [{"name": f"{name}方法", "explanation": f"围绕{name}构建可验证的改进。", "mechanism": "定位瓶颈、修改模块并进行对照实验。", "why_it_matters": "它把研究问题转化为可执行方法。", "related_paper_ids": [paper_ids[index % len(paper_ids)]]}],
+                    "datasets_and_benchmarks": ["公开问答数据集"],
+                    "evaluation_metrics": ["准确率", "召回率"],
+                    "starter_project": f"复现一个{name}基线并完成单变量消融。",
+                    "research_workflow": ["复现基线", "定位失败案例", "设计改进", "完成对照实验"],
                     "research_questions": [f"如何稳定改善{name}？"],
                     "related_paper_ids": [paper_ids[index % len(paper_ids)]],
                     "related_stage_ids": [f"stage-{index % 3 + 1}"],

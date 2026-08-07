@@ -10,6 +10,7 @@ from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
 from handlers.domain_onboarding.repair_planning import RepairPlanner
 from handlers.domain_onboarding.schemas import (
+    DevelopmentStageResearchPlan,
     DomainOnboardingRequest,
     EvidenceClaim,
     QualityIssue,
@@ -25,6 +26,189 @@ from .fakes import (
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_staged_development_generates_each_researched_stage_separately(self) -> None:
+        ranked = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        paper_ids = [paper.paper_id for paper in ranked]
+        base = make_generation_payload(paper_ids)
+
+        class PieceModel:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                system = kwargs["messages"][0]["content"]
+                user = json.loads(kwargs["messages"][1]["content"])
+                if "foundation block" in system:
+                    payload = {
+                        "domain": base["domain"],
+                        "text": base["text"],
+                        "prerequisites": base["prerequisites"],
+                        "paper_guidance": [],
+                        "evidence_claims": [],
+                    }
+                else:
+                    plan_payload = user["stage_research_plan"]
+                    sequence = int(plan_payload["sequence"])
+                    stage = json.loads(
+                        json.dumps(base["development_stages"][sequence - 1])
+                    )
+                    selected_ids = plan_payload["selected_paper_ids"]
+                    stage["related_paper_ids"] = selected_ids
+                    for detail in [
+                        *stage["core_concepts"],
+                        *stage["main_techniques"],
+                    ]:
+                        detail["related_paper_ids"] = selected_ids
+                    stage["breakthroughs"][0]["supporting_paper_ids"] = selected_ids
+                    if sequence == 1:
+                        breakthrough = stage.pop("breakthroughs")[0]
+                        breakthrough["paper_ids"] = breakthrough.pop(
+                            "supporting_paper_ids"
+                        )
+                        stage["breakthrough"] = breakthrough
+                    payload = {
+                        "development_stage": stage,
+                        "paper_guidance": [
+                            item
+                            for item in base["paper_guidance"]
+                            if item["paper_id"] in selected_ids
+                        ],
+                        "evidence_claims": [],
+                    }
+                return {
+                    "choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+                }
+
+        plan = make_plan()
+        plan.development_stage_plans = [
+            DevelopmentStageResearchPlan(
+                stage_id=f"researched-{index}",
+                sequence=index,
+                name=f"研究阶段 {index}",
+                period=f"20{index}0-20{index}3",
+                focus=f"阶段 {index} 重点",
+                transition_from_previous="" if index == 1 else "上一阶段局限推动方法演进",
+                search_queries=[f"RAG stage {index}"],
+                selected_paper_ids=[paper_ids[index - 1]],
+            )
+            for index in range(1, 4)
+        ]
+        model = PieceModel()
+        generator = StructuredOnboardingGenerator(model, DomainOnboardingConfig())
+
+        payload, stats = generator._call_staged_development(
+            DomainOnboardingRequest(query="检索增强生成"),
+            plan,
+            ranked,
+            None,
+        )
+
+        self.assertEqual(len(model.calls), 4)
+        self.assertEqual(
+            [stage["stage_id"] for stage in payload["development_stages"]],
+            ["researched-1", "researched-2", "researched-3"],
+        )
+        self.assertEqual(stats.model_calls, 4)
+        self.assertEqual(len(payload["development_stages"][0]["breakthroughs"]), 1)
+
+    def test_development_stage_planner_creates_chronological_search_contract(self) -> None:
+        model = FakeJSONModel(
+            [
+                {
+                    "development_stage_plans": [
+                        {
+                            "stage_id": f"era-{index}",
+                            "sequence": index,
+                            "name": f"阶段 {index}",
+                            "period": f"20{index}0-20{index}3",
+                            "focus": f"阶段 {index} 的问题与方法",
+                            "transition_from_previous": "" if index == 1 else "新方法解决了上一阶段的局限",
+                            **(
+                                {"search_query": f"retrieval augmented generation era {index} method"}
+                                if index == 1
+                                else {"search_queries": [f"retrieval augmented generation era {index} method"]}
+                            ),
+                        }
+                        for index in range(1, 4)
+                    ]
+                }
+            ]
+        )
+        generator = StructuredOnboardingGenerator(model, DomainOnboardingConfig())
+        ranked = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+
+        stages, stats = generator.plan_development_research(
+            DomainOnboardingRequest(query="检索增强生成"),
+            make_plan(),
+            ranked,
+        )
+
+        self.assertEqual([stage.sequence for stage in stages], [1, 2, 3])
+        self.assertTrue(all(stage.search_queries for stage in stages))
+        self.assertTrue(all(not stage.selected_paper_ids for stage in stages))
+        self.assertEqual(stats.model_calls, 1)
+        self.assertIn("Do not include paper IDs", model.calls[0]["messages"][0]["content"])
+
+    def test_concepts_and_techniques_preserve_explanations_and_paper_links(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        paper_id = ranked[0].paper_id
+        payload["prerequisites"][0]["key_points"] = [
+            {
+                "name": "向量检索",
+                "explanation": "把查询和文档映射到同一向量空间并寻找近邻。",
+                "why_it_matters": "它决定外部证据能否被正确召回。",
+                "related_paper_ids": [paper_id, "invalid"],
+            }
+        ]
+        payload["development_stages"][0]["core_concepts"] = [
+            {
+                "name": "非参数记忆",
+                "explanation": "模型在参数之外读取可更新的知识库。",
+                "related_paper_ids": [paper_id],
+            }
+        ]
+        payload["development_stages"][0]["main_techniques"] = [
+            {
+                "name": "检索增强生成",
+                "explanation": "先检索证据，再让生成器基于证据作答。",
+                "mechanism": "检索器与序列生成器协同工作。",
+                "related_paper_ids": [paper_id],
+            }
+        ]
+
+        model = FakeJSONModel([payload])
+        output = StructuredOnboardingGenerator(model, config).generate(
+            DomainOnboardingRequest(query="我有六周时间，偏向实验地学习 RAG"),
+            make_profile("experiment_first"),
+            make_plan(),
+            ranked,
+        ).output
+
+        self.assertEqual(output.schema_version, "domain-onboarding-output-v1.9")
+        self.assertEqual(output.prerequisites[0].key_points[0].explanation, "把查询和文档映射到同一向量空间并寻找近邻。")
+        self.assertEqual(output.prerequisites[0].key_points[0].related_paper_ids, [paper_id])
+        self.assertTrue(output.development_stages[0].core_concepts[0].explanation)
+        self.assertTrue(output.development_stages[0].main_techniques[0].mechanism)
+        self.assertEqual(output.learner_profile.preference, "balanced")
+        self.assertIsNone(output.learner_profile.time_budget_weeks)
+        user_payload = model.calls[0]["messages"][1]["content"]
+        self.assertNotIn("learner_profile", user_payload)
+        self.assertNotIn("六周", user_payload)
+        self.assertIn(
+            "# 领域入门研究导航",
+            model.calls[0]["messages"][0]["content"],
+        )
+
     def test_incremental_generation_emits_validated_sections_in_display_order(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
@@ -412,6 +596,29 @@ class GeneratorTests(unittest.TestCase):
             [self.ranked[0].paper_id],
         )
 
+    def test_evidence_claims_accept_only_literal_selected_ids_from_evidence_text(self) -> None:
+        payload = make_generation_payload([paper.paper_id for paper in self.ranked])
+        selected_id = self.ranked[0].paper_id
+        payload["evidence_claims"] = [
+            {
+                "claim": "retrieval augmented generation uses external evidence",
+                "evidence": f"{selected_id} reports this result; invented-paper does not count.",
+            }
+        ]
+        output = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]), self.config
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            self.ranked,
+        ).output
+
+        self.assertEqual(
+            output.evidence_claims[0].supporting_paper_ids,
+            [selected_id],
+        )
+
     def test_object_subdirections_are_normalized_to_names(self) -> None:
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])
         payload["current_landscape"]["subdirections"] = [
@@ -464,11 +671,10 @@ class QualityTests(unittest.TestCase):
                 "topic_coverage",
                 "development_coherence",
                 "learning_path",
-                "goal_alignment",
                 "language_alignment",
             },
         )
-        self.assertEqual(quality.state, "warning")
+        self.assertEqual(quality.state, "passed")
         self.assertEqual(
             {gate.gate: gate.status for gate in quality.hard_gates},
             {
@@ -507,6 +713,19 @@ class QualityTests(unittest.TestCase):
             all(
                 item.description
                 and item.why_it_matters
+                and item.typical_tasks
+                and item.prerequisites
+                and item.common_techniques
+                and all(
+                    technique.explanation
+                    and technique.mechanism
+                    and technique.related_paper_ids
+                    for technique in item.common_techniques
+                )
+                and item.datasets_and_benchmarks
+                and item.evaluation_metrics
+                and item.starter_project
+                and item.research_workflow
                 and item.research_questions
                 and item.related_paper_ids
                 and item.related_stage_ids
@@ -514,19 +733,12 @@ class QualityTests(unittest.TestCase):
             )
         )
 
-    def test_learning_path_uses_complete_time_budget(self) -> None:
+    def test_learning_path_does_not_assume_a_personal_time_budget(self) -> None:
         steps = self.output.learning_path
 
-        self.assertEqual(steps[0].start_week, 1)
-        self.assertEqual(steps[-1].end_week, 6)
+        self.assertTrue(all(step.start_week is None for step in steps))
+        self.assertTrue(all(step.end_week is None for step in steps))
         self.assertTrue(all(step.milestone and step.estimated_hours for step in steps))
-        self.assertTrue(
-            all(
-                current.start_week >= previous.start_week
-                and current.end_week >= previous.end_week
-                for previous, current in zip(steps, steps[1:])
-            )
-        )
     def test_modified_paper_metadata_fails_hard_gate(self) -> None:
         self.output.papers[0].title = "Model invented title"
         quality = self.evaluator.evaluate(self.output, self.ranked)
@@ -724,6 +936,29 @@ class QualityTests(unittest.TestCase):
         self.assertTrue(quality.passed_hard_gates)
         self.assertEqual(quality.evidence_validation_modes, {"terminology_bridge": 1})
 
+    def test_named_remote_embedding_resolves_cross_language_evidence(self) -> None:
+        class RemoteEmbedding:
+            name = "embedding:qwen3-embedding"
+
+            def vectorize(self, texts):
+                return [{"semantic": 1.0} for _ in texts]
+
+        self.output.evidence_claims = [
+            EvidenceClaim(
+                claim="该方法通过检索外部证据增强生成结果",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:3]],
+                support_type="abstract_explicit",
+            )
+        ]
+        evaluator = CompositeQualityEvaluator(
+            self.config, evidence_vectorizer=RemoteEmbedding()
+        )
+
+        quality = evaluator.evaluate(self.output, self.ranked)
+
+        self.assertTrue(quality.passed_hard_gates)
+        self.assertEqual(quality.evidence_validation_modes, {"multilingual_embedding": 1})
+
 
 class RepairTests(unittest.TestCase):
     def test_repair_planner_links_actions_to_quality_issues(self) -> None:
@@ -766,7 +1001,7 @@ class RepairTests(unittest.TestCase):
         self.assertTrue(repair_result.record.triggered)
         self.assertEqual(repair_result.record.actions[0].status, "applied")
         self.assertTrue(
-            any(action.status == "skipped" for action in repair_result.record.actions)
+            all(action.status != "failed" for action in repair_result.record.actions)
         )
 
     def test_code_repair_preserves_reading_guidance_and_priority(self) -> None:
@@ -828,11 +1063,11 @@ class RepairTests(unittest.TestCase):
             update={
                 "issues": [
                     QualityIssue(
-                        issue_type="beginner_mismatch",
+                        issue_type="weak_development_stage",
                         severity="warning",
-                        target_path="learning_path",
-                        message="not aligned",
-                        recommended_action="rewrite path",
+                        target_path="development_stages[1]",
+                        message="stage is incomplete",
+                        recommended_action="rewrite stage",
                     )
                 ]
             }

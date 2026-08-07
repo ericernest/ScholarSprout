@@ -93,24 +93,88 @@ class WeightedPaperRanker:
         query_text = " ".join(
             [
                 plan.normalized_domain,
+                plan.translated_domain,
+                *plan.expanded_terms,
                 *plan.search_queries,
                 *plan.expected_subdirections,
                 *(question for perspective in plan.perspectives for question in perspective.questions),
             ]
         )
+        path_texts = [
+            " ".join(
+                [
+                    plan.translated_domain or plan.normalized_domain,
+                    *plan.expanded_terms,
+                    perspective.name,
+                    perspective.description,
+                    *perspective.questions,
+                    *perspective.search_queries,
+                ]
+            )
+            for perspective in plan.perspectives
+        ]
         document_texts = [f"{paper.title} {paper.title} {paper.abstract or ''}" for paper in valid]
         vectors, vectorizer_backend, fallback_used = self._vectorize(
-            [query_text, *document_texts]
+            [query_text, *path_texts, *document_texts]
         )
-        if len(vectors) != len(valid) + 1:
+        document_offset = 1 + len(path_texts)
+        if len(vectors) != len(valid) + document_offset:
             raise ValueError("text vectorizer returned an unexpected number of vectors")
-        query_vector, document_vectors = vectors[0], vectors[1:]
+        query_vector = vectors[0]
+        path_vectors = vectors[1:document_offset]
+        document_vectors = vectors[document_offset:]
+        path_scores_by_paper = {
+            paper.paper_id: {
+                perspective.path_id: cosine_similarity(path_vector, paper_vector)
+                for perspective, path_vector in zip(
+                    plan.perspectives, path_vectors, strict=True
+                )
+            }
+            for paper, paper_vector in zip(valid, document_vectors, strict=True)
+        }
+        path_pool_size = max(
+            1,
+            math.ceil(self.config.selected_paper_limit / len(plan.perspectives))
+            * self.config.ranking_path_pool_multiplier,
+        )
+        path_memberships: dict[str, list[str]] = {paper.paper_id: [] for paper in valid}
+        rrf_scores: dict[str, float] = {paper.paper_id: 0.0 for paper in valid}
+        per_path_candidate_counts: dict[str, int] = {}
+        for perspective in plan.perspectives:
+            path_id = perspective.path_id
+            path_ranking = sorted(
+                valid,
+                key=lambda paper: (
+                    path_scores_by_paper[paper.paper_id][path_id],
+                    paper.citation_count or 0,
+                ),
+                reverse=True,
+            )
+            path_pool = [
+                paper
+                for paper in path_ranking[:path_pool_size]
+                if path_scores_by_paper[paper.paper_id][path_id] > 0.0
+            ]
+            per_path_candidate_counts[path_id] = len(path_pool)
+            for rank, paper in enumerate(path_pool, start=1):
+                path_memberships[paper.paper_id].append(path_id)
+                rrf_scores[paper.paper_id] += 1.0 / (self.config.ranking_rrf_k + rank)
+        max_rrf = len(plan.perspectives) / (self.config.ranking_rrf_k + 1)
+        path_fusion_scores = {
+            paper_id: min(1.0, score / max_rrf) if max_rrf else 0.0
+            for paper_id, score in rrf_scores.items()
+        }
         ranked: list[RankedPaper] = []
         vector_by_id = {
             paper.paper_id: vector for paper, vector in zip(valid, document_vectors, strict=True)
         }
         for paper, paper_vector in zip(valid, document_vectors, strict=True):
-            semantic_relevance = cosine_similarity(query_vector, paper_vector)
+            global_relevance = cosine_similarity(query_vector, paper_vector)
+            paper_path_scores = path_scores_by_paper[paper.paper_id]
+            semantic_relevance = max(
+                global_relevance,
+                max(paper_path_scores.values(), default=0.0),
+            )
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
             citations = min(
@@ -135,14 +199,19 @@ class WeightedPaperRanker:
                 )
             role = canonical.role if canonical else self._classify_role(paper)
             reading_priority = self._reading_priority(role, canonical is not None)
-            final = (
+            base_score = (
                 self.config.relevance_weight * relevance
                 + self.config.citation_weight * citations
                 + self.config.recency_weight * recency
                 + self.config.diversity_weight * diversity
             )
             if not (paper.abstract or "").strip() and canonical is None:
-                final *= self.config.ranking_missing_abstract_penalty
+                base_score *= self.config.ranking_missing_abstract_penalty
+            path_fusion_score = path_fusion_scores[paper.paper_id]
+            final = (
+                (1.0 - self.config.ranking_path_fusion_weight) * base_score
+                + self.config.ranking_path_fusion_weight * path_fusion_score
+            )
             ranked.append(
                 RankedPaper(
                     **paper.model_dump(),
@@ -152,6 +221,13 @@ class WeightedPaperRanker:
                     recency_score=round(recency, 6),
                     diversity_score=round(diversity, 6),
                     final_score=round(min(1.0, final), 6),
+                    base_score=round(min(1.0, base_score), 6),
+                    path_fusion_score=round(path_fusion_score, 6),
+                    path_relevance_scores={
+                        path_id: round(score, 6)
+                        for path_id, score in paper_path_scores.items()
+                    },
+                    matched_research_paths=path_memberships[paper.paper_id],
                     paper_role=role,
                     reading_priority=reading_priority,
                     is_canonical=canonical is not None,
@@ -183,6 +259,12 @@ class WeightedPaperRanker:
             vector_by_id,
             min(limit, self.config.selected_paper_limit),
         )
+        selected_path_counts = {
+            perspective.path_id: sum(
+                perspective.path_id in paper.matched_research_paths for paper in selected
+            )
+            for perspective in plan.perspectives
+        }
         return RankingResult(
             papers=selected,
             stats=RankingStats(
@@ -199,6 +281,9 @@ class WeightedPaperRanker:
                     for role in self.config.ranking_required_roles
                     if role not in {paper.paper_role for paper in selected}
                 ],
+                ranking_strategy="per_path_rrf_then_global_mmr",
+                per_path_candidate_counts=per_path_candidate_counts,
+                selected_path_counts=selected_path_counts,
             ),
         )
 

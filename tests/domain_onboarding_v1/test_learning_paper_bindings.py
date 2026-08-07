@@ -101,7 +101,7 @@ class LearningPaperBindingTests(unittest.TestCase):
             self.output.model_dump_json()
         )
         self.assertEqual(restored, self.output)
-        self.assertEqual(restored.schema_version, "domain-onboarding-output-v1.6")
+        self.assertEqual(restored.schema_version, "domain-onboarding-output-v1.9")
 
         experiment = restored.learning_path[3]
         evaluation = next(

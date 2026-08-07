@@ -131,7 +131,9 @@ class ModelRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(payload, {"learning_path": []})
-        self.assertEqual(attempt_timeouts, [30.0, 30.0])
+        self.assertEqual(len(attempt_timeouts), 2)
+        self.assertTrue(all(0 < timeout <= 30.0 for timeout in attempt_timeouts))
+        self.assertLess(attempt_timeouts[1], attempt_timeouts[0])
         self.assertEqual(model.snapshot()["selected_model"], "valid-backup")
         self.assertEqual(
             [item["error_type"] for item in model.snapshot()["attempts"][:-1]],

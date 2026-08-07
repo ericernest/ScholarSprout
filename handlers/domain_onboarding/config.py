@@ -62,22 +62,22 @@ class DomainOnboardingConfig(BaseModel):
         default_factory=default_critical_dimensions
     )
     max_content_repairs: int = Field(default=1, ge=0, le=1)
-    # Calibrated from the 2026-07-27 controlled online run (3 real domains):
-    # total 111-147s, planning 13-26s, generation 78-103s.
-    # Incremental clients receive validated sections before terminal completion,
-    # so the background request may outlive the old single-response budget.
-    request_timeout_seconds: float = Field(default=420.0, gt=0.0, le=600.0)
+    # Incremental clients receive validated sections before terminal completion.
+    # The larger envelope also covers remote embedding and staged generation.
+    request_timeout_seconds: float = Field(default=600.0, gt=0.0, le=900.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
-    planning_timeout_seconds: float = Field(default=75.0, gt=0.0, le=120.0)
+    planning_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
     planning_model_timeout_seconds: float = Field(
-        default=60.0, gt=0.0, le=115.0
+        default=110.0, gt=0.0, le=115.0
     )
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
-    ranking_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
-    generation_timeout_seconds: float = Field(default=240.0, gt=0.0, le=360.0)
-    evaluation_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+    # Remote qwen3 embeddings can legitimately take longer than a lexical
+    # rank. Keep the stage bounded while allowing one real embedding batch.
+    ranking_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
+    generation_timeout_seconds: float = Field(default=450.0, gt=0.0, le=480.0)
+    evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
     relevance_weight: float = Field(default=0.55, ge=0.0, le=1.0)
     citation_weight: float = Field(default=0.20, ge=0.0, le=1.0)
@@ -87,6 +87,9 @@ class DomainOnboardingConfig(BaseModel):
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
+    ranking_path_fusion_weight: float = Field(default=0.20, ge=0.0, le=0.5)
+    ranking_path_pool_multiplier: int = Field(default=2, ge=1, le=5)
+    ranking_rrf_k: int = Field(default=60, ge=1, le=200)
     ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "application", "frontier"]] = Field(
         default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]
     )
@@ -98,14 +101,43 @@ class DomainOnboardingConfig(BaseModel):
     ranking_min_abstract_candidates: int = Field(default=6, ge=0, le=40)
     embedding_batch_size: int = Field(default=32, ge=1, le=128)
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
-    planning_max_tokens: int = Field(default=1600, ge=256, le=4096)
+    planning_max_tokens: int = Field(default=1000, ge=256, le=4096)
     generation_max_tokens: int = Field(default=6000, ge=1024, le=12000)
-    generation_development_max_tokens: int = Field(default=1600, ge=800, le=5000)
-    generation_landscape_max_tokens: int = Field(default=1200, ge=600, le=4000)
-    generation_learning_path_max_tokens: int = Field(default=1400, ge=800, le=4000)
+    generation_development_max_tokens: int = Field(default=3200, ge=800, le=5000)
+    generation_development_foundation_max_tokens: int = Field(
+        default=2200, ge=600, le=3000
+    )
+    generation_development_stage_max_tokens: int = Field(
+        default=2600, ge=800, le=3000
+    )
+    development_stage_planning_max_tokens: int = Field(default=550, ge=400, le=2400)
+    development_stage_planning_timeout_seconds: float = Field(
+        default=65.0, gt=0.0, le=120.0
+    )
+    max_development_stage_plans: int = Field(default=4, ge=3, le=6)
+    staged_development_enabled: bool = True
+    stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
+    stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
+    generation_landscape_max_tokens: int = Field(default=3600, ge=600, le=4000)
+    generation_learning_path_max_tokens: int = Field(default=3400, ge=800, le=4000)
     # Incremental generation runs development first, then landscape/path in
     # parallel. The default deadline fits two full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
+    generation_development_timeout_seconds: float = Field(
+        default=180.0, gt=0.0, le=240.0
+    )
+    generation_development_foundation_timeout_seconds: float = Field(
+        default=120.0, gt=0.0, le=180.0
+    )
+    generation_development_stage_timeout_seconds: float = Field(
+        default=150.0, gt=0.0, le=180.0
+    )
+    generation_landscape_timeout_seconds: float = Field(
+        default=180.0, gt=0.0, le=240.0
+    )
+    generation_learning_path_timeout_seconds: float = Field(
+        default=180.0, gt=0.0, le=240.0
+    )
     generation_paper_abstract_max_chars: int = Field(default=700, ge=200, le=4000)
     retrieval_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
     retrieval_max_attempts: int = Field(default=1, ge=1, le=5)
@@ -140,9 +172,22 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError(
                 "planning model timeout must be shorter than the planning stage deadline"
             )
-        if 4 * self.generation_section_timeout_seconds > self.generation_timeout_seconds:
+        development_budget = (
+            self.generation_development_foundation_timeout_seconds
+            + self.generation_development_stage_timeout_seconds
+            if self.staged_development_enabled
+            else self.generation_development_timeout_seconds
+        )
+        incremental_generation_budget = (
+            development_budget
+            + max(
+                self.generation_landscape_timeout_seconds,
+                self.generation_learning_path_timeout_seconds,
+            )
+        )
+        if incremental_generation_budget > self.generation_timeout_seconds:
             raise ValueError(
-                "two model attempts in both incremental waves must fit inside the generation deadline"
+                "incremental development and parallel section budgets must fit inside the generation deadline"
             )
         if self.knowledge_graph_enabled and not self.knowledge_graph_shadow_mode:
             raise ValueError("knowledge graph foundation supports shadow mode only")

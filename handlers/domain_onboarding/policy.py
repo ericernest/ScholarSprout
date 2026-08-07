@@ -11,21 +11,24 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .schemas import QualityDimension, QualityIssueType
 
 
-CURRENT_POLICY_VERSION = "domain-quality-v1.5.0"
+CURRENT_POLICY_VERSION = "domain-quality-v1.8.0"
 
 
 def default_dimension_weights() -> dict[QualityDimension, float]:
-    return {
-        "structure": 0.13,
-        "paper_validity": 0.14,
-        "paper_relevance": 0.14,
-        "evidence_grounding": 0.13,
-        "topic_coverage": 0.12,
-        "development_coherence": 0.10,
-        "learning_path": 0.09,
-        "goal_alignment": 0.07,
-        "language_alignment": 0.08,
+    weights: dict[QualityDimension, float] = {
+        "structure": 0.14,
+        "paper_validity": 0.15,
+        "paper_relevance": 0.15,
+        "evidence_grounding": 0.14,
+        "topic_coverage": 0.13,
+        "development_coherence": 0.11,
+        "learning_path": 0.10,
+        "language_alignment": 0.0,
     }
+    # Computing the final value from the same float sequence guarantees the
+    # exact sum used by policy snapshots remains 1.0.
+    weights["language_alignment"] = 1.0 - sum(weights.values())
+    return weights
 
 
 def default_hard_gate_dimensions() -> dict[str, list[QualityDimension]]:
@@ -51,7 +54,6 @@ def default_llm_repair_issue_types() -> list[QualityIssueType]:
     return [
         "missing_coverage",
         "weak_development_stage",
-        "beginner_mismatch",
         "structure_error",
         "missing_evidence",
         "unsupported_claim",

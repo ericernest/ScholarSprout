@@ -1,15 +1,19 @@
-const STORAGE_KEY = "domain_onboarding_workspace_v1_5";
+const STORAGE_KEY = "domain_onboarding_workspace_v1_9";
+const LEGACY_STORAGE_KEYS = ["domain_onboarding_workspace_v1_5"];
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const EVENT_NAMES = [
   "accepted",
   "profile_ready",
   "plan_ready",
   "papers_ready",
+  "stage_plan_ready",
+  "stage_retrieval_ready",
   "llm_delta",
   "development_ready",
   "landscape_ready",
   "learning_path_ready",
   "quality_ready",
+  "final_quality_ready",
   "repair_started",
   "section_replaced",
   "completed",
@@ -27,21 +31,27 @@ const STATUS_LABELS = {
 };
 const STREAM_STAGE_LABELS = {
   planning: "正在规划调研范围",
+  stage_planning: "正在生成发展阶段提纲",
+  development_foundation: "正在生成前置知识",
+  development_stage: "正在分阶段生成发展内容",
   development: "正在生成前置知识与发展路径",
   landscape: "正在梳理核心问题与研究方向",
-  learning_path: "正在生成个性化学习路线",
+  learning_path: "正在生成标准学习路线",
   generation: "正在生成领域学习地图",
   repair: "正在修复内容质量问题",
 };
 const STAGE_LABELS = {
   accepted: "任务已接收",
-  profile_ready: "学习者画像已完成",
+  profile_ready: "标准新手路线已确定",
   plan_ready: "调研计划已完成",
   papers_ready: "论文检索已完成",
+  stage_plan_ready: "发展阶段提纲已完成",
+  stage_retrieval_ready: "正在按发展阶段检索论文",
   development_ready: "发展脉络已完成",
   landscape_ready: "概念全景已完成",
   learning_path_ready: "学习路线已完成",
   quality_ready: "质量评估已完成",
+  final_quality_ready: "最终质量结论已生成",
   repair_started: "正在修复质量问题",
   section_replaced: "已更新问题分区",
   completed: "学习地图已生成",
@@ -62,7 +72,6 @@ const QUALITY_LABELS = {
   topic_coverage: "主题覆盖",
   development_coherence: "发展连贯性",
   learning_path: "路线可执行性",
-  goal_alignment: "目标匹配",
   language_alignment: "语言一致性",
 };
 
@@ -382,7 +391,6 @@ function renderStatus() {
 }
 
 function renderOverview(data) {
-  const profile = data.learner_profile || {};
   const qualityState = data.quality?.state || data.status || "";
   const qualityClass = qualityState === "failed" || data.status === "quality_failed"
     ? "error"
@@ -399,10 +407,10 @@ function renderOverview(data) {
     <h2 class="hero-title">${escapeHtml(data.domain || data.query || state.snapshot?.request?.query || "正在理解你的学习目标")}</h2>
     <p class="hero-copy">${escapeHtml(data.text || "正在检索论文并构建领域发展脉络，已完成的内容会自动出现在下方。")}</p>
     <div class="profile-strip">
-      ${profileItem("已有基础", arrayText(profile.background || profile.known_concepts) || "待解析")}
-      ${profileItem("学习目标", profile.goal || state.snapshot?.request?.query || "待解析")}
-      ${profileItem("时间预算", profile.time_budget_weeks ? `${profile.time_budget_weeks} 周` : "待解析")}
-      ${profileItem("路线偏好", preferenceLabel(profile.preference))}
+      ${profileItem("适用对象", "普通科研新手")}
+      ${profileItem("路线类型", "标准学习路线")}
+      ${profileItem("学习顺序", "基础 → 方法 → 实践 → 前沿")}
+      ${profileItem("时间安排", "按实际情况自主安排")}
     </div>
   `;
   $("sidebar-domain").textContent = data.domain || "领域入门";
@@ -433,7 +441,20 @@ function renderDevelopment(data) {
   const container = $("development-content");
   container.classList.remove("loading-grid");
   if (!Array.isArray(data.development_stages) || !data.development_stages.length) {
-    container.innerHTML = sectionStatusCopy("发展路径", data);
+    const planned = data.research_plan?.development_stage_plans || [];
+    container.innerHTML = planned.length
+      ? planned.map((stage, index) => `
+        <button class="interactive-card timeline-card" type="button" data-detail-kind="research-stage" data-detail-id="${escapeHtml(stage.stage_id || String(index))}">
+          <span class="timeline-period">${escapeHtml(stage.period || `阶段 ${index + 1}`)}</span>
+          <span class="timeline-body">
+            <span class="card-index">RESEARCHING STAGE ${String(stage.sequence || index + 1).padStart(2, "0")}</span>
+            <h3>${escapeHtml(stage.name)}</h3>
+            <p>${escapeHtml(stage.focus)}</p>
+            <span class="chip-row"><span class="chip">已绑定 ${(stage.selected_paper_ids || []).length} 篇真实论文</span></span>
+          </span>
+        </button>
+      `).join("")
+      : sectionStatusCopy("发展路径", data);
     return;
   }
   const items = [...data.development_stages].sort((a, b) => Number(a.sequence) - Number(b.sequence));
@@ -491,6 +512,7 @@ function renderLandscape(data) {
               <span class="card-index">BRANCH ${String(index + 1).padStart(2, "0")}</span>
               <h3>${escapeHtml(item.name)}</h3>
               <p>${escapeHtml(item.description || item.why_it_matters || "展开这条研究分支。")}</p>
+              ${(item.typical_tasks || []).length ? `<span class="chip-row">${item.typical_tasks.slice(0, 2).map(chip).join("")}</span>` : ""}
             </span>
             <span class="branch-action">展开分支 ↗</span>
           </button>
@@ -511,15 +533,10 @@ function renderLearningPath(data) {
   container.classList.remove("loading-grid");
   container.innerHTML = data.learning_path.length
     ? data.learning_path.map((step, index) => {
-      const start = step.start_week || index + 1;
-      const end = step.end_week || start;
-      const week = start === end ? `W${start}` : `W${start}–${end}`;
-      const hasTimeBudget = data.learner_profile?.time_budget_weeks;
+      const week = `S${String(index + 1).padStart(2, "0")}`;
       const timeCopy = step.estimated_hours
         ? `${step.estimated_hours} 小时`
-        : hasTimeBudget
-          ? fieldStatusCopy("时间")
-          : "自由安排";
+        : "自由安排";
       return `
         <button class="interactive-card learning-card" type="button" data-detail-kind="learning" data-detail-id="${escapeHtml(String(index))}">
           <span class="week-block"><b>${escapeHtml(week)}</b><span>${escapeHtml(timeCopy)}</span></span>
@@ -583,6 +600,8 @@ function renderQuality(data) {
   const dimensions = Object.entries(quality.dimensions || {});
   const gates = quality.hard_gates || [];
   const issues = quality.issues || [];
+  const finalQuality = data.final_quality || null;
+  const attempts = data.quality_attempts || [];
   const stateClass = quality.state === "failed" ? "error" : quality.state === "warning" ? "warning" : "";
   const container = $("quality-content");
   container.classList.remove("loading-grid");
@@ -593,6 +612,17 @@ function renderQuality(data) {
         <span>质量分 / 100</span>
         <span class="tag ${stateClass}">${escapeHtml(qualityStatusLabel(quality.state))}</span>
       </div>
+      ${finalQuality ? `
+        <div class="quality-box final-quality-card">
+          <h3>最终结论 · ${escapeHtml(qualityStatusLabel(finalQuality.verdict))}</h3>
+          <p>初始 ${formatPercentScore(finalQuality.initial_score)} → 最终 ${formatPercentScore(finalQuality.final_score)}
+            · 变化 ${formatSignedPercent(finalQuality.score_delta)}</p>
+          <p>选择第 ${escapeHtml(finalQuality.selected_attempt)} 次结果
+            · 硬门槛 ${escapeHtml(finalQuality.hard_gate_pass_count)}/${escapeHtml(finalQuality.hard_gate_total)}
+            · 未解决问题 ${escapeHtml(finalQuality.unresolved_issue_count)}</p>
+          <small>选择依据 · ${escapeHtml(finalQuality.selection_reason)}</small>
+        </div>
+      ` : ""}
       <div class="dimension-list">
         ${dimensions.map(([name, score]) => `
           <div class="dimension-row">
@@ -604,6 +634,19 @@ function renderQuality(data) {
       </div>
     </div>
     <div class="quality-detail-grid">
+      ${attempts.length ? `
+        <div class="quality-box">
+          <h3>质量尝试 · ${attempts.length}</h3>
+          <div class="gate-list">
+            ${attempts.map((attempt) => `
+              <div class="gate-row">
+                <strong>第 ${escapeHtml(attempt.attempt_number)} 次 · ${escapeHtml(attempt.source)}</strong>
+                <span>${formatPercentScore(attempt.quality?.score)} / 100 · ${escapeHtml(qualityStatusLabel(attempt.quality?.state))}</span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
       <div class="quality-box">
         <h3>硬门槛 · ${quality.passed_hard_gates ? "全部通过" : "存在失败"}</h3>
         <div class="gate-list">
@@ -673,20 +716,34 @@ function showDetail(kind, id) {
     title = item.name;
     subtitle = "前置知识";
     summary = item.why_needed;
-    blocks.push(detailList("关键概念", item.key_points));
-    paperIds = item.related_paper_ids || [];
+    blocks.push(detailList("关键概念", item.key_points, papers));
+    paperIds = [
+      ...(item.related_paper_ids || []),
+      ...(item.key_points || []).flatMap(detailPaperIds),
+    ];
+  } else if (kind === "research-stage") {
+    const item = (data.research_plan?.development_stage_plans || []).find((value, index) => String(value.stage_id || index) === id);
+    if (!item) return;
+    title = item.name;
+    subtitle = item.period || "阶段研究提纲";
+    summary = item.focus;
+    blocks.push(detailList("阶段检索词", item.search_queries));
+    if (item.transition_from_previous) blocks.push(detailList("与上一阶段的转折", [item.transition_from_previous]));
+    paperIds = item.selected_paper_ids || [];
   } else if (kind === "stage") {
     const item = (data.development_stages || []).find((value, index) => String(value.stage_id || index) === id);
     if (!item) return;
     title = item.name;
     subtitle = item.historical_period || item.period || "发展阶段";
     summary = item.summary || item.motivation;
-    blocks.push(detailList("核心概念", item.core_concepts));
-    blocks.push(detailList("主要技术", item.main_techniques));
+    blocks.push(detailList("核心概念", item.core_concepts, papers));
+    blocks.push(detailList("主要技术", item.main_techniques, papers));
     blocks.push(detailList("开放问题", item.open_problems));
     paperIds = [
       ...(item.related_paper_ids || []),
       ...(item.representative_papers || []).map((paper) => paper.paper_id),
+      ...(item.core_concepts || []).flatMap(detailPaperIds),
+      ...(item.main_techniques || []).flatMap(detailPaperIds),
     ];
   } else if (kind === "problem") {
     const item = (data.current_landscape?.problem_details || []).find((value, index) => String(value.problem_id || index) === id);
@@ -704,9 +761,19 @@ function showDetail(kind, id) {
     subtitle = "研究分支";
     summary = item.description || item.why_it_matters;
     blocks.push(item.why_it_matters ? `<div class="detail-block"><h3>为什么重要</h3><p class="detail-summary">${escapeHtml(item.why_it_matters)}</p></div>` : "");
+    blocks.push(detailList("典型研究任务", item.typical_tasks));
+    blocks.push(detailList("需要先掌握", item.prerequisites));
+    blocks.push(detailList("常用技术", item.common_techniques, papers));
+    blocks.push(detailList("数据集与基准", item.datasets_and_benchmarks));
+    blocks.push(detailList("常用评估指标", item.evaluation_metrics));
+    blocks.push(item.starter_project ? `<div class="detail-block"><h3>第一个可做项目</h3><p class="detail-summary">${escapeHtml(item.starter_project)}</p></div>` : "");
+    blocks.push(detailList("建议研究流程", item.research_workflow));
     blocks.push(detailList("可继续追问", item.research_questions));
     blocks.push(detailList("关联阶段", namesForStages(item.related_stage_ids, data)));
-    paperIds = item.related_paper_ids || [];
+    paperIds = [
+      ...(item.related_paper_ids || []),
+      ...(item.common_techniques || []).flatMap(detailPaperIds),
+    ];
   } else if (kind === "learning") {
     const item = data.learning_path?.[Number(id)];
     if (!item) return;
@@ -961,7 +1028,7 @@ function paperGuidance(paper) {
 function saveWorkspace() {
   const request = state.snapshot?.request || readWorkspace()?.request || null;
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    schema_version: "1.5",
+    schema_version: "1.9",
     saved_at: new Date().toISOString(),
     task_id: state.taskId,
     access_token: state.accessToken,
@@ -982,8 +1049,16 @@ function jobAuthHeaders(headers = {}) {
 
 function readWorkspace() {
   try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    return value?.schema_version === "1.5" ? value : null;
+    const current = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (current?.schema_version === "1.9") return current;
+    for (const key of LEGACY_STORAGE_KEYS) {
+      const legacy = JSON.parse(localStorage.getItem(key) || "null");
+      if (!legacy?.task_id) continue;
+      const migrated = { ...legacy, schema_version: "1.9", migrated_from: legacy.schema_version || "unknown" };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -1024,17 +1099,43 @@ function profileItem(label, value) {
 }
 
 function chip(value) {
-  return `<span class="chip">${escapeHtml(value)}</span>`;
+  return `<span class="chip">${escapeHtml(detailName(value))}</span>`;
 }
 
 function emptyCopy(message) {
   return `<div class="empty-copy">${escapeHtml(message)}</div>`;
 }
 
-function detailList(title, values) {
+function detailList(title, values, paperMap = null) {
   const items = (values || []).filter(Boolean);
   if (!items.length) return "";
-  return `<div class="detail-block"><h3>${escapeHtml(title)}</h3><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+  return `<div class="detail-block"><h3>${escapeHtml(title)}</h3><ul>${items.map((item) => {
+    const description = detailDescription(item);
+    const evidence = paperMap
+      ? detailPaperIds(item)
+        .map((paperId) => paperMap.get(String(paperId))?.title || paperId)
+        .filter(Boolean)
+      : [];
+    return `<li><strong>${escapeHtml(detailName(item))}</strong>${description ? `<p>${escapeHtml(description)}</p>` : ""}${evidence.length ? `<small class="detail-evidence">论文依据 · ${evidence.map(escapeHtml).join("；")}</small>` : ""}</li>`;
+  }).join("")}</ul></div>`;
+}
+
+function detailName(value) {
+  if (value && typeof value === "object") return value.name || value.title || value.label || "未命名条目";
+  return String(value || "");
+}
+
+function detailDescription(value) {
+  if (!value || typeof value !== "object") return "";
+  return [value.explanation || value.description, value.mechanism, value.why_it_matters]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function detailPaperIds(value) {
+  return value && typeof value === "object" && Array.isArray(value.related_paper_ids)
+    ? value.related_paper_ids
+    : [];
 }
 
 function paperMini(paper) {
@@ -1061,20 +1162,8 @@ function namesForSubdirections(ids, data) {
 function weekLabel(item) {
   const start = item.start_week;
   const end = item.end_week || start;
-  if (!start) return "个性化学习步骤";
+  if (!start) return "标准学习步骤";
   return start === end ? `第 ${start} 周` : `第 ${start}–${end} 周`;
-}
-
-function arrayText(values) {
-  return Array.isArray(values) ? values.filter(Boolean).join("、") : String(values || "");
-}
-
-function preferenceLabel(value) {
-  return {
-    balanced: "理论与实践平衡",
-    theory_first: "理论优先",
-    experiment_first: "实验优先",
-  }[value] || value || "平衡路线";
 }
 
 function qualityStatusLabel(value) {
@@ -1097,6 +1186,13 @@ function formatPercentScore(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
+}
+
+function formatSignedPercent(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "—";
+  const percent = Math.round(score * 100);
+  return `${percent > 0 ? "+" : ""}${percent}`;
 }
 
 function escapeHtml(value) {

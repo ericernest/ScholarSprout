@@ -8,11 +8,12 @@
 ```text
 DOMAIN_ONBOARDING_AUDIT_DIR=/var/lib/novicesynapse/audit
 DOMAIN_ONBOARDING_AUDIT_FSYNC=1
-# 推荐：本地 ONNX 多语言 embedding，不需要远程 embedding API 权限
-DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/novicesynapse/embeddings
-# 如需改用 OpenAI-compatible embedding API，则不设置上述 LOCAL 变量：
-# DOMAIN_ONBOARDING_EMBEDDING_MODEL=<multilingual-embedding-model>
+# 默认调用当前 OpenAI-compatible 端点的 qwen3-embedding。
+# 如需优先使用本地 ONNX 多语言 embedding：
+# DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+# DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/novicesynapse/embeddings
+# 覆盖远程模型 ID：DOMAIN_ONBOARDING_EMBEDDING_MODEL=<embedding-model>
+# 显式关闭 embedding 并只使用 TF-IDF：DOMAIN_ONBOARDING_EMBEDDING_ENABLED=false
 SEMANTIC_SCHOLAR_API_KEY=<optional>
 CROSSREF_MAILTO=<operations-email>
 ```
@@ -46,9 +47,10 @@ curl -f http://127.0.0.1:8000/ready
 `/health` 只表示进程存活；`/ready` 只有在模型、V1 pipeline、指标和审计均已装配时返回 200。部署滚动更新应以 `/ready` 为就绪探针。
 
 互动链路默认对每个论文源最多发送 4 条查询，单个外部请求最多 8 秒且不串行重试。
-规划和整体生成分别限制为 1600 和 6000 tokens；增量的发展、全景和学习路径段
-分别限制为 1600、1200 和 1400 tokens。每个增量生成模型调用默认限制为 60 秒，
-生成阶段总 deadline 为 240 秒，请求总 deadline 为 420 秒。已通过 SSE 发布的分段不等待任务终态。
+规划和整体生成分别限制为 1000 和 6000 tokens；阶段提纲限制为 550 tokens。发展基础块
+限制为 2200 tokens，三个发展阶段各 2600 tokens 并行生成；全景和学习路径分别限制为
+3600 和 3400 tokens 并行生成。规划阶段/模型调用为 120/110 秒，生成阶段总 deadline
+为 450 秒，请求总 deadline 为 600 秒。已通过 SSE 发布的分段不等待任务终态。
 修改这些边界后应重跑六领域受控回归，不应只为单个慢请求无界提高 deadline。
 
 ## 监控
