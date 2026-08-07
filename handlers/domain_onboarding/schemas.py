@@ -35,6 +35,7 @@ QualityDimension = Literal[
     "topic_coverage",
     "development_coherence",
     "learning_path",
+    # Accepted only when replaying v1.6-and-earlier quality records.
     "goal_alignment",
     "language_alignment",
 ]
@@ -102,7 +103,9 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
-    "beginner_mismatch": "goal_alignment",
+    # Kept for replaying legacy audit records. New standard-novice outputs no
+    # longer emit personalization mismatch issues.
+    "beginner_mismatch": "learning_path",
     "format_error": "structure",
     "missing_evidence": "evidence_grounding",
     "unsupported_claim": "evidence_grounding",
@@ -186,22 +189,73 @@ class LearnerProfile(OnboardingModel):
 
 
 class ResearchPerspective(OnboardingModel):
+    path_id: str = ""
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     questions: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
+
+
+class DevelopmentStageResearchPlan(OnboardingModel):
+    stage_id: str = ""
+    sequence: int = Field(ge=1)
+    name: str = Field(min_length=1)
+    period: str = Field(min_length=1)
+    focus: str = Field(min_length=1)
+    transition_from_previous: str = ""
+    search_queries: list[str] = Field(min_length=1)
+    selected_paper_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_stage_research(self) -> "DevelopmentStageResearchPlan":
+        self.stage_id = self.stage_id or stable_id(
+            "research-stage", f"{self.sequence}:{self.name}:{self.period}"
+        )
+        self.search_queries = list(
+            dict.fromkeys(query.strip() for query in self.search_queries if query.strip())
+        )
+        self.selected_paper_ids = list(dict.fromkeys(self.selected_paper_ids))
+        return self
 
 
 class DomainResearchPlan(OnboardingModel):
     normalized_domain: str = Field(min_length=1)
+    translated_domain: str = ""
+    expanded_terms: list[str] = Field(default_factory=list)
     perspectives: list[ResearchPerspective] = Field(min_length=3)
     search_queries: list[str] = Field(min_length=1)
     expected_subdirections: list[str] = Field(min_length=3)
+    development_stage_plans: list[DevelopmentStageResearchPlan] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def deduplicate(self) -> "DomainResearchPlan":
+        self.translated_domain = self.translated_domain.strip()
+        self.expanded_terms = list(
+            dict.fromkeys(term.strip() for term in self.expanded_terms if term.strip())
+        )
+        used_path_ids: set[str] = set()
+        for index, perspective in enumerate(self.perspectives, start=1):
+            candidate_path_id = perspective.path_id.strip() or f"path-{index}"
+            if candidate_path_id in used_path_ids:
+                candidate_path_id = f"{candidate_path_id}-{index}"
+            perspective.path_id = candidate_path_id
+            used_path_ids.add(candidate_path_id)
+            perspective.questions = list(
+                dict.fromkeys(item.strip() for item in perspective.questions if item.strip())
+            )
+            perspective.search_queries = list(
+                dict.fromkeys(
+                    item.strip() for item in perspective.search_queries if item.strip()
+                )
+            )
         self.search_queries = list(dict.fromkeys(q.strip() for q in self.search_queries if q.strip()))
         self.expected_subdirections = list(
             dict.fromkeys(s.strip() for s in self.expected_subdirections if s.strip())
+        )
+        self.development_stage_plans = sorted(
+            self.development_stage_plans, key=lambda stage: stage.sequence
         )
         return self
 
@@ -290,6 +344,10 @@ class RankedPaper(PaperCandidate):
     paper_role: PaperRole = "other"
     reading_priority: ReadingPriority = "optional"
     is_canonical: bool = False
+    base_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    path_fusion_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    path_relevance_scores: dict[str, float] = Field(default_factory=dict)
+    matched_research_paths: list[str] = Field(default_factory=list)
 
 
 class SelectedPaper(OnboardingModel):
@@ -333,12 +391,84 @@ class PaperReference(OnboardingModel):
     is_canonical: bool = False
 
 
+class ConceptDetail(OnboardingModel):
+    """Beginner-facing concept explanation with explicit paper evidence."""
+
+    concept_id: str | None = None
+    name: str = Field(min_length=1)
+    explanation: str = ""
+    why_it_matters: str = ""
+    related_paper_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "ConceptDetail":
+        self.concept_id = self.concept_id or stable_id("concept", self.name)
+        self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
+        return self
+
+
+class TechniqueDetail(OnboardingModel):
+    """Beginner-facing technique explanation with mechanism and evidence."""
+
+    technique_id: str | None = None
+    name: str = Field(min_length=1)
+    explanation: str = ""
+    mechanism: str = ""
+    why_it_matters: str = ""
+    related_paper_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ensure_id(self) -> "TechniqueDetail":
+        self.technique_id = self.technique_id or stable_id("technique", self.name)
+        self.related_paper_ids = list(dict.fromkeys(self.related_paper_ids))
+        return self
+
+
+def _detail_items(value: object, *, technique: bool = False) -> list[object]:
+    """Accept legacy strings while preserving richer v1.7 detail objects."""
+
+    values = value if isinstance(value, list) else ([value] if value else [])
+    normalized: list[object] = []
+    for item in values:
+        if isinstance(item, (ConceptDetail, TechniqueDetail)):
+            normalized.append(item)
+            continue
+        if isinstance(item, str):
+            if item.strip():
+                normalized.append({"name": item.strip()})
+            continue
+        if not isinstance(item, dict):
+            continue
+        detail = dict(item)
+        detail["name"] = str(
+            detail.get("name") or detail.get("title") or detail.get("label") or ""
+        ).strip()
+        if not detail["name"]:
+            continue
+        detail["explanation"] = str(
+            detail.get("explanation") or detail.get("description") or ""
+        ).strip()
+        detail["why_it_matters"] = str(detail.get("why_it_matters") or "").strip()
+        detail["related_paper_ids"] = detail.get(
+            "related_paper_ids", detail.get("paper_ids", [])
+        )
+        if technique:
+            detail["mechanism"] = str(detail.get("mechanism") or "").strip()
+        normalized.append(detail)
+    return normalized
+
+
 class Prerequisite(OnboardingModel):
     prerequisite_id: str | None = None
     name: str
     why_needed: str = ""
-    key_points: list[str] = Field(default_factory=list)
+    key_points: list[ConceptDetail] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("key_points", mode="before")
+    @classmethod
+    def normalize_key_points(cls, value: object) -> list[object]:
+        return _detail_items(value)
 
     @model_validator(mode="after")
     def ensure_id(self) -> "Prerequisite":
@@ -378,13 +508,23 @@ class DevelopmentStage(OnboardingModel):
     previous_stage_id: str | None = None
     transition_from_previous: str = ""
     representative_papers: list[PaperReference] = Field(default_factory=list)
-    core_concepts: list[str] = Field(default_factory=list)
-    main_techniques: list[str] = Field(default_factory=list)
+    core_concepts: list[ConceptDetail] = Field(default_factory=list)
+    main_techniques: list[TechniqueDetail] = Field(default_factory=list)
     open_problems: list[str] = Field(default_factory=list)
     breakthroughs: list[StageBreakthrough] = Field(default_factory=list)
     related_problem_ids: list[str] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
     prerequisite_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("core_concepts", mode="before")
+    @classmethod
+    def normalize_core_concepts(cls, value: object) -> list[object]:
+        return _detail_items(value)
+
+    @field_validator("main_techniques", mode="before")
+    @classmethod
+    def normalize_main_techniques(cls, value: object) -> list[object]:
+        return _detail_items(value, technique=True)
 
     @model_validator(mode="after")
     def ensure_id(self) -> "DevelopmentStage":
@@ -421,12 +561,24 @@ class SubdirectionDetail(OnboardingModel):
     name: str
     description: str = ""
     why_it_matters: str = ""
+    typical_tasks: list[str] = Field(default_factory=list)
+    prerequisites: list[str] = Field(default_factory=list)
+    common_techniques: list[TechniqueDetail] = Field(default_factory=list)
+    datasets_and_benchmarks: list[str] = Field(default_factory=list)
+    evaluation_metrics: list[str] = Field(default_factory=list)
+    starter_project: str = ""
+    research_workflow: list[str] = Field(default_factory=list)
     research_questions: list[str] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
     related_stage_ids: list[str] = Field(default_factory=list)
     emerged_in_stage_id: str | None = None
     addresses_problem_ids: list[str] = Field(default_factory=list)
     relation_status: RelationStatus = "unresolved"
+
+    @field_validator("common_techniques", mode="before")
+    @classmethod
+    def normalize_common_techniques(cls, value: object) -> list[object]:
+        return _detail_items(value, technique=True)
 
     @model_validator(mode="after")
     def ensure_id(self) -> "SubdirectionDetail":
@@ -533,7 +685,7 @@ class EvidenceClaim(OnboardingModel):
 
 
 class DomainOnboardingOutput(OnboardingModel):
-    schema_version: str = "domain-onboarding-output-v1.6"
+    schema_version: str = "domain-onboarding-output-v1.9"
     language: Literal["zh-CN", "en-US"] = "zh-CN"
     domain: str
     text: str
@@ -617,6 +769,23 @@ class QualityAttempt(OnboardingModel):
     source: QualityAttemptSource
     quality: ContentQuality
     duration_ms: float = Field(default=0.0, ge=0.0)
+
+
+class FinalQualitySummary(OnboardingModel):
+    verdict: QualityState
+    initial_score: float = Field(ge=0.0, le=1.0)
+    final_score: float = Field(ge=0.0, le=1.0)
+    score_delta: float = Field(ge=-1.0, le=1.0)
+    threshold: float = Field(ge=0.0, le=1.0)
+    selected_attempt: int = Field(ge=1, le=2)
+    repair_applied: bool = False
+    selection_reason: str = "quality_threshold_met"
+    passed_hard_gates: bool
+    hard_gate_pass_count: int = Field(ge=0)
+    hard_gate_total: int = Field(ge=0)
+    unresolved_issue_count: int = Field(ge=0)
+    issue_counts_by_severity: dict[str, int] = Field(default_factory=dict)
+    dimension_deltas: dict[str, float] = Field(default_factory=dict)
 
 
 class RepairActionRecord(OnboardingModel):
@@ -721,6 +890,7 @@ class PipelineResult(OnboardingModel):
     output: DomainOnboardingOutput | None = None
     quality: ContentQuality | None = None
     quality_attempts: list[QualityAttempt] = Field(default_factory=list)
+    final_quality: FinalQualitySummary | None = None
     repair_record: RepairRecord | None = None
     knowledge_graph: KnowledgeGraphSnapshot | None = None
     error: str | None = None
@@ -729,6 +899,12 @@ class PipelineResult(OnboardingModel):
     def validate_quality_audit_consistency(self) -> "PipelineResult":
         if self.quality is None:
             return self
+        if self.final_quality is not None and (
+            self.final_quality.final_score != self.quality.score
+            or self.final_quality.verdict != self.quality.state
+            or self.final_quality.selected_attempt != self.quality.selected_attempt
+        ):
+            raise ValueError("final quality summary must match selected quality")
         if self.quality.policy_version != self.policy_version:
             raise ValueError("result and quality policy versions must match")
         if self.quality.policy_fingerprint != self.policy_fingerprint:
@@ -778,6 +954,11 @@ class PipelineResult(OnboardingModel):
             quality_attempts=[
                 attempt.model_dump(mode="json") for attempt in self.quality_attempts
             ],
+            final_quality=(
+                self.final_quality.model_dump(mode="json")
+                if self.final_quality
+                else None
+            ),
             repair_record=(
                 self.repair_record.model_dump(mode="json")
                 if self.repair_record
@@ -860,6 +1041,9 @@ class RankingStats(OnboardingModel):
     low_relevance_filtered_count: int = 0
     covered_roles: list[PaperRole] = Field(default_factory=list)
     missing_required_roles: list[PaperRole] = Field(default_factory=list)
+    ranking_strategy: str = "global"
+    per_path_candidate_counts: dict[str, int] = Field(default_factory=dict)
+    selected_path_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class RankingResult(OnboardingModel):

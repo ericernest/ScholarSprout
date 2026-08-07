@@ -155,18 +155,22 @@ def run_with_model_route(
     *,
     timeout_seconds: float | None,
 ) -> Any:
-    """Retry section generation without shrinking each model's response window.
+    """Retry candidates inside one route-level timeout budget.
 
-    The pipeline owns the total stage deadline. This helper's timeout is the
-    maximum duration of one model call; dividing it by the number of models
-    made long-form backup models unusable after a fast validation failure.
+    A fast transport or validation failure may fall through to a backup, but
+    repeated candidates must not each consume the full stage allowance.
     """
     if not isinstance(model, RoutedChatModel):
         return operation(model, timeout_seconds)
-    attempt_timeout = timeout_seconds
+    route_started = perf_counter()
     attempts: list[dict[str, Any]] = []
     last_error: Exception | None = None
     for model_name in model.model_names:
+        attempt_timeout = timeout_seconds
+        if timeout_seconds is not None:
+            attempt_timeout = timeout_seconds - (perf_counter() - route_started)
+            if attempt_timeout <= 0:
+                break
         candidate = ModelOverrideChatModel(model.delegate, model_name)
         started = perf_counter()
         try:

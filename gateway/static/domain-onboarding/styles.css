@@ -224,7 +224,9 @@ button { color: inherit; }
 .paper-score b { color: var(--color-accent); font: 700 0.78rem var(--font-mono); }
 .paper-score b small { margin-left: 0.12rem; color: var(--muted); font-size: 0.54rem; font-weight: 500; }
 
-.quality-summary { display: grid; grid-template-columns: 180px 1fr; gap: 0.85rem; }
+.quality-summary { display: grid; grid-template-columns: 180px minmax(240px, 0.8fr) minmax(320px, 1.2fr); gap: 0.85rem; }
+.final-quality-card p { margin: 0.35rem 0; color: var(--text-muted); line-height: 1.55; }
+.final-quality-card small { color: var(--accent); }
 .score-card { display: grid; place-items: center; align-content: center; gap: 0.25rem; min-height: 150px; border: 1px solid var(--color-accent-line); border-radius: var(--radius-card); background: radial-gradient(circle, var(--color-accent-wash), transparent 70%); }
 .score-card b { font: 700 2.4rem var(--font-display); font-variant-numeric: tabular-nums; }
 .score-card span { color: var(--muted); font-size: 0.66rem; }
@@ -264,6 +266,7 @@ button { color: inherit; }
 .paper-score-row b { color: var(--color-ink); font: 700 0.65rem var(--font-mono); text-align: right; }
 .detail-block ul { margin: 0; padding-left: 1rem; }
 .detail-block li { margin: 0.35rem 0; color: var(--muted); font-size: 0.68rem; line-height: 1.5; }
+.detail-evidence { display: block; margin-top: 0.25rem; color: var(--accent); line-height: 1.45; }
 .paper-mini { display: grid; gap: 0.34rem; width: 100%; padding: 0.65rem; border: 1px solid var(--line); border-radius: var(--radius-control); color: inherit; background: var(--color-surface-soft); cursor: pointer; text-align: left; }
 .paper-mini:hover { border-color: var(--line-strong); }
 .paper-mini strong { font-size: 0.72rem; line-height: 1.4; }

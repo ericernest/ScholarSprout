@@ -35,6 +35,9 @@ class CodeRepairExecutor:
                 prerequisite.related_paper_ids,
                 allowed,
             )
+            prerequisite.key_points = self._detail_unique(
+                prerequisite.key_points, allowed
+            )
         for stage in repaired.development_stages:
             stage.related_paper_ids = self._valid_unique(stage.related_paper_ids, allowed)
             for breakthrough in stage.breakthroughs:
@@ -49,8 +52,8 @@ class CodeRepairExecutor:
                 self._reference(allowed_map[paper_id], references.get(paper_id))
                 for paper_id in stage.related_paper_ids
             ]
-            stage.core_concepts = self._nonempty_unique(stage.core_concepts)
-            stage.main_techniques = self._nonempty_unique(stage.main_techniques)
+            stage.core_concepts = self._detail_unique(stage.core_concepts, allowed)
+            stage.main_techniques = self._detail_unique(stage.main_techniques, allowed)
             stage.open_problems = self._nonempty_unique(stage.open_problems)
         for index, step in enumerate(repaired.learning_path, start=1):
             step.step = str(index)
@@ -79,6 +82,13 @@ class CodeRepairExecutor:
         repaired.current_landscape.subdirections = self._nonempty_unique(
             repaired.current_landscape.subdirections
         )
+        for direction in repaired.current_landscape.subdirection_details:
+            direction.related_paper_ids = self._valid_unique(
+                direction.related_paper_ids, allowed
+            )
+            direction.common_techniques = self._detail_unique(
+                direction.common_techniques, allowed
+            )
         claims_by_id = {}
         for claim in repaired.evidence_claims:
             claim.supporting_paper_ids = self._valid_unique(
@@ -108,6 +118,21 @@ class CodeRepairExecutor:
     @staticmethod
     def _nonempty_unique(values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @classmethod
+    def _detail_unique(cls, values: list, allowed: set[str]) -> list:
+        results = []
+        seen: set[str] = set()
+        for value in values:
+            key = value.name.strip().casefold()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            value.related_paper_ids = cls._valid_unique(
+                value.related_paper_ids, allowed
+            )
+            results.append(value)
+        return results
 
     @staticmethod
     def _reference(

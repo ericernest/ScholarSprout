@@ -34,6 +34,7 @@ class DomainOnboardingRequestTrace:
 
     profile_duration_ms: float = 0.0
     planning_duration_ms: float = 0.0
+    stage_planning_duration_ms: float = 0.0
     retrieval_duration_ms: float = 0.0
     ranking_duration_ms: float = 0.0
     generation_duration_ms: float = 0.0
@@ -49,8 +50,14 @@ class DomainOnboardingRequestTrace:
     initial_coverage_gap_count: int = 0
     final_coverage_gap_count: int = 0
     supplemental_query_count: int = 0
+    development_stage_count: int = 0
+    stage_retrieval_query_count: int = 0
+    stage_bound_paper_count: int = 0
     ranking_vectorizer_backend: str = "unknown"
     ranking_vectorizer_fallback_used: bool = False
+    ranking_strategy: str = "global"
+    ranking_path_candidate_counts: dict[str, int] = field(default_factory=dict)
+    ranking_selected_path_counts: dict[str, int] = field(default_factory=dict)
     low_relevance_filtered_count: int = 0
     evidence_claim_count: int = 0
     unsupported_claim_count: int = 0

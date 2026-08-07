@@ -45,9 +45,15 @@ class PaperCoverageAnalyzer:
         self,
         config: DomainOnboardingConfig,
         vectorizer: TextVectorizer | None = None,
+        fallback_vectorizer: TextVectorizer | None = None,
     ) -> None:
         self.config = config
         self.vectorizer = vectorizer or TfidfTextVectorizer()
+        self.fallback_vectorizer = (
+            fallback_vectorizer
+            if fallback_vectorizer is not None
+            else (TfidfTextVectorizer() if vectorizer is not None else None)
+        )
 
     def analyze(
         self,
@@ -60,7 +66,12 @@ class PaperCoverageAnalyzer:
         if papers and subdirections:
             queries = [f"{plan.normalized_domain} {name}" for name in subdirections]
             documents = [f"{paper.title} {paper.abstract or ''}" for paper in papers]
-            vectors = self.vectorizer.vectorize([*queries, *documents])
+            try:
+                vectors = self.vectorizer.vectorize([*queries, *documents])
+            except Exception:
+                if self.fallback_vectorizer is None:
+                    raise
+                vectors = self.fallback_vectorizer.vectorize([*queries, *documents])
             query_vectors = vectors[: len(queries)]
             document_vectors = vectors[len(queries) :]
             for name, query_vector in zip(subdirections, query_vectors, strict=True):

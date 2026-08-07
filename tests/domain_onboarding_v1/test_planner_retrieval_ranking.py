@@ -43,14 +43,25 @@ class PlannerTests(unittest.TestCase):
         plan = result.plan
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(len(plan.perspectives), 3)
+        self.assertEqual(plan.translated_domain, "retrieval-augmented generation")
+        self.assertIn("RAG", plan.expanded_terms)
+        self.assertTrue(all(path.search_queries for path in plan.perspectives))
         self.assertTrue(any("survey" in query for query in plan.search_queries))
-        self.assertEqual(plan.search_queries[0], "ARXIV:2309.15217")
+        self.assertEqual(plan.search_queries[0], "ARXIV:2005.11401")
         self.assertIn("ARXIV:2005.11401", plan.search_queries)
         self.assertEqual(
             plan.search_queries[1],
             "ARXIV:2310.11511",
         )
-        self.assertEqual(model.calls[0]["timeout"], 60.0)
+        self.assertIn("ARXIV:2309.15217", plan.search_queries)
+        self.assertEqual(model.calls[0]["timeout"], 110.0)
+        user_payload = model.calls[0]["messages"][1]["content"]
+        self.assertNotIn("learner_profile", user_payload)
+        self.assertNotIn("time_budget", user_payload)
+        self.assertIn(
+            "为每个子方向说明研究对象",
+            model.calls[0]["messages"][0]["content"],
+        )
 
     def test_planning_model_timeout_must_precede_stage_deadline(self) -> None:
         with self.assertRaises(ValueError):
@@ -65,6 +76,8 @@ class PlannerTests(unittest.TestCase):
         plan = result.plan
         self.assertGreaterEqual(len(plan.perspectives), 3)
         self.assertTrue(any("graph neural networks" in query for query in plan.search_queries))
+        self.assertEqual(plan.translated_domain, "graph neural networks")
+        self.assertIn("GNN", plan.expanded_terms)
         self.assertEqual(result.stats.model_calls, 1)
         self.assertEqual(result.stats.total_tokens, 50)
 
@@ -94,6 +107,19 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(any("ARXIV:2303.17760" == query for query in plan.search_queries))
         self.assertTrue(any("ARXIV:2308.08155" == query for query in plan.search_queries))
         self.assertTrue(any("multi-agent systems" in query for query in plan.search_queries))
+
+    def test_query_expansion_allocates_queries_across_paths(self) -> None:
+        planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
+
+        plan = planner.plan("扩散模型", make_profile()).plan
+
+        self.assertEqual(plan.translated_domain, "diffusion models")
+        self.assertIn("score-based generative models", plan.expanded_terms)
+        self.assertEqual(
+            [path.path_id for path in plan.perspectives],
+            ["foundations", "methods", "evaluation-frontier"],
+        )
+        self.assertTrue(all(path.search_queries for path in plan.perspectives))
 
 
 class FakeResponse:

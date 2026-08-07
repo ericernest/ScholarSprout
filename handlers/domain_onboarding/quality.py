@@ -80,7 +80,6 @@ class CompositeQualityEvaluator:
             "topic_coverage": self.evaluate_topic_coverage(output, issues),
             "development_coherence": self.evaluate_development_coherence(output, issues),
             "learning_path": self.evaluate_learning_path_quality(output, issues),
-            "goal_alignment": self.evaluate_goal_alignment(output, issues),
             "language_alignment": self.evaluate_language_alignment(output, issues),
         }
         self._ensure_gate_score_issues(dimensions, issues)
@@ -265,6 +264,19 @@ class CompositeQualityEvaluator:
             str(item.subdirection_id): item
             for item in output.current_landscape.subdirection_details
         }
+        prerequisite_detail_score = _average(
+            float(
+                bool(item.why_needed.strip())
+                and bool(item.key_points)
+                and all(
+                    concept.explanation.strip()
+                    and concept.why_it_matters.strip()
+                    and concept.related_paper_ids
+                    for concept in item.key_points
+                )
+            )
+            for item in output.prerequisites
+        )
         stage_relation_score = _average(
             float(
                 bool(stage.breakthroughs)
@@ -311,6 +323,19 @@ class CompositeQualityEvaluator:
             float(
                 bool(item.description.strip())
                 and bool(item.why_it_matters.strip())
+                and bool(item.typical_tasks)
+                and bool(item.prerequisites)
+                and bool(item.common_techniques)
+                and all(
+                    technique.explanation.strip()
+                    and technique.mechanism.strip()
+                    and technique.related_paper_ids
+                    for technique in item.common_techniques
+                )
+                and bool(item.datasets_and_benchmarks)
+                and bool(item.evaluation_metrics)
+                and bool(item.starter_project.strip())
+                and bool(item.research_workflow)
                 and bool(item.research_questions)
                 and bool(item.related_paper_ids)
                 and bool(item.related_stage_ids)
@@ -331,6 +356,7 @@ class CompositeQualityEvaluator:
         )
         values = [
             _coverage(len(output.prerequisites), 3),
+            prerequisite_detail_score,
             _coverage(len(output.development_stages), self.config.min_development_stages),
             _coverage(len(output.current_landscape.problems), 3),
             _coverage(len(output.current_landscape.subdirections), self.config.min_subdirections),
@@ -446,6 +472,11 @@ class CompositeQualityEvaluator:
         issues: list[QualityIssue],
     ) -> float:
         stage_scores = []
+        researched_stages = (
+            output.research_plan.development_stage_plans
+            if output.research_plan is not None
+            else []
+        )
         for index, stage in enumerate(output.development_stages):
             reference_ids = {paper.paper_id for paper in stage.representative_papers}
             guidance_complete = all(
@@ -474,12 +505,36 @@ class CompositeQualityEvaluator:
                 ),
                 index == 0 or bool(stage.transition_from_previous.strip()),
                 bool(stage.related_paper_ids),
-                bool(stage.core_concepts),
-                bool(stage.main_techniques),
+                bool(stage.core_concepts)
+                and all(
+                    concept.explanation.strip()
+                    and concept.why_it_matters.strip()
+                    and concept.related_paper_ids
+                    for concept in stage.core_concepts
+                ),
+                bool(stage.main_techniques)
+                and all(
+                    technique.explanation.strip()
+                    and technique.mechanism.strip()
+                    and technique.why_it_matters.strip()
+                    and technique.related_paper_ids
+                    for technique in stage.main_techniques
+                ),
                 bool(stage.open_problems),
                 reference_ids == set(stage.related_paper_ids),
                 guidance_complete,
                 bool(stage.prerequisite_ids),
+                (
+                    not researched_stages
+                    or (
+                        index < len(researched_stages)
+                        and stage.stage_id == researched_stages[index].stage_id
+                        and stage.period == researched_stages[index].period
+                        and bool(researched_stages[index].selected_paper_ids)
+                        and set(stage.related_paper_ids)
+                        <= set(researched_stages[index].selected_paper_ids)
+                    )
+                ),
             ]
             stage_scores.append(sum(checks) / len(checks))
             if not all(checks):
@@ -488,8 +543,8 @@ class CompositeQualityEvaluator:
                         issue_type="weak_development_stage",
                         severity="warning",
                         target_path=f"development_stages[{index}]",
-                        message="发展阶段顺序、时期、前后承接、论文或内容字段不完整。",
-                        recommended_action="按时间顺序补充该阶段的时期、前驱阶段和技术转折说明。",
+                        message="发展阶段顺序、时期、前后承接、内容字段或阶段论文绑定不完整。",
+                        recommended_action="按阶段研究提纲补充时期、技术转折，并仅绑定该阶段检索到的论文。",
                     )
                 )
         return _average(stage_scores)
@@ -635,12 +690,10 @@ class CompositeQualityEvaluator:
                     for paper_id in frontier_ids
                 )
             route_fit = route_fit and binding_fit
-        time_fit = self._learning_time_fit(output)
         score = (
             0.15 * float(sequence_ok)
-            + 0.60 * item_score
-            + 0.10 * float(route_fit)
-            + 0.15 * float(time_fit)
+            + 0.70 * item_score
+            + 0.15 * float(route_fit)
         )
         if score < 1.0:
             issues.append(
@@ -648,8 +701,8 @@ class CompositeQualityEvaluator:
                     issue_type="route_conflict",
                     severity="error" if not sequence_ok else "warning",
                     target_path="learning_path",
-                    message="学习步骤不连续、缺少阅读指导、论文位置不合理，或未覆盖用户时间预算。",
-                    recommended_action="按基础到实验再到前沿的固定阶段重新编号，并补齐周次、里程碑和验收条件。",
+                    message="学习步骤不连续、缺少阅读指导，或论文位置不合理。",
+                    recommended_action="按基础到实验再到前沿的标准阶段重新编号，并补齐里程碑和验收条件。",
                 )
             )
         return score
@@ -704,72 +757,17 @@ class CompositeQualityEvaluator:
         return score
 
     @staticmethod
-    def _learning_time_fit(output: DomainOnboardingOutput) -> bool:
-        total_weeks = output.learner_profile.time_budget_weeks
-        if total_weeks is None:
-            return True
-        if not output.learning_path:
-            return False
-        ranges = [(step.start_week, step.end_week) for step in output.learning_path]
-        if any(start is None or end is None for start, end in ranges):
-            return False
-        normalized = [(int(start), int(end)) for start, end in ranges]
-        return (
-            normalized[0][0] == 1
-            and normalized[-1][1] == total_weeks
-            and all(1 <= start <= end <= total_weeks for start, end in normalized)
-            and all(
-                normalized[index][0] >= normalized[index - 1][0]
-                and normalized[index][1] >= normalized[index - 1][1]
-                for index in range(1, len(normalized))
-            )
-            and all(step.milestone.strip() for step in output.learning_path)
-        )
-
-    def evaluate_goal_alignment(
-        self,
-        output: DomainOnboardingOutput,
-        issues: list[QualityIssue],
-    ) -> float:
-        profile = output.learner_profile
-        path_text = " ".join(
-            [
-                *(step.goal for step in output.learning_path),
-                *(activity for step in output.learning_path for activity in step.activities),
-            ]
-        )
-        indicators = [
-            term for term in ("实验", "复现", "论文", "阅读", "理论", "方法", "项目", "研究", "选题", "代码", "基线")
-            if term in profile.goal
-        ]
-        lexical = (
-            sum(1 for term in indicators if term in path_text) / len(indicators)
-            if indicators else 1.0
-        )
-        preference_ok = True
-        if profile.preference == "experiment_first":
-            preference_ok = bool(re.search(r"实验|复现|基线", path_text))
-        elif profile.preference == "theory_first":
-            preference_ok = bool(re.search(r"理论|推导|原理|概念", path_text))
-        score = 0.7 * lexical + 0.3 * float(preference_ok)
-        if score < 0.65:
-            issues.append(
-                QualityIssue(
-                    issue_type="beginner_mismatch",
-                    severity="warning",
-                    target_path="learning_path",
-                    message="学习路径与用户目标或偏好匹配不足。",
-                    recommended_action="按画像局部改写活动和完成标准。",
-                )
-            )
-        return score
-
-    @staticmethod
     def _all_reference_ids(output: DomainOnboardingOutput) -> Iterable[str]:
         for item in output.prerequisites:
             yield from item.related_paper_ids
+            for concept in item.key_points:
+                yield from concept.related_paper_ids
         for stage in output.development_stages:
             yield from stage.related_paper_ids
+            for concept in stage.core_concepts:
+                yield from concept.related_paper_ids
+            for technique in stage.main_techniques:
+                yield from technique.related_paper_ids
             yield from (paper.paper_id for paper in stage.representative_papers)
             for breakthrough in stage.breakthroughs:
                 yield from breakthrough.supporting_paper_ids
@@ -783,6 +781,8 @@ class CompositeQualityEvaluator:
             yield from problem.related_paper_ids
         for subdirection in output.current_landscape.subdirection_details:
             yield from subdirection.related_paper_ids
+            for technique in subdirection.common_techniques:
+                yield from technique.related_paper_ids
 
 
 def critical_dimensions_not_regressed(

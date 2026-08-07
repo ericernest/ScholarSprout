@@ -29,20 +29,46 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     if isinstance(parsed, dict):
         return parsed
 
-    decoder = json.JSONDecoder()
-    offset = 0
-    while True:
-        start = text.find("{", offset)
-        if start < 0:
-            return None
-        try:
-            candidate, _ = decoder.raw_decode(text, start)
-        except json.JSONDecodeError:
-            offset = start + 1
+    # Only inspect balanced top-level object candidates. Advancing from a
+    # truncated outer object to one of its valid inner objects silently turns
+    # an incomplete model response into a plausible but structurally wrong
+    # payload (for example, one prerequisite instead of the whole section).
+    depth = 0
+    array_depth = 0
+    start: int | None = None
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
             continue
-        if isinstance(candidate, dict):
-            return candidate
-        offset = start + 1
+        if character == '"':
+            in_string = True
+        elif character == "[" and depth == 0:
+            array_depth += 1
+        elif character == "]" and depth == 0 and array_depth:
+            array_depth -= 1
+        elif character == "{" and array_depth == 0:
+            if depth == 0:
+                start = index
+            depth += 1
+        elif character == "}" and array_depth == 0 and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    candidate = json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    start = None
+                    continue
+                if isinstance(candidate, dict):
+                    return candidate
+                start = None
+    return None
 
 
 def invoke_json(
@@ -90,6 +116,13 @@ def invoke_json(
 
             try:
                 for chunk in stream:
+                    if (
+                        timeout_seconds is not None
+                        and perf_counter() - started >= timeout_seconds
+                    ):
+                        raise TimeoutError(
+                            f"structured streaming call exceeded {timeout_seconds:.1f}s"
+                        )
                     cancel_event = current_cancel_event()
                     if cancel_event is not None and cancel_event.is_set():
                         raise RuntimeError("LLM call cancelled")

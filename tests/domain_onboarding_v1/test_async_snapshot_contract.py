@@ -7,10 +7,6 @@ from pathlib import Path
 from evaluation.domain_onboarding.snapshot_validation import (
     validate_completed_snapshot,
 )
-from handlers.domain_onboarding.config import DomainOnboardingConfig
-from handlers.domain_onboarding.quality import CompositeQualityEvaluator
-
-
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = (
     ROOT / "docs" / "examples" / "domain-onboarding-incremental-response-v1.5.json"
@@ -26,7 +22,6 @@ class AsyncSnapshotContractTests(unittest.TestCase):
 
         errors = validate_completed_snapshot(
             snapshot,
-            evaluator=CompositeQualityEvaluator(DomainOnboardingConfig()),
         )
 
         self.assertEqual(errors, [])

@@ -352,11 +352,23 @@ class SkillLoaderRegistryTests(unittest.TestCase):
             registry = SkillRegistry(user_root=Path(temp_dir) / "user")
             chat_profile = Profiles().get("chat")
             chat_skill_ids = registry.resolve_skill_ids(list(chat_profile["skills"]))
+            onboarding_profile = Profiles().get("domain_onboarding")
+            onboarding_skill_ids = registry.resolve_skill_ids(
+                list(onboarding_profile["skills"])
+            )
             paper_profile = Profiles().get("paper_reading")
             paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
         self.assertEqual(chat_profile["default_skill"], "chat.default")
         self.assertEqual(chat_skill_ids, ["chat.research_discussion"])
+        self.assertEqual(
+            onboarding_profile["default_skill"], "domain.onboarding_guide"
+        )
+        self.assertEqual(onboarding_skill_ids, ["domain.onboarding_guide"])
+        self.assertIn(
+            "每个子方向说明研究对象",
+            registry.get_instructions("domain.onboarding_guide"),
+        )
         self.assertEqual(paper_profile["default_skill"], "reading.method_analyst")
         self.assertCountEqual(
             paper_skill_ids,
@@ -385,6 +397,7 @@ class SkillLoaderRegistryTests(unittest.TestCase):
                 "reading.idea_generator",
                 "reading.cross_paper_linker",
                 "reading.novice_map_builder",
+                "domain.onboarding_guide",
             ],
         )
 

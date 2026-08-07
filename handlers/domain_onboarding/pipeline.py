@@ -37,10 +37,12 @@ from .retrieval_resilience import RetrievalRetryPolicy
 from .schemas import (
     ContentQuality,
     DomainOnboardingRequest,
+    FinalQualitySummary,
     ModelCallStats,
     PipelineResult,
     QualityAttempt,
     RankingStats,
+    ResearchPerspective,
     RepairRecord,
     RetrievalStats,
 )
@@ -111,6 +113,9 @@ class DomainOnboardingPipeline:
                 return
             progress = {
                 "planning": 0.18,
+                "stage_planning": 0.43,
+                "development_foundation": 0.59,
+                "development_stage": 0.63,
                 "development": 0.50,
                 "landscape": 0.62,
                 "learning_path": 0.72,
@@ -204,10 +209,54 @@ class DomainOnboardingPipeline:
                     error="No verified papers were returned by the configured data source.",
                 )
 
+            stage_planner = getattr(self.generator, "plan_development_research", None)
+            if self.config.staged_development_enabled and callable(stage_planner):
+                try:
+                    stage_result, trace.stage_planning_duration_ms = context.call(
+                        "stage_planning",
+                        self.config.development_stage_planning_timeout_seconds + 5.0,
+                        self._call_with_optional_delta,
+                        stage_planner,
+                        request,
+                        plan,
+                        ranked,
+                        on_delta=publish_llm_delta,
+                    )
+                    stage_plans, stage_stats = stage_result
+                    plan.development_stage_plans = list(stage_plans)
+                    trace.development_stage_count = len(plan.development_stage_plans)
+                    self._record_generation_model_stats(trace, stage_stats)
+                    self._emit(
+                        progress_callback,
+                        "stage_plan_ready",
+                        0.45,
+                        True,
+                        ["research_plan"],
+                        {"research_plan": plan.model_dump(mode="json")},
+                    )
+                    ranked = self._research_development_stages(
+                        plan,
+                        candidates,
+                        ranked,
+                        trace,
+                        context,
+                        progress_callback,
+                    )
+                except GenerationError as error:
+                    trace.stage_planning_duration_ms = context.stage_durations_ms.get(
+                        "stage_planning", 0.0
+                    )
+                    self._record_generation_model_stats(trace, error.stats)
+                    return self._result(
+                        status="generation_failed",
+                        query=request.query,
+                        error=f"development stage planning failed: {error}",
+                    )
+
             self._emit(
                 progress_callback,
                 "papers_ready",
-                0.42,
+                0.56,
                 True,
                 ["papers"],
                 {"papers": [paper.model_dump(mode="json") for paper in ranked]},
@@ -228,7 +277,7 @@ class DomainOnboardingPipeline:
                         lambda event, data, paths: self._emit(
                             progress_callback,
                             event,
-                            {"development_ready": 0.58, "landscape_ready": 0.70, "learning_path_ready": 0.80}[event],
+                            {"development_ready": 0.68, "landscape_ready": 0.78, "learning_path_ready": 0.85}[event],
                             True,
                             paths,
                             data,
@@ -260,6 +309,9 @@ class DomainOnboardingPipeline:
                     "policy_fingerprint": self.policy.fingerprint,
                     "ranking_vectorizer_backend": trace.ranking_vectorizer_backend,
                     "ranking_vectorizer_fallback_used": trace.ranking_vectorizer_fallback_used,
+                    "ranking_strategy": trace.ranking_strategy,
+                    "ranking_path_candidate_counts": trace.ranking_path_candidate_counts,
+                    "ranking_selected_path_counts": trace.ranking_selected_path_counts,
                     "canonical_registry_version": getattr(
                         getattr(self.ranker, "canonical_registry", None),
                         "version",
@@ -292,7 +344,7 @@ class DomainOnboardingPipeline:
                 )
             )
             self._record_first(trace, first_quality)
-            self._emit(progress_callback, "quality_ready", 0.88, True, ["quality"], {"quality": first_quality.model_dump(mode="json")})
+            self._emit(progress_callback, "quality_ready", 0.90, True, ["quality"], {"quality": first_quality.model_dump(mode="json")})
             if first_quality.passed_hard_gates and first_quality.score >= first_quality.threshold:
                 initial_record = RepairRecord(
                     triggered=False,
@@ -301,6 +353,17 @@ class DomainOnboardingPipeline:
                     policy_fingerprint=self.policy.fingerprint,
                 )
                 self._record_final(trace, first_quality, initial_record)
+                final_quality = self._final_quality_summary(
+                    first_quality, quality_attempts, initial_record
+                )
+                self._emit(
+                    progress_callback,
+                    "final_quality_ready",
+                    0.98,
+                    False,
+                    ["final_quality"],
+                    {"final_quality": final_quality.model_dump(mode="json")},
+                )
                 return self._result(
                     status=self._quality_status(first_quality),
                     query=request.query,
@@ -308,6 +371,7 @@ class DomainOnboardingPipeline:
                     quality=first_quality,
                     quality_attempts=quality_attempts,
                     repair_record=initial_record,
+                    final_quality=final_quality,
                     knowledge_graph=self._build_knowledge_graph(
                         output, first_quality, trace
                     ),
@@ -401,6 +465,17 @@ class DomainOnboardingPipeline:
                 selected_quality = first_quality
             self._record_final(trace, selected_quality, repair_result.record)
             trace.quality_delta = round(selected_quality.score - float(trace.first_score or 0.0), 6)
+            final_quality = self._final_quality_summary(
+                selected_quality, quality_attempts, repair_result.record
+            )
+            self._emit(
+                progress_callback,
+                "final_quality_ready",
+                0.98,
+                False,
+                ["final_quality"],
+                {"final_quality": final_quality.model_dump(mode="json")},
+            )
             return self._result(
                 status=self._quality_status(selected_quality),
                 query=request.query,
@@ -408,6 +483,7 @@ class DomainOnboardingPipeline:
                 quality=selected_quality,
                 quality_attempts=quality_attempts,
                 repair_record=repair_result.record,
+                final_quality=final_quality,
                 knowledge_graph=self._build_knowledge_graph(
                     selected_output, selected_quality, trace
                 ),
@@ -473,10 +549,60 @@ class DomainOnboardingPipeline:
             callback(event, progress, provisional, replace_paths, data)
 
     def _result(self, **values: Any) -> PipelineResult:
+        if values.get("quality") is not None and values.get("final_quality") is None:
+            values["final_quality"] = self._final_quality_summary(
+                values["quality"],
+                values.get("quality_attempts") or [],
+                values.get("repair_record"),
+            )
         return PipelineResult(
             policy_version=self.policy.policy_version,
             policy_fingerprint=self.policy.fingerprint,
             **values,
+        )
+
+    @staticmethod
+    def _final_quality_summary(
+        quality: ContentQuality,
+        attempts: list[QualityAttempt],
+        repair_record: RepairRecord | None,
+    ) -> FinalQualitySummary:
+        initial = attempts[0].quality if attempts else quality
+        initial_dimensions = initial.dimensions
+        final_dimensions = quality.dimensions
+        issue_counts: dict[str, int] = {}
+        for issue in quality.issues:
+            issue_counts[issue.severity] = issue_counts.get(issue.severity, 0) + 1
+        decision = repair_record.decision if repair_record is not None else None
+        selection_reason = (
+            decision.reasons[0]
+            if decision is not None and decision.reasons
+            else "quality_threshold_met"
+        )
+        return FinalQualitySummary(
+            verdict=quality.state,
+            initial_score=initial.score,
+            final_score=quality.score,
+            score_delta=round(quality.score - initial.score, 6),
+            threshold=quality.threshold,
+            selected_attempt=quality.selected_attempt,
+            repair_applied=bool(
+                repair_record
+                and repair_record.triggered
+                and quality.selected_attempt == 2
+            ),
+            selection_reason=selection_reason,
+            passed_hard_gates=quality.passed_hard_gates,
+            hard_gate_pass_count=sum(
+                gate.status == "passed" for gate in quality.hard_gates
+            ),
+            hard_gate_total=len(quality.hard_gates),
+            unresolved_issue_count=len(quality.issues),
+            issue_counts_by_severity=issue_counts,
+            dimension_deltas={
+                name: round(score - initial_dimensions.get(name, score), 6)
+                for name, score in final_dimensions.items()
+            },
         )
 
     def _bind_quality_policy(self, quality: ContentQuality) -> None:
@@ -579,6 +705,134 @@ class DomainOnboardingPipeline:
         trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
         trace.selected_paper_count = len(reranked)
         return reranked or ranked
+
+    def _research_development_stages(
+        self,
+        plan: Any,
+        candidates: list[Any],
+        ranked: list[Any],
+        trace: DomainOnboardingRequestTrace,
+        context: PipelineExecutionContext,
+        progress_callback: Callable[[str, float, bool, list[str], dict[str, Any]], None]
+        | None,
+    ) -> list[Any]:
+        """Retrieve and rank real papers independently for each historical stage."""
+
+        all_candidates = list(candidates)
+        stage_rankings: list[list[Any]] = []
+        stage_count = len(plan.development_stage_plans)
+        trace.development_stage_count = stage_count
+        for index, stage in enumerate(plan.development_stage_plans):
+            queries = stage.search_queries[: self.config.stage_queries_per_stage]
+            trace.search_query_count += len(queries)
+            trace.stage_retrieval_query_count += len(queries)
+            try:
+                retrieval_result, duration = context.call(
+                    "retrieval",
+                    self.config.retrieval_stage_timeout_seconds,
+                    self.retriever.search,
+                    queries,
+                    limit_per_query=self.config.papers_per_query,
+                )
+                trace.retrieval_duration_ms += duration
+                self._record_retrieval_stats(
+                    trace, retrieval_result.stats, accumulate=True
+                )
+                trace.retrieved_paper_count += len(retrieval_result.papers)
+                all_candidates.extend(retrieval_result.papers)
+            except PaperRetrievalError as error:
+                self._record_retrieval_stats(trace, error.stats, accumulate=True)
+
+            stage_plan = plan.model_copy(
+                deep=True,
+                update={
+                    "search_queries": queries,
+                    "perspectives": [
+                        ResearchPerspective(
+                            path_id=f"stage-{stage.sequence}",
+                            name=stage.name,
+                            description=stage.focus,
+                            questions=[stage.focus],
+                            search_queries=queries,
+                        )
+                    ],
+                    "expected_subdirections": [
+                        stage.name,
+                        *plan.expected_subdirections,
+                    ][: max(3, len(plan.expected_subdirections))],
+                },
+            )
+            ranking_result, duration = context.call(
+                "ranking",
+                self.config.ranking_timeout_seconds,
+                self.ranker.rank,
+                all_candidates,
+                stage_plan,
+                limit=self.config.stage_papers_per_stage,
+            )
+            trace.ranking_duration_ms += duration
+            self._record_ranking_stats(trace, ranking_result.stats)
+            stage_papers = ranking_result.papers
+            stage.selected_paper_ids = [paper.paper_id for paper in stage_papers]
+            stage_rankings.append(stage_papers)
+            progress = 0.46 + 0.08 * ((index + 1) / max(1, stage_count))
+            self._emit(
+                progress_callback,
+                "stage_retrieval_ready",
+                progress,
+                True,
+                ["research_plan"],
+                {
+                    "stage_id": stage.stage_id,
+                    "stage_sequence": stage.sequence,
+                    "research_plan": plan.model_dump(mode="json"),
+                },
+            )
+
+        merged = self._merge_stage_rankings(ranked, stage_rankings)
+        kept_ids = {paper.paper_id for paper in merged}
+        for stage in plan.development_stage_plans:
+            stage.selected_paper_ids = [
+                paper_id
+                for paper_id in stage.selected_paper_ids
+                if paper_id in kept_ids
+            ]
+        trace.stage_bound_paper_count = len(
+            {
+                paper_id
+                for stage in plan.development_stage_plans
+                for paper_id in stage.selected_paper_ids
+            }
+        )
+        trace.selected_paper_count = len(merged)
+        return merged or ranked
+
+    def _merge_stage_rankings(
+        self,
+        global_ranked: list[Any],
+        stage_rankings: list[list[Any]],
+    ) -> list[Any]:
+        limit = self.config.selected_paper_limit
+        selected: list[Any] = []
+        seen: set[str] = set()
+
+        def add(paper: Any) -> None:
+            if len(selected) >= limit or paper.paper_id in seen:
+                return
+            selected.append(paper)
+            seen.add(paper.paper_id)
+
+        for paper in global_ranked:
+            if paper.is_canonical or paper.reading_priority == "core":
+                add(paper)
+        max_stage_size = max((len(items) for items in stage_rankings), default=0)
+        for paper_index in range(max_stage_size):
+            for papers in stage_rankings:
+                if paper_index < len(papers):
+                    add(papers[paper_index])
+        for paper in global_ranked:
+            add(paper)
+        return selected
 
     @staticmethod
     def _with_retry(quality: ContentQuality, *, selected: int, status: str) -> ContentQuality:
@@ -696,6 +950,9 @@ class DomainOnboardingPipeline:
         trace.ranking_vectorizer_fallback_used = (
             trace.ranking_vectorizer_fallback_used or stats.vectorizer_fallback_used
         )
+        trace.ranking_strategy = stats.ranking_strategy
+        trace.ranking_path_candidate_counts = dict(stats.per_path_candidate_counts)
+        trace.ranking_selected_path_counts = dict(stats.selected_path_counts)
         trace.low_relevance_filtered_count = stats.low_relevance_filtered_count
 
     def _record_retrieval_stats(
@@ -767,6 +1024,14 @@ def create_default_pipeline(
             configured,
             route_name=section,
         )
+    configured_stage_planning = os.getenv(
+        "DOMAIN_ONBOARDING_STAGE_PLANNING_MODELS"
+    ) or os.getenv("DOMAIN_ONBOARDING_PLANNING_MODELS")
+    section_models["stage_planning"] = routed_model_from_env(
+        model,
+        configured_stage_planning,
+        route_name="stage_planning",
+    )
     configured_repair = (
         os.getenv("DOMAIN_ONBOARDING_REPAIR_MODELS")
         or configured_generation
@@ -795,16 +1060,19 @@ def create_default_pipeline(
     local_embedding_model = os.getenv(
         "DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL", ""
     ).strip()
+    embedding_enabled = os.getenv(
+        "DOMAIN_ONBOARDING_EMBEDDING_ENABLED", "true"
+    ).strip().lower() not in {"0", "false", "no", "off"}
     remote_embedding_model = os.getenv(
-        "DOMAIN_ONBOARDING_EMBEDDING_MODEL", ""
+        "DOMAIN_ONBOARDING_EMBEDDING_MODEL", "qwen3-embedding"
     ).strip()
     embedding_provider = None
-    if local_embedding_model:
+    if embedding_enabled and local_embedding_model:
         embedding_provider = FastEmbedProvider(
             local_embedding_model,
             cache_dir=os.getenv("DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR") or None,
         )
-    elif remote_embedding_model:
+    elif embedding_enabled and remote_embedding_model:
         embedding_provider = OpenAIEmbeddingProvider(model, remote_embedding_model)
     vectorizer = (
         CachedEmbeddingTextVectorizer(
@@ -843,6 +1111,7 @@ def create_default_pipeline(
             max_queries_per_source=settings.retrieval_queries_per_source,
         ),
         ranker=WeightedPaperRanker(settings, vectorizer=vectorizer),
+        coverage_analyzer=PaperCoverageAnalyzer(settings, vectorizer=vectorizer),
         generator=generator,
         evaluator=CompositeQualityEvaluator(settings, evidence_vectorizer=vectorizer),
         repairer=TargetedRepairer(generator, settings),

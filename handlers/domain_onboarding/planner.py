@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from .canonical_papers import CanonicalPaperRegistry
 from .config import DomainOnboardingConfig
 from .llm import StructuredLLMError, invoke_json
+from .prompts import planning_system_prompt
 from .schemas import (
     DomainResearchPlan,
     LearnerProfile,
@@ -44,6 +45,20 @@ _DOMAIN_ALIASES = {
 _DOMAIN_CANONICAL_NAMES = {
     "rag": "检索增强生成",
 }
+_DOMAIN_EXPANSIONS = {
+    "retrieval-augmented generation": [
+        "RAG",
+        "retrieval augmented generation",
+        "knowledge-grounded generation",
+        "dense retrieval",
+        "reranking",
+    ],
+    "graph neural networks": ["GNN", "graph representation learning", "message passing neural networks"],
+    "diffusion models": ["denoising diffusion probabilistic models", "score-based generative models"],
+    "multi-agent systems": ["MAS", "agent collaboration", "agent coordination"],
+    "multi-agent debate": ["multi-agent deliberation", "LLM debate", "agent collaboration"],
+    "multimodal large language models": ["MLLM", "vision-language models", "multimodal foundation models"],
+}
 
 
 class StormLitePlanner:
@@ -58,16 +73,11 @@ class StormLitePlanner:
         profile: LearnerProfile,
         on_delta: Callable[[str, str], None] | None = None,
     ) -> PlanningResult:
-        system_prompt = (
-            "You are a STORM-lite research planner. Return one JSON object only. "
-            "Decompose the domain from multiple research perspectives before retrieval. "
-            "Schema: normalized_domain:string, perspectives:[{name,description,questions:[string]}], "
-            "search_queries:[string], expected_subdirections:[string]. "
-            "Create at least three non-duplicate perspectives. Search queries must include English "
-            "technical terms and cover survey, foundational work, methods, evaluation and recent progress."
-        )
+        del profile
+        domain_query = self._extract_domain(query)
+        system_prompt = planning_system_prompt()
         user_prompt = json.dumps(
-            {"query": query, "learner_profile": profile.model_dump(mode="json")},
+            {"domain_query": domain_query},
             ensure_ascii=False,
         )
         try:
@@ -83,28 +93,31 @@ class StormLitePlanner:
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
-            plan.search_queries = self._with_canonical_query(plan, profile)
+            plan = self._expand_plan_queries(plan)
             return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
-            return PlanningResult(plan=self._fallback_plan(query, profile), stats=error.stats)
+            return PlanningResult(plan=self._fallback_plan(domain_query), stats=error.stats)
         except (ValidationError, ValueError):
-            return PlanningResult(plan=self._fallback_plan(query, profile), stats=stats)
+            return PlanningResult(plan=self._fallback_plan(domain_query), stats=stats)
 
     def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
         domain = self._extract_domain(query)
         english = _DOMAIN_ALIASES.get(domain.lower(), _DOMAIN_ALIASES.get(domain, domain))
         perspectives = [
             ResearchPerspective(
+                path_id="foundations",
                 name="理论基础与问题定义",
                 description="梳理核心任务、基本假设和必要前置知识。",
                 questions=["该领域解决什么问题？", "核心概念与理论基础是什么？"],
             ),
             ResearchPerspective(
+                path_id="methods",
                 name="方法演进与代表工作",
                 description="追踪奠基工作、主要范式及其演进。",
                 questions=["哪些工作奠定了研究范式？", "方法如何演进？"],
             ),
             ResearchPerspective(
+                path_id="evaluation-frontier",
                 name="评测、局限与前沿",
                 description="关注数据集、评价方法、开放问题和近期进展。",
                 questions=["如何评测？", "当前瓶颈和前沿方向是什么？"],
@@ -118,12 +131,13 @@ class StormLitePlanner:
         ]
         plan = DomainResearchPlan(
             normalized_domain=domain,
+            translated_domain=english,
+            expanded_terms=self._expanded_terms(english),
             perspectives=perspectives,
             search_queries=queries[: self.config.search_queries_limit],
             expected_subdirections=["理论与基础", "核心方法", "评测与应用", "开放问题与前沿"],
         )
-        plan.search_queries = self._with_canonical_query(plan, profile or LearnerProfile())
-        return plan
+        return self._expand_plan_queries(plan)
 
     @classmethod
     def _extract_domain(cls, query: str) -> str:
@@ -182,16 +196,38 @@ class StormLitePlanner:
         ).strip(" \t\r\n，。！？!?：:")
         return domain or str(value or "").strip()
 
-    def _with_canonical_query(
-        self, plan: DomainResearchPlan, profile: LearnerProfile
-    ) -> list[str]:
-        specs = self.canonical_registry.specs(plan.normalized_domain)
-        goal_text = f"{profile.goal} {profile.preference}".lower()
-        preferred_roles = (
-            ["evaluation", "method", "foundational"]
-            if profile.preference == "experiment_first" or any(term in goal_text for term in ("实验", "复现", "基线", "benchmark"))
-            else ["foundational", "survey", "method", "evaluation"]
+    @staticmethod
+    def _expanded_terms(english_domain: str) -> list[str]:
+        key = english_domain.lower().strip()
+        return list(dict.fromkeys([english_domain, *_DOMAIN_EXPANSIONS.get(key, [])]))
+
+    def _expand_plan_queries(self, plan: DomainResearchPlan) -> DomainResearchPlan:
+        english = plan.translated_domain.strip() or _DOMAIN_ALIASES.get(
+            plan.normalized_domain.lower(),
+            _DOMAIN_ALIASES.get(plan.normalized_domain, plan.normalized_domain),
         )
+        plan.translated_domain = english
+        plan.expanded_terms = list(
+            dict.fromkeys([*plan.expanded_terms, *self._expanded_terms(english)])
+        )
+        templates = (
+            f'"{english}" fundamentals problem definition survey',
+            f'"{english}" methods architectures seminal papers',
+            f'"{english}" benchmark evaluation limitations recent advances',
+        )
+        for index, perspective in enumerate(plan.perspectives):
+            if not perspective.search_queries:
+                perspective.search_queries = [
+                    templates[index]
+                    if index < len(templates)
+                    else f'"{english}" {perspective.name} research'
+                ]
+        plan.search_queries = self._with_canonical_query(plan)
+        return DomainResearchPlan.model_validate(plan.model_dump())
+
+    def _with_canonical_query(self, plan: DomainResearchPlan) -> list[str]:
+        specs = self.canonical_registry.specs(plan.normalized_domain)
+        preferred_roles = ["foundational", "survey", "method", "evaluation"]
         ordered = sorted(
             specs,
             key=lambda spec: preferred_roles.index(spec.role) if spec.role in preferred_roles else len(preferred_roles),
@@ -200,6 +236,14 @@ class StormLitePlanner:
             f"ARXIV:{spec.arxiv_id}" if spec.arxiv_id else f'"{spec.title}"'
             for spec in ordered
         ]
-        return list(dict.fromkeys([*exact, *plan.search_queries]))[
+        path_queries: list[str] = []
+        max_queries = max((len(path.search_queries) for path in plan.perspectives), default=0)
+        for query_index in range(max_queries):
+            path_queries.extend(
+                path.search_queries[query_index]
+                for path in plan.perspectives
+                if query_index < len(path.search_queries)
+            )
+        return list(dict.fromkeys([*exact, *path_queries, *plan.search_queries]))[
             : self.config.search_queries_limit
         ]

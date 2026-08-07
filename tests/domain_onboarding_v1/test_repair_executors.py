@@ -70,17 +70,17 @@ class RepairDiffTests(unittest.TestCase):
             FakeJSONModel([repair_payload]), self.config
         )
         issue = QualityIssue(
-            issue_type="beginner_mismatch",
+            issue_type="weak_development_stage",
             severity="warning",
-            target_path="learning_path",
-            message="learning path does not match the learner profile",
-            recommended_action="rewrite learning path activities",
+            target_path="development_stages[1]",
+            message="development stage is incomplete",
+            recommended_action="rewrite development stage",
         )
         quality = ContentQuality(
             score=0.7,
             threshold=0.75,
             passed_hard_gates=True,
-            dimensions={"goal_alignment": 0.4},
+            dimensions={"development_coherence": 0.4},
             issues=[issue],
         )
 

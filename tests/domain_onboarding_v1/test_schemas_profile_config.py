@@ -55,7 +55,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         first = config.to_policy()
         second = config.to_policy()
 
-        self.assertEqual(first.policy_version, "domain-quality-v1.5.0")
+        self.assertEqual(first.policy_version, "domain-quality-v1.8.0")
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertEqual(sum(first.dimension_weights.values()), 1.0)
         self.assertGreater(config.planning_timeout_seconds, 60.0)
@@ -64,16 +64,22 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_timeout_seconds,
         )
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
+        self.assertEqual(config.generation_development_timeout_seconds, 180.0)
         self.assertEqual(
             (
                 config.generation_development_max_tokens,
                 config.generation_landscape_max_tokens,
                 config.generation_learning_path_max_tokens,
             ),
-            (1600, 1200, 1400),
+            (3200, 3600, 3400),
         )
         self.assertLessEqual(
-            4 * config.generation_section_timeout_seconds,
+            config.generation_development_foundation_timeout_seconds
+            + config.generation_development_stage_timeout_seconds
+            + max(
+                config.generation_landscape_timeout_seconds,
+                config.generation_learning_path_timeout_seconds,
+            ),
             config.generation_timeout_seconds,
         )
 
@@ -81,7 +87,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             DomainOnboardingConfig(
                 generation_timeout_seconds=100.0,
-                generation_section_timeout_seconds=60.0,
+                generation_development_timeout_seconds=60.0,
+                generation_landscape_timeout_seconds=60.0,
             )
 
     def test_quality_policy_requires_complete_normalized_weights(self) -> None:
@@ -99,7 +106,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(DomainOnboardingPolicy(quality_threshold=0.8))
 
-        self.assertEqual(registry.versions(), ["domain-quality-v1.5.0"])
+        self.assertEqual(registry.versions(), ["domain-quality-v1.8.0"])
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
@@ -300,7 +307,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIsNone(profile.time_budget_weeks)
         self.assertTrue(profile.goal)
 
-    def test_metadata_has_priority(self) -> None:
+    def test_metadata_does_not_personalize_standard_route(self) -> None:
         request = DomainOnboardingRequest(
             query="我想学习 RAG",
             metadata={
@@ -311,18 +318,17 @@ class ProfileTests(unittest.TestCase):
             },
         )
         profile = self.builder.build(request)
-        self.assertEqual(profile.background, ["机器学习"])
-        self.assertEqual(profile.time_budget_weeks, 8)
-        self.assertEqual(profile.preference, "theory_first")
+        self.assertEqual(profile.background, [])
+        self.assertEqual(profile.known_concepts, [])
+        self.assertIsNone(profile.time_budget_weeks)
+        self.assertEqual(profile.preference, "balanced")
 
-    def test_rules_parse_background_time_and_preference(self) -> None:
+    def test_query_does_not_personalize_standard_route(self) -> None:
         request = DomainOnboardingRequest(
             query="我已经学过 Transformer，希望六周完成一个实验，偏向实践"
         )
         profile = self.builder.build(request)
-        self.assertIn("Transformer", profile.background[0])
-        self.assertEqual(profile.time_budget_weeks, 6)
-        self.assertEqual(profile.preference, "experiment_first")
+        self.assertEqual(profile, self.builder.build(DomainOnboardingRequest(query="RAG")))
 
 
 if __name__ == "__main__":

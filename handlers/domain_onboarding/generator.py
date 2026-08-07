@@ -14,13 +14,23 @@ from .config import DomainOnboardingConfig
 from .learning_bindings import LearningPaperBinder
 from .llm import StructuredLLMError, invoke_json
 from .model_routing import routing_snapshot, run_with_model_route
+from .profile import standard_novice_profile
+from .prompts import (
+    development_foundation_prompt,
+    development_stage_content_prompt,
+    development_stage_planning_prompt,
+    full_generation_system_prompt,
+    section_system_prompt,
+)
 from .relations import SemanticRelationResolver
 from .schemas import (
+    ConceptDetail,
     CurrentLandscape,
     DevelopmentStage,
     DomainOnboardingOutput,
     DomainOnboardingRequest,
     DomainResearchPlan,
+    DevelopmentStageResearchPlan,
     EvidenceClaim,
     GenerationResult,
     LearnerProfile,
@@ -34,6 +44,7 @@ from .schemas import (
     SelectedPaper,
     StageBreakthrough,
     SubdirectionDetail,
+    TechniqueDetail,
 )
 
 
@@ -72,7 +83,10 @@ class SimpleStagePathPlanner:
     ) -> list[LearningStep]:
         provided = raw_steps if isinstance(raw_steps, list) else []
         results: list[LearningStep] = []
-        week_windows = self._week_windows(profile.time_budget_weeks, len(self.stage_names))
+        # The public signature remains compatible, but scheduling is deliberately
+        # independent of any learner profile in the standard beginner route.
+        del profile
+        week_windows = [(None, None)] * len(self.stage_names)
         paper_by_id = {paper.paper_id: paper for paper in papers}
         for index, raw in enumerate(provided[: len(self.stage_names)], start=1):
             if not isinstance(raw, dict):
@@ -155,20 +169,6 @@ class SimpleStagePathPlanner:
         return results
 
     @staticmethod
-    def _week_windows(
-        total_weeks: int | None,
-        step_count: int,
-    ) -> list[tuple[int | None, int | None]]:
-        if total_weeks is None:
-            return [(None, None)] * step_count
-        windows = []
-        for index in range(step_count):
-            start = index * total_weeks // step_count + 1
-            end = max(start, (index + 1) * total_weeks // step_count)
-            windows.append((start, min(total_weeks, end)))
-        return windows
-
-    @staticmethod
     def _positive_int(value: object) -> int | None:
         try:
             parsed = int(value)
@@ -239,6 +239,92 @@ class StructuredOnboardingGenerator:
             raise
         return GenerationResult(output=output, stats=stats)
 
+    def plan_development_research(
+        self,
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
+        papers: list[RankedPaper],
+        on_delta: Callable[[str, str], None] | None = None,
+    ) -> tuple[list[DevelopmentStageResearchPlan], ModelCallStats]:
+        """Create a chronological outline before any stage-specific retrieval."""
+
+        user_payload = {
+            "domain": plan.normalized_domain,
+            "translated_domain": plan.translated_domain,
+            "expanded_terms": plan.expanded_terms,
+            "research_perspectives": [
+                perspective.model_dump(mode="json") for perspective in plan.perspectives
+            ],
+            "seed_papers": [
+                {
+                    "paper_id": paper.paper_id,
+                    "title": paper.title,
+                    "year": paper.year,
+                    "paper_role": paper.paper_role,
+                }
+                for paper in papers
+            ],
+        }
+        section_model = self.section_models.get(
+            "stage_planning", self.section_models.get("development", self.model)
+        )
+
+        def generate_candidate(candidate: Any, timeout_seconds: float | None):
+            payload, stats = invoke_json(
+                candidate,
+                system_prompt=development_stage_planning_prompt(request.language),
+                user_prompt=json.dumps(user_payload, ensure_ascii=False),
+                max_tokens=self.config.development_stage_planning_max_tokens,
+                timeout_seconds=timeout_seconds,
+                on_delta=on_delta,
+                stream_stage="stage_planning",
+            )
+            raw_plans = payload.get("development_stage_plans")
+            if not isinstance(raw_plans, list):
+                for wrapper in ("result", "data", "output"):
+                    nested = payload.get(wrapper)
+                    if isinstance(nested, dict) and isinstance(
+                        nested.get("development_stage_plans"), list
+                    ):
+                        raw_plans = nested["development_stage_plans"]
+                        break
+            if not isinstance(raw_plans, list):
+                raise GenerationError("stage planning is missing development_stage_plans")
+            try:
+                stages = [
+                    DevelopmentStageResearchPlan.model_validate(
+                        {
+                            **item,
+                            "search_queries": item.get("search_queries")
+                            or (
+                                [item["search_query"]]
+                                if str(item.get("search_query") or "").strip()
+                                else []
+                            ),
+                        }
+                    )
+                    for item in raw_plans[: self.config.max_development_stage_plans]
+                    if isinstance(item, dict)
+                ]
+            except ValidationError as error:
+                raise GenerationError(f"stage planning failed validation: {error}") from error
+            if len(stages) < 3 or [item.sequence for item in stages] != list(
+                range(1, len(stages) + 1)
+            ):
+                raise GenerationError("stage planning must contain 3-4 consecutive stages")
+            if any(index and not stage.transition_from_previous for index, stage in enumerate(stages)):
+                raise GenerationError("later stage plans require an explicit transition")
+            return stages, stats
+
+        try:
+            return run_with_model_route(
+                section_model,
+                generate_candidate,
+                timeout_seconds=self.config.development_stage_planning_timeout_seconds,
+            )
+        except StructuredLLMError as error:
+            raise GenerationError(str(error), stats=error.stats) from error
+
     def generate_incrementally(
         self,
         request: DomainOnboardingRequest,
@@ -285,9 +371,14 @@ class StructuredOnboardingGenerator:
             on_section(event_name, data, paths)
 
         try:
-            development_payload, development_stats = self._call_section(
-                "development", request, profile, plan, papers, payload, on_delta
-            )
+            if plan.development_stage_plans:
+                development_payload, development_stats = self._call_staged_development(
+                    request, plan, papers, on_delta
+                )
+            else:
+                development_payload, development_stats = self._call_section(
+                    "development", request, profile, plan, papers, payload, on_delta
+                )
         except GenerationError as error:
             raise GenerationError(
                 f"development section generation failed: {error}",
@@ -338,6 +429,184 @@ class StructuredOnboardingGenerator:
             output=self._normalize(payload, request, profile, plan, papers), stats=stats
         )
 
+    def _call_staged_development(
+        self,
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
+        papers: list[RankedPaper],
+        on_delta: Callable[[str, str], None] | None,
+    ) -> tuple[dict[str, Any], ModelCallStats]:
+        """Generate foundations once and each researched stage in its own bounded call."""
+
+        model = self.section_models.get("development", self.model)
+        foundation_payload, foundation_stats = self._invoke_development_piece(
+            model,
+            system_prompt=development_foundation_prompt(request.language),
+            user_payload={
+                "domain": plan.normalized_domain,
+                "allowed_papers": [
+                    {
+                        "paper_id": paper.paper_id,
+                        "title": paper.title,
+                        "paper_role": paper.paper_role,
+                    }
+                    for paper in papers
+                ],
+            },
+            max_tokens=self.config.generation_development_foundation_max_tokens,
+            timeout_seconds=self.config.generation_development_foundation_timeout_seconds,
+            stream_stage="development_foundation",
+            on_delta=on_delta,
+        )
+        foundation = self._unwrap_payload(foundation_payload)
+        if not isinstance(foundation.get("prerequisites"), list):
+            raise GenerationError(
+                "development foundation is missing prerequisites",
+                stats=foundation_stats,
+            )
+
+        paper_by_id = {paper.paper_id: paper for paper in papers}
+
+        def generate_stage(stage_plan: DevelopmentStageResearchPlan):
+            stage_papers = [
+                paper_by_id[paper_id]
+                for paper_id in stage_plan.selected_paper_ids
+                if paper_id in paper_by_id
+            ]
+            if not stage_papers:
+                raise GenerationError(
+                    f"stage {stage_plan.stage_id} has no available researched papers"
+                )
+            raw, item_stats = self._invoke_development_piece(
+                model,
+                system_prompt=development_stage_content_prompt(request.language),
+                user_payload={
+                    "domain": plan.normalized_domain,
+                    "stage_research_plan": stage_plan.model_dump(mode="json"),
+                    "stage_papers": [
+                        self._paper_prompt_payload(paper) for paper in stage_papers
+                    ],
+                },
+                max_tokens=self.config.generation_development_stage_max_tokens,
+                timeout_seconds=self.config.generation_development_stage_timeout_seconds,
+                stream_stage="development_stage",
+                on_delta=on_delta,
+            )
+            unwrapped = self._unwrap_payload(raw)
+            stage = unwrapped.get("development_stage") or unwrapped.get("stage")
+            if not isinstance(stage, dict):
+                stages = unwrapped.get("development_stages")
+                stage = stages[0] if isinstance(stages, list) and stages else None
+            if not isinstance(stage, dict):
+                raise GenerationError(
+                    f"stage {stage_plan.stage_id} response is missing development_stage",
+                    stats=item_stats,
+                )
+            return stage_plan.sequence, stage, unwrapped, item_stats
+
+        stage_results: dict[int, tuple[dict[str, Any], dict[str, Any], ModelCallStats]] = {}
+        failures: list[GenerationError] = []
+        with ThreadPoolExecutor(
+            max_workers=min(3, len(plan.development_stage_plans)),
+            thread_name_prefix="onboarding-development-stage",
+        ) as executor:
+            futures = {
+                executor.submit(generate_stage, stage_plan): stage_plan
+                for stage_plan in plan.development_stage_plans
+            }
+            for future in as_completed(futures):
+                try:
+                    sequence, stage, unwrapped, item_stats = future.result()
+                    stage_results[sequence] = (stage, unwrapped, item_stats)
+                except GenerationError as error:
+                    stage_plan = futures[future]
+                    failures.append(
+                        GenerationError(
+                            f"stage {stage_plan.stage_id} failed: {error}",
+                            stats=error.stats,
+                        )
+                    )
+        total_stats = ModelCallStats()
+        self._add_stats(total_stats, foundation_stats)
+        for _, _, item_stats in stage_results.values():
+            self._add_stats(total_stats, item_stats)
+        for error in failures:
+            self._add_stats(total_stats, error.stats)
+        if failures or len(stage_results) != len(plan.development_stage_plans):
+            details = "; ".join(str(error) for error in failures[:3])
+            raise GenerationError(
+                f"{len(failures) or 1} researched development stage calls failed"
+                + (f": {details}" if details else ""),
+                stats=total_stats,
+            ) from (failures[0] if failures else None)
+
+        combined = {
+            "domain": foundation.get("domain") or plan.normalized_domain,
+            "text": foundation.get("text") or "",
+            "prerequisites": foundation["prerequisites"],
+            "development_stages": [
+                stage_results[sequence][0] for sequence in sorted(stage_results)
+            ],
+            # Foundation calls deliberately do not own paper guidance or
+            # evidence; those bindings come from the independently researched
+            # historical stages below.
+            "paper_guidance": [],
+            "evidence_claims": [],
+        }
+        for sequence in sorted(stage_results):
+            _, unwrapped, _ = stage_results[sequence]
+            combined["paper_guidance"].extend(unwrapped.get("paper_guidance") or [])
+            combined["evidence_claims"].extend(unwrapped.get("evidence_claims") or [])
+        completed = self._complete_section_payload(
+            "development",
+            combined,
+            papers,
+            default_domain=plan.normalized_domain,
+            plan=plan,
+        )
+        return completed, total_stats
+
+    def _invoke_development_piece(
+        self,
+        model: Any,
+        *,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        max_tokens: int,
+        timeout_seconds: float,
+        stream_stage: str,
+        on_delta: Callable[[str, str], None] | None,
+    ) -> tuple[dict[str, Any], ModelCallStats]:
+        def operation(candidate: Any, attempt_timeout: float | None):
+            return invoke_json(
+                candidate,
+                system_prompt=system_prompt,
+                user_prompt=json.dumps(user_payload, ensure_ascii=False),
+                max_tokens=max_tokens,
+                timeout_seconds=attempt_timeout,
+                on_delta=on_delta,
+                stream_stage=stream_stage,
+            )
+
+        try:
+            return run_with_model_route(
+                model,
+                operation,
+                timeout_seconds=timeout_seconds,
+            )
+        except StructuredLLMError as error:
+            raise GenerationError(str(error), stats=error.stats) from error
+
+    @staticmethod
+    def _unwrap_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        candidates = [payload]
+        candidates.extend(
+            value
+            for key in ("result", "data", "output")
+            if isinstance((value := payload.get(key)), dict)
+        )
+        return max(candidates, key=lambda item: len(item))
+
     @staticmethod
     def _add_stats(total: ModelCallStats, item: ModelCallStats) -> None:
         total.duration_ms += item.duration_ms
@@ -357,47 +626,32 @@ class StructuredOnboardingGenerator:
         completed: dict[str, Any],
         on_delta: Callable[[str, str], None] | None = None,
     ) -> tuple[dict[str, Any], ModelCallStats]:
-        instructions = {
-            "development": (
-                "Return domain, text, exactly 3 prerequisites, exactly 3 chronological development_stages, "
-                "up to 3 paper_guidance items and exactly 3 evidence_claims. Keep every text field concise. "
-                "historical_period must be real calendar years or eras, never learner weeks. "
-                "Use start_year/end_year when known; stage 1 has empty transition, later stages explain the causal transition. "
-                "Every stage must include exactly one breakthrough. Each breakthrough has breakthrough_id, name, description, "
-                "supporting_paper_ids, enabled_capabilities and limitation_problem_ids. Use only allowed paper IDs; "
-                "limitation_problem_ids may stay empty until the landscape section is resolved."
-            ),
-            "landscape": (
-                "Return current_landscape and up to 3 evidence_claims. Include exactly 3 problems and 3 subdirections. "
-                "Keep descriptions and research-question lists concise. "
-                "Each problem includes related papers, emerged_in_stage_id, affected_stage_ids and related_subdirection_ids. "
-                "Each subdirection includes related papers, emerged_in_stage_id and addresses_problem_ids. "
-                "Use research_plan.expected_subdirections as the intended domain taxonomy; do not replace it with generic "
-                "paper roles such as survey, method, evaluation, or application. Only emit a relation ID when the prose or "
-                "shared paper evidence supports that relation."
-            ),
-            "learning_path": (
-                "Return exactly five concise learning_path steps and up to 3 evidence_claims. Use only 1-2 items in each list. "
-                "Suggest papers according to the actual learning task: "
-                "survey/foundational work for concepts, foundational/classic methods for architecture, method papers for improvements, "
-                "an implementable method as the experiment baseline, evaluation papers only for learning evaluation, and recent "
-                "problem-driven methods for the frontier. An evaluation or application paper must never be the sole baseline paper. "
-                "Each step needs deliverables; the experiment step also needs reproducibility_checklist and evaluation_metrics."
-            ),
-        }
         examples = {
             "development": (
                 '{"domain":"domain","text":"summary","prerequisites":[{"name":"foundation",'
-                '"why_needed":"reason","key_points":["concept"],"related_paper_ids":[]}],'
+                '"why_needed":"reason","key_points":[{"name":"concept","explanation":"plain explanation",'
+                '"why_it_matters":"learning value","related_paper_ids":["paper_1"]}],"related_paper_ids":["paper_1"]}],'
                 '"development_stages":[{"stage_id":"stage_1","name":"stage","historical_period":"2020-2022",'
-                '"summary":"summary","related_paper_ids":["paper_1"],"breakthroughs":['
+                '"summary":"summary","related_paper_ids":["paper_1"],"core_concepts":[{"name":"concept",'
+                '"explanation":"plain explanation","why_it_matters":"learning value","related_paper_ids":["paper_1"]}],'
+                '"main_techniques":[{"name":"technique","explanation":"what it does","mechanism":"how it works",'
+                '"why_it_matters":"problem solved","related_paper_ids":["paper_1"]}],"breakthroughs":['
                 '{"breakthrough_id":"breakthrough_1","name":"advance","description":"what changed",'
                 '"supporting_paper_ids":["paper_1"],"enabled_capabilities":["capability"],'
                 '"limitation_problem_ids":[]}]}],"paper_guidance":[],"evidence_claims":[]}'
             ),
             "landscape": (
                 '{"current_landscape":{"problems":["problem"],"subdirections":["direction"],'
-                '"problem_details":[],"subdirection_details":[]},"evidence_claims":[]}'
+                '"problem_details":[],"subdirection_details":[{"subdirection_id":"sub_1","name":"direction",'
+                '"description":"scope","why_it_matters":"importance","typical_tasks":["task"],'
+                '"prerequisites":["foundation"],"common_techniques":[{"name":"method",'
+                '"explanation":"what it does","mechanism":"how it works","why_it_matters":"value",'
+                '"related_paper_ids":["paper_1"]}],"datasets_and_benchmarks":["dataset"],'
+                '"evaluation_metrics":["metric"],"starter_project":"reproduce a baseline",'
+                '"research_workflow":["reproduce","analyze","improve","evaluate"],'
+                '"research_questions":["question"],"related_paper_ids":["paper_1"],'
+                '"related_stage_ids":["stage_1"],"emerged_in_stage_id":"stage_1",'
+                '"addresses_problem_ids":["problem_1"]}]},"evidence_claims":[]}'
             ),
             "learning_path": (
                 '{"learning_path":[{"step":"1","goal":"goal","topics":["topic"],'
@@ -406,10 +660,7 @@ class StructuredOnboardingGenerator:
             ),
         }
         system_prompt = (
-            "You generate one section of a grounded domain onboarding result. Return one JSON object only. "
-            f"Write explanatory prose in {request.language}; preserve English paper titles and technical terms. "
-            "Use only allowed paper IDs and stage IDs. "
-            + instructions[section]
+            section_system_prompt(section, request.language)
             + " Use these exact top-level keys. Example JSON shape: "
             + examples[section]
         )
@@ -445,17 +696,23 @@ class StructuredOnboardingGenerator:
                     payload,
                     papers,
                     default_domain=plan.normalized_domain,
+                    plan=plan,
                 )
             except GenerationError as error:
                 error.stats = stats
                 raise
             return completed, stats
 
+        section_timeout = {
+            "development": self.config.generation_development_timeout_seconds,
+            "landscape": self.config.generation_landscape_timeout_seconds,
+            "learning_path": self.config.generation_learning_path_timeout_seconds,
+        }[section]
         try:
             completed, stats = run_with_model_route(
                 section_model,
                 generate_candidate,
-                timeout_seconds=self.config.generation_section_timeout_seconds,
+                timeout_seconds=section_timeout,
             )
             stats.model_calls = max(
                 stats.model_calls,
@@ -482,6 +739,7 @@ class StructuredOnboardingGenerator:
         papers: list[RankedPaper],
         *,
         default_domain: str = "",
+        plan: DomainResearchPlan | None = None,
     ) -> dict[str, Any]:
         expected = {
             "development": ("domain", "prerequisites", "development_stages"),
@@ -538,13 +796,7 @@ class StructuredOnboardingGenerator:
             elif isinstance(prereq_value, str) and prereq_value.strip():
                 completed["prerequisites"] = [{"name": prereq_value.strip()}]
             else:
-                domain = completed.get("domain") or default_domain
-                completed["prerequisites"] = [
-                    {"prerequisite_id": "foundation", "name": f"{domain} 基础知识",
-                     "why_needed": "建立领域核心概念与术语体系，为后续学习奠定基础",
-                     "key_points": ["核心概念", "基础理论", "术语体系"],
-                     "related_paper_ids": []}
-                ]
+                raise GenerationError("development section is missing prerequisites")
         if section == "development" and not isinstance(
             completed.get("development_stages"), list
         ):
@@ -557,23 +809,9 @@ class StructuredOnboardingGenerator:
                     stages_value = alias_value
                     break
             if not isinstance(stages_value, list) or not stages_value:
-                domain = completed.get("domain") or default_domain
-                paper_ids = [p.paper_id for p in papers[:2]] if papers else []
-                completed["development_stages"] = [
-                    {"stage_id": "stage_fallback", "name": f"{domain} 发展概览",
-                     "sequence": 1,
-                     "historical_period": "请重新生成获取完整脉络",
-                     "summary": "模型未能成功生成完整发展脉络。点击下方重新生成按钮获取更优内容。",
-                     "related_paper_ids": paper_ids,
-                     "breakthroughs": [
-                         {"breakthrough_id": "fallback", "name": "请重新生成获取完整内容",
-                          "description": "当前内容为占位信息，请点击重新生成获取完整领域发展路径与关键技术突破。",
-                          "supporting_paper_ids": paper_ids,
-                          "enabled_capabilities": [], "limitation_problem_ids": []}
-                     ]}
-                ]
+                raise GenerationError("development section is missing development stages")
         if section == "development":
-            self._sanitize_development_paper_ids(completed, papers)
+            self._sanitize_development_paper_ids(completed, papers, plan=plan)
         if section == "landscape" and not isinstance(
             completed.get("current_landscape"), dict
         ):
@@ -600,26 +838,7 @@ class StructuredOnboardingGenerator:
             ):
                 completed["current_landscape"] = landscape
             else:
-                domain = completed.get("domain") or default_domain
-                completed["current_landscape"] = {
-                    "problems": [f"{domain} 领域前沿问题"],
-                    "subdirections": [f"{domain} 研究方向"],
-                    "problem_details": [
-                        {"problem_id": "fallback", "name": f"{domain} 领域前沿问题",
-                         "description": "模型未能成功生成完整概念全景。点击重新生成按钮获取更优内容。",
-                         "related_paper_ids": [], "related_stage_ids": [],
-                         "emerged_in_stage_id": "", "affected_stage_ids": [],
-                         "related_subdirection_ids": []}
-                    ],
-                    "subdirection_details": [
-                        {"subdirection_id": "fallback", "name": f"{domain} 研究方向",
-                         "description": "请重新生成获取完整研究分支与前沿方向。",
-                         "why_it_matters": "理解领域分支有助于选择合适的研究切入点",
-                         "research_questions": ["请重新生成获取完整内容"],
-                         "related_paper_ids": [], "related_stage_ids": [],
-                         "emerged_in_stage_id": "", "addresses_problem_ids": []}
-                    ],
-                }
+                raise GenerationError("landscape section is missing current_landscape")
         if section == "learning_path" and not isinstance(
             completed.get("learning_path"), list
         ):
@@ -628,14 +847,7 @@ class StructuredOnboardingGenerator:
                     completed["learning_path"] = completed[alias]
                     break
             if not isinstance(completed.get("learning_path"), list):
-                completed["learning_path"] = [
-                    {"step": "1", "goal": "了解领域基础知识",
-                     "topics": ["核心概念", "基础论文"],
-                     "paper_ids": [p.paper_id for p in papers[:2]] if papers else [],
-                     "activities": ["阅读综述性论文", "梳理核心术语"],
-                     "completion_criteria": ["理解领域核心概念"],
-                     "expected_outcome": "建立领域基础知识框架"}
-                ]
+                raise GenerationError("learning path section is missing learning_path")
         self._validate_section_payload(section, completed, papers)
         return completed
 
@@ -643,6 +855,8 @@ class StructuredOnboardingGenerator:
         self,
         payload: dict[str, Any],
         papers: list[RankedPaper],
+        *,
+        plan: DomainResearchPlan | None = None,
     ) -> None:
         """Bind generated development claims to canonical retrieved paper IDs."""
         allowed_ids = {paper.paper_id for paper in papers}
@@ -650,18 +864,71 @@ class StructuredOnboardingGenerator:
         stages = payload.get("development_stages")
         if not isinstance(stages, list) or not ranked_ids:
             return
+        stage_plans = plan.development_stage_plans if plan is not None else []
+        if stage_plans and len(stages) != len(stage_plans):
+            raise GenerationError(
+                "development stages do not match the researched stage outline"
+            )
         for index, stage in enumerate(stages):
             if not isinstance(stage, dict):
                 continue
+            planned = stage_plans[index] if index < len(stage_plans) else None
+            if planned is not None:
+                stage.update(
+                    {
+                        "stage_id": planned.stage_id,
+                        "sequence": planned.sequence,
+                        "name": planned.name,
+                        "historical_period": planned.period,
+                        "period": planned.period,
+                    }
+                )
+                if not str(stage.get("transition_from_previous") or "").strip():
+                    stage["transition_from_previous"] = planned.transition_from_previous
+                stage_allowed_ids = set(planned.selected_paper_ids) & allowed_ids
+            else:
+                stage_allowed_ids = allowed_ids
             stage_ids = [
                 paper_id
                 for paper_id in self._strings(stage.get("related_paper_ids"))
-                if paper_id in allowed_ids
+                if paper_id in stage_allowed_ids
             ]
             if not stage_ids:
-                stage_ids = [ranked_ids[index % len(ranked_ids)]]
+                stage_ids = [
+                    paper_id
+                    for paper_id in (
+                        planned.selected_paper_ids if planned is not None else ranked_ids
+                    )
+                    if paper_id in allowed_ids
+                ]
+            if not stage_ids:
+                raise GenerationError(
+                    f"development stage {index} has no researched paper evidence"
+                )
             stage["related_paper_ids"] = list(dict.fromkeys(stage_ids))
             breakthroughs = stage.get("breakthroughs")
+            if not isinstance(breakthroughs, list):
+                singular = (
+                    stage.get("breakthrough")
+                    or stage.get("key_breakthrough")
+                    or stage.get("major_breakthrough")
+                )
+                if isinstance(singular, dict):
+                    breakthroughs = [singular]
+                    stage["breakthroughs"] = breakthroughs
+            for collection_name in ("core_concepts", "main_techniques"):
+                collection = stage.get(collection_name)
+                if not isinstance(collection, list):
+                    continue
+                for item in collection:
+                    if not isinstance(item, dict):
+                        continue
+                    item_ids = [
+                        paper_id
+                        for paper_id in self._strings(item.get("related_paper_ids"))
+                        if paper_id in stage_ids
+                    ]
+                    item["related_paper_ids"] = item_ids or list(stage_ids)
             if not isinstance(breakthroughs, list):
                 continue
             for breakthrough in breakthroughs:
@@ -671,6 +938,8 @@ class StructuredOnboardingGenerator:
                     paper_id
                     for paper_id in self._strings(
                         breakthrough.get("supporting_paper_ids")
+                        or breakthrough.get("paper_ids")
+                        or breakthrough.get("related_paper_ids")
                     )
                     if paper_id in allowed_ids
                 ]
@@ -688,9 +957,17 @@ class StructuredOnboardingGenerator:
         completed: dict[str, Any],
     ) -> dict[str, Any]:
         """Send each section only the context it can actually consume."""
+        del profile
         plan_payload = plan.model_dump(
             mode="json",
-            include={"normalized_domain", "perspectives", "expected_subdirections"},
+            include={
+                "normalized_domain",
+                "translated_domain",
+                "expanded_terms",
+                "perspectives",
+                "expected_subdirections",
+                "development_stage_plans",
+            },
         )
         completed_keys = {
             "development": set(),
@@ -699,10 +976,9 @@ class StructuredOnboardingGenerator:
         }[section]
         return {
             "request": {
-                "query": request.query,
+                "domain": plan.normalized_domain,
                 "language": request.language,
             },
-            "learner_profile": profile.model_dump(mode="json"),
             "research_plan": plan_payload,
             "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
             "completed_sections": {
@@ -797,47 +1073,10 @@ class StructuredOnboardingGenerator:
         issues: list[QualityIssue] | None = None,
         on_delta: Callable[[str, str], None] | None = None,
     ) -> tuple[dict[str, Any], ModelCallStats]:
-        system_prompt = (
-            f"You generate a beginner-friendly domain onboarding plan in {request.language}. Return one JSON object only. "
-            "You MUST use only paper_id values from allowed_papers; never invent or modify paper metadata. "
-            "Output fields: domain, text, prerequisites, development_stages, current_landscape, learning_path. "
-            "Each prerequisite has name, why_needed, key_points, related_paper_ids. Each development stage has "
-            "stage_id, name, historical_period, start_year, end_year, summary, motivation, transition_from_previous, related_paper_ids, prerequisite_ids, "
-            "core_concepts, main_techniques, open_problems and breakthroughs. Each breakthrough has breakthrough_id, name, "
-            "description, supporting_paper_ids, enabled_capabilities and limitation_problem_ids. Use short stable IDs such as stage_1. "
-            "current_landscape has problems:list[str], subdirections:list[str], problem_details and subdirection_details. "
-            "Each problem detail has name, description, related_paper_ids and related_stage_ids. Each subdirection detail "
-            "has name, description, why_it_matters, research_questions, related_paper_ids and related_stage_ids. "
-            "Ground every landscape detail in allowed paper IDs and stage IDs. "
-            "Use research_plan.expected_subdirections as the domain taxonomy instead of generic paper-role categories. "
-            "Connect stages, breakthroughs, problems and subdirections only when explicit prose or shared paper evidence supports the edge. "
-            "Each learning step has step, goal, topics, paper_ids, "
-            "activities, completion_criteria, expected_outcome. Produce 3 development stages and 3-5 subdirections. "
-            "Also output evidence_claims:[{claim,supporting_paper_ids,support_type}]. Important technical or historical "
-            "claims must cite allowed paper IDs. support_type is abstract_explicit, metadata_inference, or background_synthesis. "
-            "Evidence claims must collectively cover every development stage and every current-landscape problem/subdirection. "
-            "Use abstract_explicit only when every cited paper has a non-empty abstract and directly supports the claim; "
-            "metadata_inference and background_synthesis are weak evidence and must not be phrased as proven facts. "
-            "Prefer concise abstract_explicit claims copied faithfully from a paper abstract, and retain the paper's exact "
-            "English technical terms in parentheses so cross-language evidence can be reproduced. Use one paper per claim "
-            "unless the claim truly synthesizes multiple papers. "
-            "Also output paper_guidance:[{paper_id,contribution,reading_focus:list[str]}] for every core or recommended paper. "
-            "contribution explains why the paper belongs at this learning stage; reading_focus contains 1-3 concrete reading targets. "
-            "Development stages describe field history, not the learner schedule. historical_period uses calendar years/eras and never weeks. Every "
-            "stage after the first must explain how the earlier limitation motivated the next stage. "
-            "Use five ordered learning steps: 基础准备, 核心概念, 代表方法与论文, 工具、数据集与基线实验, 前沿问题与研究切入. "
-            "Paper IDs in learning steps are suggestions that code will verify against the learning task. Use surveys/foundational work "
-            "for concepts, foundational/classic methods for architecture, method papers for improvements, an implementable method for "
-            "baseline reproduction, evaluation papers for evaluation, and recent problem-driven methods for the frontier. Never use an "
-            "evaluation framework or a narrow application as the sole baseline or frontier entry. "
-            "Each learning step includes estimated_hours and milestone; its content must fit the learner time budget. "
-            "Keep the JSON concise: exactly 3 prerequisites and 3 development stages, 3-5 subdirections, "
-            "at most 3 items in each explanatory list, and at most 6 evidence claims. "
-            "Return paper IDs only inside generated sections; paper metadata is attached by code."
-        )
+        del profile
+        system_prompt = full_generation_system_prompt(request.language)
         user_payload: dict[str, Any] = {
-            "request": request.model_dump(mode="json"),
-            "learner_profile": profile.model_dump(mode="json"),
+            "request": {"domain": plan.normalized_domain, "language": request.language},
             "research_plan": plan.model_dump(mode="json"),
             "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
         }
@@ -887,6 +1126,9 @@ class StructuredOnboardingGenerator:
         plan: DomainResearchPlan,
         papers: list[RankedPaper],
     ) -> DomainOnboardingOutput:
+        # Direct generator callers may still pass a legacy inferred profile.
+        # Normalize it away so every entry point produces the same route.
+        profile = standard_novice_profile()
         guidance = self._paper_guidance(payload.get("paper_guidance"))
         references = {
             paper.paper_id: PaperReference(
@@ -909,6 +1151,7 @@ class StructuredOnboardingGenerator:
         }
         prerequisites = self._normalize_prerequisites(payload.get("prerequisites"), references)
         stages = self._normalize_stages(payload.get("development_stages"), references, prerequisites, papers)
+        stages = self._align_stages_to_research_plan(stages, plan, references)
         landscape_raw = payload.get("current_landscape") if isinstance(payload.get("current_landscape"), dict) else {}
         landscape = self._normalize_landscape(
             landscape_raw,
@@ -973,6 +1216,61 @@ class StructuredOnboardingGenerator:
         except ValidationError as error:
             raise GenerationError(f"generated output failed validation: {error}") from error
 
+    @staticmethod
+    def _align_stages_to_research_plan(
+        stages: list[DevelopmentStage],
+        plan: DomainResearchPlan,
+        references: dict[str, PaperReference],
+    ) -> list[DevelopmentStage]:
+        researched = plan.development_stage_plans
+        if not researched:
+            return stages
+        if len(stages) != len(researched):
+            raise GenerationError(
+                "generated development stages do not match the researched stage outline"
+            )
+        for index, (stage, stage_plan) in enumerate(zip(stages, researched, strict=True)):
+            allowed_ids = {
+                paper_id
+                for paper_id in stage_plan.selected_paper_ids
+                if paper_id in references
+            }
+            if not allowed_ids:
+                raise GenerationError(
+                    f"researched development stage {index} has no selected papers"
+                )
+            stage.stage_id = stage_plan.stage_id
+            stage.sequence = stage_plan.sequence
+            stage.name = stage_plan.name
+            stage.period = stage_plan.period
+            stage.historical_period = stage_plan.period
+            stage.previous_stage_id = (
+                None if index == 0 else researched[index - 1].stage_id
+            )
+            if not stage.transition_from_previous:
+                stage.transition_from_previous = stage_plan.transition_from_previous
+            stage.related_paper_ids = [
+                paper_id for paper_id in stage.related_paper_ids if paper_id in allowed_ids
+            ] or list(stage_plan.selected_paper_ids)
+            stage.representative_papers = [
+                references[paper_id]
+                for paper_id in stage.related_paper_ids
+                if paper_id in references
+            ]
+            for detail in [*stage.core_concepts, *stage.main_techniques]:
+                detail.related_paper_ids = [
+                    paper_id
+                    for paper_id in detail.related_paper_ids
+                    if paper_id in allowed_ids
+                ] or list(stage.related_paper_ids)
+            for breakthrough in stage.breakthroughs:
+                breakthrough.supporting_paper_ids = [
+                    paper_id
+                    for paper_id in breakthrough.supporting_paper_ids
+                    if paper_id in allowed_ids
+                ] or list(stage.related_paper_ids)
+        return stages
+
     def model_routing_snapshot(self) -> dict[str, Any]:
         models = {
             "generation": self.model,
@@ -1020,7 +1318,36 @@ class StructuredOnboardingGenerator:
             if not isinstance(item, dict) or not str(item.get("claim") or "").strip():
                 continue
             normalized_claim = str(item["claim"]).strip()
-            paper_ids = self._valid_ids(item.get("supporting_paper_ids"), references)
+            paper_ids = self._valid_ids(
+                item.get("supporting_paper_ids")
+                or item.get("paper_ids")
+                or item.get("evidence_paper_ids")
+                or item.get("citations"),
+                references,
+            )
+            evidence = item.get("evidence")
+            if isinstance(evidence, list):
+                paper_ids = list(
+                    dict.fromkeys(
+                        [*paper_ids, *self._valid_ids(evidence, references)]
+                    )
+                )
+            elif isinstance(evidence, str):
+                # Some JSON models provide a grounded prose sentence instead
+                # of a separate ID array. Accept only IDs that occur verbatim
+                # in that sentence and are already in the selected paper set.
+                paper_ids = list(
+                    dict.fromkeys(
+                        [
+                            *paper_ids,
+                            *(
+                                paper_id
+                                for paper_id in references
+                                if paper_id in evidence
+                            ),
+                        ]
+                    )
+                )
             if normalized_claim in claim_indexes:
                 existing = claims[claim_indexes[normalized_claim]]
                 existing.supporting_paper_ids = list(
@@ -1064,12 +1391,20 @@ class StructuredOnboardingGenerator:
             if not isinstance(item, dict) or not str(item.get("name") or "").strip():
                 continue
             ids = self._valid_ids(item.get("related_paper_ids"), references)
+            key_points = self._concept_details(
+                item.get("key_points"), references, fallback_ids=ids
+            )
+            ids = list(
+                dict.fromkeys(
+                    [*ids, *(paper_id for detail in key_points for paper_id in detail.related_paper_ids)]
+                )
+            )
             results.append(
                 Prerequisite(
                     prerequisite_id=item.get("prerequisite_id"),
                     name=str(item["name"]),
                     why_needed=str(item.get("why_needed") or ""),
-                    key_points=self._strings(item.get("key_points")),
+                    key_points=key_points,
                     related_paper_ids=ids,
                 )
             )
@@ -1198,12 +1533,40 @@ class StructuredOnboardingGenerator:
         for name in ordered_names:
             raw = by_name.get(name, {})
             paper_ids = self._valid_ids(raw.get("related_paper_ids"), references)
+            common_techniques = self._technique_details(
+                raw.get("common_techniques", raw.get("common_methods")),
+                references,
+                fallback_ids=paper_ids,
+            )
+            paper_ids = list(
+                dict.fromkeys(
+                    [
+                        *paper_ids,
+                        *(
+                            paper_id
+                            for technique in common_techniques
+                            for paper_id in technique.related_paper_ids
+                        ),
+                    ]
+                )
+            )
             results.append(
                 SubdirectionDetail(
                     subdirection_id=raw.get("subdirection_id"),
                     name=name,
                     description=str(raw.get("description") or ""),
                     why_it_matters=str(raw.get("why_it_matters") or ""),
+                    typical_tasks=self._strings(raw.get("typical_tasks")),
+                    prerequisites=self._strings(raw.get("prerequisites")),
+                    common_techniques=common_techniques,
+                    datasets_and_benchmarks=self._strings(
+                        raw.get("datasets_and_benchmarks", raw.get("datasets"))
+                    ),
+                    evaluation_metrics=self._strings(raw.get("evaluation_metrics")),
+                    starter_project=str(
+                        raw.get("starter_project") or raw.get("first_project") or ""
+                    ),
+                    research_workflow=self._strings(raw.get("research_workflow")),
                     research_questions=self._strings(raw.get("research_questions")),
                     related_paper_ids=paper_ids,
                     related_stage_ids=self._valid_stage_ids(
@@ -1313,6 +1676,25 @@ class StructuredOnboardingGenerator:
                 )
             )
             refs = [references[paper_id].model_copy(deep=True) for paper_id in ids]
+            core_concepts = self._concept_details(
+                item.get("core_concepts"), references, fallback_ids=ids
+            )
+            main_techniques = self._technique_details(
+                item.get("main_techniques"), references, fallback_ids=ids
+            )
+            ids = list(
+                dict.fromkeys(
+                    [
+                        *ids,
+                        *(
+                            paper_id
+                            for detail in [*core_concepts, *main_techniques]
+                            for paper_id in detail.related_paper_ids
+                        ),
+                    ]
+                )
+            )
+            refs = [references[paper_id].model_copy(deep=True) for paper_id in ids]
             results.append(
                 DevelopmentStage(
                     stage_id=item.get("stage_id"),
@@ -1328,8 +1710,8 @@ class StructuredOnboardingGenerator:
                         item.get("transition_from_previous") or ""
                     ),
                     representative_papers=refs,
-                    core_concepts=self._strings(item.get("core_concepts")),
-                    main_techniques=self._strings(item.get("main_techniques")),
+                    core_concepts=core_concepts,
+                    main_techniques=main_techniques,
                     open_problems=self._strings(item.get("open_problems")),
                     breakthroughs=breakthroughs,
                     related_paper_ids=ids,
@@ -1369,4 +1751,66 @@ class StructuredOnboardingGenerator:
     @classmethod
     def _valid_ids(cls, value: object, references: dict[str, PaperReference]) -> list[str]:
         return list(dict.fromkeys(str(item) for item in cls._as_list(value) if str(item) in references))
-    GenerationResult,
+
+    @classmethod
+    def _concept_details(
+        cls,
+        value: object,
+        references: dict[str, PaperReference],
+        *,
+        fallback_ids: list[str],
+    ) -> list[ConceptDetail]:
+        return [
+            ConceptDetail.model_validate(item)
+            for item in cls._detail_payloads(value, references, fallback_ids=fallback_ids)
+        ]
+
+    @classmethod
+    def _technique_details(
+        cls,
+        value: object,
+        references: dict[str, PaperReference],
+        *,
+        fallback_ids: list[str],
+    ) -> list[TechniqueDetail]:
+        return [
+            TechniqueDetail.model_validate(item)
+            for item in cls._detail_payloads(
+                value, references, fallback_ids=fallback_ids, technique=True
+            )
+        ]
+
+    @classmethod
+    def _detail_payloads(
+        cls,
+        value: object,
+        references: dict[str, PaperReference],
+        *,
+        fallback_ids: list[str],
+        technique: bool = False,
+    ) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for raw in cls._as_list(value):
+            item = {"name": raw} if isinstance(raw, str) else dict(raw) if isinstance(raw, dict) else {}
+            name = str(item.get("name") or item.get("title") or item.get("label") or "").strip()
+            key = name.casefold()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            paper_ids = cls._valid_ids(
+                item.get("related_paper_ids", item.get("paper_ids")), references
+            ) or list(fallback_ids)
+            payload: dict[str, object] = {
+                "name": name,
+                "explanation": str(item.get("explanation") or item.get("description") or "").strip(),
+                "why_it_matters": str(item.get("why_it_matters") or "").strip(),
+                "related_paper_ids": paper_ids,
+            }
+            id_key = "technique_id" if technique else "concept_id"
+            if item.get(id_key):
+                payload[id_key] = item[id_key]
+            if technique:
+                payload["mechanism"] = str(item.get("mechanism") or "").strip()
+            results.append(payload)
+        return results

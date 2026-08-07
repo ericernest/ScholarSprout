@@ -5,12 +5,13 @@
 ```text
 请求与画像
 → STORM-lite 领域规划
-→ Semantic Scholar + arXiv + Crossref 论文检索
-→ 去重、验证和多信号排序
-→ 候选论文约束生成
+→ 全局论文检索与分路径排序
+→ 发展阶段提纲
+→ 逐阶段 Semantic Scholar + arXiv + Crossref 检索与论文绑定
+→ 候选论文约束的分模块增量生成
 → 分层质量评估
 → 最多一次定向修复
-→ 指标记录与 API 响应
+→ 最终质量结论与 API 响应
 ```
 
 第一版不构建知识图谱。Schema 已保留 `paper_id`、`stage_id`、
@@ -70,12 +71,12 @@ Metrics 同时记录每个 provider 的请求、重试、限流、延迟、结�
 provider 连续失败 3 次后默认熔断 30 秒，冷却后只允许一个探测请求；全部实时来源
 不可用时，可以使用不超过 24 小时的陈旧缓存，并在指标中明确标记，避免把降级结果
 误认为实时检索。
-Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅凭返回数量占满候选池；
-进入候选池后使用本地 TF-IDF 向量计算查询相关性和论文间相似度，再通过 MMR
-综合论文质量、相对已选集合的新颖度和角色覆盖选择最终论文。向量器通过接口注入，
-以后可以替换为 embedding 实现而不改动 Ranker 流程。当前提供批处理和有界缓存的
-`CachedEmbeddingTextVectorizer`；embedding 服务异常时 Ranker 自动降级到 TF-IDF，
-并记录实际 backend 和 fallback 指标。至少存在一篇达到相关性下限的论文时，明显
+Ranker 在截取候选上限时也按来源轮询取样，避免高产来源仅凭返回数量占满候选池。
+规划器会保留标准英文领域名、缩写与相关技术词，并为理论、方法、评测等研究路径分配独立查询。
+候选论文先在每条路径内排序，再用 RRF 与全局质量分融合，最后通过 MMR 综合新颖度和角色覆盖。
+默认使用 OpenAI-compatible 端点的 `qwen3-embedding`；`CachedEmbeddingTextVectorizer`
+提供批处理和有界缓存，embedding 服务异常时 Ranker 自动降级到 TF-IDF，
+并记录实际模型、fallback、路径候选数和最终路径覆盖。至少存在一篇达到相关性下限的论文时，明显
 低于下限的候选会在 MMR 前过滤，避免高引用但无关的论文仅凭多样性进入结果。
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
@@ -129,11 +130,12 @@ export CROSSREF_MAILTO="researcher@example.org"
 
 - `structure`；
 - `paper_validity`；
+- `paper_relevance`；
 - `evidence_grounding`；
 - `topic_coverage`；
 - `development_coherence`；
 - `learning_path`；
-- `goal_alignment`。
+- `language_alignment`。
 
 论文真实性、Schema 和必要模块属于硬门槛。修复结果只有同时满足硬门槛、
 总分至少提高 `min_improvement_delta`，且结构、论文和学习路线维度没有回退时
@@ -147,6 +149,8 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 未选中候选的评分与问题。`repair_record` 记录修复动作、问题 ID、目标路径、
 实际变更路径、前后指纹以及结果选择决策。旧的 `score`、`attempts`、
 `selected_attempt` 和 `retry_status` 字段继续保留，以保持客户端兼容。
+`final_quality` 是面向客户端的最终摘要，统一给出初始/最终得分、改善幅度、
+被选中的尝试、硬门槛通过数、未解决问题和维度变化，前端无需再自行推导。
 
 修复结果选择原因使用稳定代码，包括：
 
@@ -213,8 +217,10 @@ python -m evaluation.domain_onboarding \
 
 2026-07-27 的三领域受控真实评测记录到总耗时 111–147 秒、规划
 13–26 秒、生成 78–103 秒。增量输出允许前端在任务终态前消费已验证分段，
-默认超时因此校准为请求 420 秒、规划阶段 75 秒（单次模型 60 秒）、
-生成 240 秒、修复 120 秒。在线报告会记录 `interrupted_stage` 和分阶段
+加入阶段提纲和三轮阶段检索后，2026-08-07 真实 USTC API 运行表明详细发展模块会超过
+原 60 秒分段窗口。现在请求预算为 600 秒，规划阶段/模型调用为 120/110 秒，生成总预算
+450 秒；发展基础块为 120 秒，三个发展阶段各 150 秒并行生成，全景和学习路线各 180 秒
+并行生成，修复仍为 120 秒。在线报告会记录 `interrupted_stage` 和分阶段
 耗时，以区分模型延迟、论文检索延迟和质量失败。
 
 真实论文源和真实模型测试默认禁用。固定中英文配对用例位于
@@ -239,9 +245,9 @@ python -m evaluation.domain_onboarding.online_cli \
 
 ### 质量策略版本
 
-阈值、七个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小
+阈值、八个质量维度权重、硬门槛、允许 LLM 修复的问题类型、关键维度和最小
 改善幅度统一组成不可变的 `DomainOnboardingPolicy`。默认版本为
-`domain-quality-v1.0.0`。每次评估、修复、Pipeline 响应和请求 Trace 都同时记录
+`domain-quality-v1.8.0`。每次评估、修复、Pipeline 响应和请求 Trace 都同时记录
 `policy_version` 与内容指纹；同一版本号不能注册两份不同策略，避免实验指标被
 静默混合。只要上述任一决策参数发生变化，都必须发布新的策略版本。
 
