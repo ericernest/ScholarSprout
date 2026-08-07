@@ -749,7 +749,9 @@ def create_default_pipeline(
     )
     configured_generation = os.getenv("DOMAIN_ONBOARDING_GENERATION_MODELS")
     if not configured_generation:
-        configured_generation = getattr(getattr(model, "config", None), "model_name", "")
+        primary = getattr(getattr(model, "config", None), "model_name", "")
+        backups = ["deepseek-v4-pro", "glm-5.2-107", "deepseek-v4-flash", "qwen3.6-reasoner"]
+        configured_generation = ",".join([primary, *backups]) if primary else ",".join(backups)
     generation_model = routed_model_from_env(
         model,
         configured_generation,
