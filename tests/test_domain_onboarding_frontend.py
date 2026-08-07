@@ -28,6 +28,12 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn('fetch("/domain_onboarding/jobs"', script)
         self.assertIn("appendDomainOnboardingCard", script)
         self.assertIn("/app/domain-onboarding?task_id=", script)
+        self.assertIn("window.location.assign", script)
+        self.assertIn("restoreDomainOnboardingCard()", script)
+        self.assertIn('value?.schema_version === "1.9"', script)
+        self.assertIn("getPendingDomainRequestId", script)
+        self.assertIn("findReusableDomainJob", script)
+        self.assertIn("你可以随时进入工作台查看进度", script)
         self.assertNotIn('initialMode === "paper_reading"', script)
 
     def test_workspace_consumes_snapshot_sse_and_paper_import(self) -> None:
@@ -66,6 +72,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("detail-evidence", script)
         self.assertIn('domain_onboarding_workspace_v1_9', script)
         self.assertIn('domain_onboarding_workspace_v1_5', script)
+        self.assertIn("pendingRequestId", script)
         self.assertIn("data.final_quality", script)
         self.assertIn("data.quality_attempts", script)
         self.assertIn("development_stage_plans", script)
@@ -81,7 +88,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("watchDomainOnboardingCard(job.task_id, job.access_token)", chat_script)
+        self.assertIn("watchDomainOnboardingCard(saved.task_id, saved.access_token", chat_script)
         self.assertIn("access_token: payload.access_token", chat_script)
         self.assertIn("Authorization: `Bearer ${accessToken}`", chat_script)
 

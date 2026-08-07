@@ -11,6 +11,8 @@ const modeEndpoints = {
 };
 
 const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
+const DOMAIN_PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
+const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
 let currentMode = "chat";
 let isGenerating = false;
@@ -122,6 +124,7 @@ function bindChatPage() {
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
+  restoreDomainOnboardingCard();
 }
 
 // Close mode menu and sync accessibility state.
@@ -184,7 +187,8 @@ async function sendMessage() {
     if (requestMode === "domain_onboarding") {
       const job = await submitDomainOnboardingJob(content);
       appendDomainOnboardingCard(job, content);
-      watchDomainOnboardingCard(job.task_id, job.access_token);
+      updateDomainOnboardingCard(job.task_id, job);
+      window.location.assign(`/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`);
       return;
     }
 
@@ -225,6 +229,10 @@ async function sendMessage() {
 
 // Submit domain onboarding as a background job so the chat request never times out.
 async function submitDomainOnboardingJob(content) {
+  const reusable = await findReusableDomainJob(content);
+  if (reusable) return reusable;
+
+  const clientRequestId = getPendingDomainRequestId(content);
   const response = await fetch("/domain_onboarding/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -233,7 +241,7 @@ async function submitDomainOnboardingJob(content) {
       content,
       user_id: "local-web",
       metadata: {},
-      client_request_id: crypto.randomUUID(),
+      client_request_id: clientRequestId,
     }),
   });
   let payload;
@@ -252,9 +260,65 @@ async function submitDomainOnboardingJob(content) {
     task_id: payload.task_id,
     access_token: payload.access_token,
     request: { query: content, session_id: sessionId, user_id: "local-web", metadata: {} },
+    client_request_id: clientRequestId,
     snapshot: { ...payload, progress: 0 },
   });
+  clearPendingDomainRequest(clientRequestId);
   return payload;
+}
+
+// Reuse the same active task when the user retries or returns to the chat page.
+async function findReusableDomainJob(content) {
+  const saved = loadDomainWorkspace();
+  if (!saved?.task_id || !saved?.access_token) return null;
+  if (saved.request?.session_id !== sessionId || saved.request?.query?.trim() !== content.trim()) return null;
+  if (DOMAIN_TERMINAL_STATES.has(saved.snapshot?.state)) return null;
+
+  try {
+    const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(saved.task_id)}`, {
+      headers: { Authorization: `Bearer ${saved.access_token}` },
+    });
+    if (!response.ok) return null;
+    const snapshot = await response.json();
+    if (DOMAIN_TERMINAL_STATES.has(snapshot?.state)) return null;
+    const reusable = { ...snapshot, task_id: saved.task_id, access_token: saved.access_token };
+    saveDomainWorkspace({ ...saved, saved_at: new Date().toISOString(), snapshot: reusable });
+    return reusable;
+  } catch {
+    return saved.snapshot
+      ? { ...saved.snapshot, task_id: saved.task_id, access_token: saved.access_token }
+      : null;
+  }
+}
+
+// Keep one request id across network retries so the backend can deduplicate POSTs.
+function getPendingDomainRequestId(content) {
+  try {
+    const pending = JSON.parse(localStorage.getItem(DOMAIN_PENDING_REQUEST_KEY) || "null");
+    const fresh = Date.now() - Date.parse(pending?.created_at || "") < 15 * 60 * 1000;
+    if (fresh && pending?.session_id === sessionId && pending?.query === content.trim()) {
+      return pending.client_request_id;
+    }
+  } catch {
+    // Replace malformed browser state below.
+  }
+  const clientRequestId = crypto.randomUUID();
+  localStorage.setItem(DOMAIN_PENDING_REQUEST_KEY, JSON.stringify({
+    session_id: sessionId,
+    query: content.trim(),
+    client_request_id: clientRequestId,
+    created_at: new Date().toISOString(),
+  }));
+  return clientRequestId;
+}
+
+function clearPendingDomainRequest(clientRequestId) {
+  try {
+    const pending = JSON.parse(localStorage.getItem(DOMAIN_PENDING_REQUEST_KEY) || "null");
+    if (pending?.client_request_id === clientRequestId) localStorage.removeItem(DOMAIN_PENDING_REQUEST_KEY);
+  } catch {
+    localStorage.removeItem(DOMAIN_PENDING_REQUEST_KEY);
+  }
 }
 
 // Append an interactive onboarding card; the full result lives in its workspace.
@@ -269,7 +333,7 @@ function appendDomainOnboardingCard(job, query) {
   card.innerHTML = `
     <span class="paper-card-kicker">DOMAIN ONBOARDING · 已开始</span>
     <strong>${escapeHtml(query)}</strong>
-    <span class="domain-card-copy">正在为你检索真实论文、梳理发展脉络并生成个性化学习路线。</span>
+    <span class="domain-card-copy">正在为你检索真实论文、梳理发展脉络并生成标准学习路线。你可以随时进入工作台查看进度。</span>
     <span class="domain-card-progress" aria-label="生成进度">
       <span class="domain-card-progress-fill" style="transform:scaleX(0)"></span>
     </span>
@@ -327,14 +391,7 @@ function watchDomainOnboardingCard(taskId, accessToken) {
       });
       if (!response.ok) throw new Error(String(response.status));
       const snapshot = await response.json();
-      const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
-      item.querySelector("[data-domain-state]").textContent = labels[snapshot.state] || snapshot.current_stage || "处理中";
-      item.querySelector("[data-domain-progress]").textContent = `${Math.round(progress * 100)}%`;
-      item.querySelector(".domain-card-progress-fill").style.transform = `scaleX(${progress})`;
-      item.querySelector(".paper-card-kicker").textContent =
-        snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
-      const cancel = item.querySelector(".domain-card-cancel");
-      if (cancel) cancel.hidden = ["completed", "failed", "cancelled", "interrupted"].includes(snapshot.state);
+      updateDomainOnboardingCard(taskId, snapshot, labels);
       const saved = loadDomainWorkspace() || {};
       saveDomainWorkspace({
         ...saved,
@@ -354,10 +411,49 @@ function watchDomainOnboardingCard(taskId, accessToken) {
   window.setTimeout(poll, 600);
 }
 
+function updateDomainOnboardingCard(taskId, snapshot, labels = null) {
+  const item = Array.from(document.querySelectorAll(".domain-card-message"))
+    .find((node) => node.dataset.taskId === taskId);
+  if (!item || !snapshot) return;
+  const stateLabels = labels || {
+    queued: "等待执行",
+    running: "正在生成",
+    cancel_requested: "正在取消",
+    completed: "学习路线已生成",
+    failed: "生成失败，可进入工作台重试",
+    cancelled: "任务已取消",
+    interrupted: "任务因服务重启中断，可进入工作台重试",
+  };
+  const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
+  item.querySelector("[data-domain-state]").textContent =
+    stateLabels[snapshot.state] || snapshot.current_stage || "处理中";
+  item.querySelector("[data-domain-progress]").textContent = `${Math.round(progress * 100)}%`;
+  item.querySelector(".domain-card-progress-fill").style.transform = `scaleX(${progress})`;
+  item.querySelector(".paper-card-kicker").textContent =
+    snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
+  const cancel = item.querySelector(".domain-card-cancel");
+  if (cancel) cancel.hidden = DOMAIN_TERMINAL_STATES.has(snapshot.state);
+}
+
+// Returning from the workspace must restore the task card instead of losing it.
+function restoreDomainOnboardingCard() {
+  const saved = loadDomainWorkspace();
+  if (!saved?.task_id || !saved?.request?.query) return;
+  const exists = Array.from(document.querySelectorAll(".domain-card-message"))
+    .some((node) => node.dataset.taskId === saved.task_id);
+  if (exists) return;
+  const job = { ...(saved.snapshot || {}), task_id: saved.task_id, access_token: saved.access_token || "" };
+  appendDomainOnboardingCard(job, saved.request.query);
+  updateDomainOnboardingCard(saved.task_id, saved.snapshot || job);
+  if (!DOMAIN_TERMINAL_STATES.has(saved.snapshot?.state)) {
+    watchDomainOnboardingCard(saved.task_id, saved.access_token || "");
+  }
+}
+
 function loadDomainWorkspace() {
   try {
     const value = JSON.parse(localStorage.getItem(DOMAIN_WORKSPACE_KEY) || "null");
-    return value?.schema_version === "1.5" ? value : null;
+    return value?.schema_version === "1.9" ? value : null;
   } catch {
     return null;
   }

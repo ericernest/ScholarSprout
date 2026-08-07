@@ -1,5 +1,6 @@
 const STORAGE_KEY = "domain_onboarding_workspace_v1_9";
 const LEGACY_STORAGE_KEYS = ["domain_onboarding_workspace_v1_5"];
+const PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const EVENT_NAMES = [
   "accepted",
@@ -109,14 +110,16 @@ async function initialize() {
     }
   } else if (query) {
     try {
-      const job = await submitTask({
+      const request = {
         query,
         session_id: getSessionId(),
         user_id: "local-web",
         metadata: {},
-      });
+      };
+      const job = await submitTask(request);
       state.taskId = job.task_id;
       state.accessToken = job.access_token || "";
+      consumeSnapshot({ ...job, progress: Number(job.progress) || 0, request });
       history.replaceState(null, "", `/app/domain-onboarding?task_id=${encodeURIComponent(state.taskId)}`);
     } catch (error) {
       showEmpty("任务创建失败", error.message, true);
@@ -204,19 +207,51 @@ function bindScrollSpy() {
 }
 
 async function submitTask(request) {
+  const clientRequestId = pendingRequestId(request);
   const response = await fetch("/domain_onboarding/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...request,
-      client_request_id: crypto.randomUUID(),
+      client_request_id: clientRequestId,
     }),
   });
   const payload = await readJson(response);
   if (!response.ok || !payload?.task_id) {
     throw new Error(readError(payload, `创建任务失败（HTTP ${response.status}）`));
   }
+  clearPendingRequest(clientRequestId);
   return payload;
+}
+
+function pendingRequestId(request) {
+  const query = String(request?.query || "").trim();
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_REQUEST_KEY) || "null");
+    const fresh = Date.now() - Date.parse(pending?.created_at || "") < 15 * 60 * 1000;
+    if (fresh && pending?.session_id === request.session_id && pending?.query === query) {
+      return pending.client_request_id;
+    }
+  } catch {
+    // Replace malformed browser state below.
+  }
+  const clientRequestId = crypto.randomUUID();
+  localStorage.setItem(PENDING_REQUEST_KEY, JSON.stringify({
+    session_id: request.session_id,
+    query,
+    client_request_id: clientRequestId,
+    created_at: new Date().toISOString(),
+  }));
+  return clientRequestId;
+}
+
+function clearPendingRequest(clientRequestId) {
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_REQUEST_KEY) || "null");
+    if (pending?.client_request_id === clientRequestId) localStorage.removeItem(PENDING_REQUEST_KEY);
+  } catch {
+    localStorage.removeItem(PENDING_REQUEST_KEY);
+  }
 }
 
 async function refreshSnapshot() {
