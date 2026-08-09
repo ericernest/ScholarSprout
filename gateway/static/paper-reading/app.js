@@ -489,7 +489,7 @@ async function loadPaperDetail() {
   state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
-  loadPdfMarks();
+  await loadPdfMarks();
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
 }
@@ -2062,6 +2062,7 @@ function commitPdfMark(mark, editingId = "") {
     state.pdfMarkHistory.push(mark.id);
   }
   persistPdfMarks();
+  void savePdfMarkRemote(mark);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
   renderPdfMarks(page, mark.page);
   window.getSelection()?.removeAllRanges();
@@ -2111,6 +2112,7 @@ function undoLastPdfMark() {
   }
   if (!removed) removed = state.pdfMarks.pop();
   persistPdfMarks();
+  void deletePdfMarkRemote(removed.id);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
   if (page) renderPdfMarks(page, removed.page);
   toast("已撤销最近一次标注。");
@@ -2146,10 +2148,72 @@ function persistPdfMarks() {
   localStorage.setItem(STORAGE.pdfMarks, JSON.stringify(all));
 }
 
-function loadPdfMarks() {
+async function loadPdfMarks() {
   const all = loadAllPdfMarks();
-  state.pdfMarks = Array.isArray(all[state.paperId]) ? all[state.paperId] : [];
+  const cached = Array.isArray(all[state.paperId]) ? all[state.paperId] : [];
+  try {
+    const query = state.sessionId ? `?reading_session_id=${encodeURIComponent(state.sessionId)}` : "";
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations${query}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const remote = (await response.json()).map(annotationToPdfMark);
+    const merged = new Map(cached.map((mark) => [mark.id, mark]));
+    remote.forEach((mark) => merged.set(mark.id, mark));
+    state.pdfMarks = [...merged.values()];
+    const remoteIds = new Set(remote.map((mark) => mark.id));
+    cached.filter((mark) => !remoteIds.has(mark.id)).forEach((mark) => void savePdfMarkRemote(mark));
+    persistPdfMarks();
+  } catch {
+    state.pdfMarks = cached;
+  }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
+}
+
+function annotationToPdfMark(annotation) {
+  return {
+    id: annotation.annotation_id,
+    type: annotation.annotation_type,
+    color: annotation.color,
+    page: annotation.page_number,
+    rects: annotation.rects || [],
+    text: annotation.selected_text || "",
+    note: annotation.note_text || "",
+    section_id: annotation.section_id || "",
+    created_at: annotation.created_at,
+    updated_at: annotation.updated_at,
+  };
+}
+
+async function savePdfMarkRemote(mark) {
+  if (!state.paperId || !mark?.id) return;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations/${encodeURIComponent(mark.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reading_session_id: state.sessionId || null,
+        annotation_type: mark.type,
+        color: mark.color || "yellow",
+        page_number: Number(mark.page) || 1,
+        section_id: mark.section_id || null,
+        selected_text: mark.text || "未记录原文",
+        rects: mark.rects || [],
+        note_text: mark.note || "",
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    toast("标注已保存在本机缓存，暂未同步到资料库。", true);
+  }
+}
+
+async function deletePdfMarkRemote(markId) {
+  if (!state.paperId || !markId) return;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations/${encodeURIComponent(markId)}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    toast("本机标注已撤销，但资料库同步失败。", true);
+  }
 }
 
 function loadAllPdfMarks() {
@@ -2768,8 +2832,13 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
-  state.sessionId = localStorage.getItem(STORAGE.session) || "";
-  state.paperId = localStorage.getItem(STORAGE.paper) || "";
+  const params = new URLSearchParams(window.location.search);
+  const requestedPaper = params.get("paper_id");
+  const requestedSession = params.get("session_id");
+  state.paperId = requestedPaper || localStorage.getItem(STORAGE.paper) || "";
+  state.sessionId = requestedSession !== null
+    ? requestedSession
+    : (requestedPaper ? "" : localStorage.getItem(STORAGE.session) || "");
   state.currentSection = localStorage.getItem(STORAGE.section) || "";
   if (!state.paperId && !state.sessionId) {
     if (isDedicatedWorkspace) window.location.replace("/app?mode=paper_reading");

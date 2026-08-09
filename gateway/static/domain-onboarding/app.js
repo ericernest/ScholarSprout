@@ -181,6 +181,11 @@ function bindInteractions() {
     const importButton = event.target.closest("[data-import-paper]");
     if (importButton) {
       await importPaper(importButton.dataset.importPaper);
+      return;
+    }
+    const libraryButton = event.target.closest("[data-add-paper-library]");
+    if (libraryButton) {
+      await addPaperToLibrary(libraryButton.dataset.addPaperLibrary, libraryButton);
     }
   });
 
@@ -913,11 +918,29 @@ function renderPaperDetail(paper) {
       </div>
       ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
+      <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
         ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
       </button>
     </div>
   `;
+}
+
+async function addPaperToLibrary(paperId, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(paperId)}/library`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reading_status: "unread", note: "" }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    button.textContent = "已加入论文管理";
+    toast("论文已加入资料库。精读与收藏状态彼此独立。")
+  } catch (error) {
+    button.disabled = false;
+    toast(`加入论文库失败：${error.message}`, true);
+  }
 }
 
 async function importPaper(paperId) {

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>研究资料库 · NoviceSynapse</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/library/styles.css" />
+  </head>
+  <body>
+    <main class="library-shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">NoviceSynapse</a>
+        <div class="sidebar-copy"><span>LOCAL RESEARCH SPACE</span><strong>研究资料库</strong></div>
+        <nav id="library-nav" aria-label="资料库分类">
+          <button class="nav-item is-active" data-view="conversations"><span class="nav-icon">◌</span><span>会话</span><b data-count="conversations">0</b></button>
+          <button class="nav-item" data-view="domain-onboardings"><span class="nav-icon">◇</span><span>领域入门</span><b data-count="domain_onboardings">0</b></button>
+          <button class="nav-item" data-view="paper-readings"><span class="nav-icon">▤</span><span>论文精读</span><b data-count="paper_readings">0</b></button>
+          <button class="nav-item" data-view="papers"><span class="nav-icon">▱</span><span>论文管理</span><b data-count="library_papers">0</b></button>
+        </nav>
+        <div class="sidebar-actions"><a href="/app" class="primary-link">＋ 新会话</a><a href="/settings" class="quiet-link">配置</a></div>
+      </aside>
+
+      <section class="content">
+        <header class="content-header">
+          <div><p id="view-kicker" class="eyebrow">CONVERSATIONS</p><h1 id="view-title">会话</h1><p id="view-description">回到最近的科研讨论，保留每一次问题演进。</p></div>
+          <a href="/app" class="mobile-new">＋ 新建</a>
+        </header>
+        <div class="toolbar">
+          <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="搜索标题或内容" autocomplete="off" /></label>
+          <label id="paper-scope" class="scope-switch" hidden><input id="show-all-papers" type="checkbox" /><span>显示全部论文</span></label>
+        </div>
+        <section id="result-summary" class="result-summary"></section>
+        <section id="items" class="items" aria-live="polite"></section>
+        <section id="empty-state" class="empty-state" hidden><span>✦</span><h2 id="empty-title">这里还没有内容</h2><p id="empty-copy">从一次新会话开始，结果会自动出现在这里。</p><a href="/app">开始使用</a></section>
+      </section>
+    </main>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="/static/library/app.js"></script>
+  </body>
+</html>

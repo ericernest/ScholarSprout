@@ -125,6 +125,22 @@ function bindChatPage() {
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
   restoreDomainOnboardingCard();
+  void restoreConversationHistory();
+}
+
+async function restoreConversationHistory() {
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const conversation = await response.json();
+    if (!Array.isArray(conversation.messages) || !conversation.messages.length) return;
+    messages.replaceChildren();
+    conversation.messages.forEach((message) => {
+      if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
+    });
+  } catch {
+    // Keep the welcome message when history is temporarily unavailable.
+  }
 }
 
 // Close mode menu and sync accessibility state.
@@ -1100,6 +1116,11 @@ function setLoading(isLoading, interruptible = false) {
 // Get persistent local session id.
 function getSessionId() {
   const key = "novicesynapse_session_id";
+  const requested = new URLSearchParams(window.location.search).get("conversation_id");
+  if (requested) {
+    window.localStorage.setItem(key, requested);
+    return requested;
+  }
   const existing = window.localStorage.getItem(key);
   if (existing) {
     return existing;

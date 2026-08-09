@@ -19,6 +19,7 @@ from channels.base import ChannelMessage
 from channels.web import WebChannel
 from config.manager import is_setup_complete, load_config, resolve_data_dir
 from config.web import router as config_router
+from gateway.research_library import router as research_library_router
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
 from handlers.domain_onboarding.pipeline import create_default_pipeline
@@ -54,6 +55,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="NoviceSynapse Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(config_router)
+app.include_router(research_library_router)
 
 
 # 返回最小健康检查结果。
@@ -109,6 +111,12 @@ def chat_page() -> FileResponse:
 @app.get("/settings")
 def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings" / "index.html")
+
+
+# 返回会话、模式产物和论文的统一资料库。
+@app.get("/library")
+def library_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "library" / "index.html")
 
 
 # 返回嵌入应用层级的论文精读工作台。

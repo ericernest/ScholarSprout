@@ -32,6 +32,7 @@
 | `paper_documents` | `paper_id`, `content_schema_version`, `document_json`, `updated_at` | 解析后的章节、图表索引、导读地图及仍在迭代的论文文档结构。 |
 | `paper_knowledge_graphs` | `graph_id`, `paper_id`, `graph_scope`, `graph_json`, `updated_at` | 单篇或跨论文知识图谱快照。 |
 | `library_items` | `paper_id`, `reading_status`, `note`, `added_at`, `updated_at` | 用户明确“加入论文管理”才创建。阅读状态仅为 `unread / reading / read / archived`。 |
+| `paper_annotations` | `annotation_id`, `paper_id`, `reading_session_id`, `annotation_type`, `color`, `page_number`, `section_id`, `selected_text`, `anchor_schema_version`, `anchor_json`, `note_text`, 时间 | PDF 高亮与注释。`anchor_json` 使用 `pdf-rects-v1`，保存页面内归一化矩形，因此缩放后仍能准确恢复；会话字段只记录来源，标注归属于论文并在该论文的 Fork/精读会话间共享。 |
 
 领域入门推荐论文后：
 
@@ -78,3 +79,16 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 - `conversations.state`：聊天是否仍可继续，`active / closed`。
 
 不要把这四类状态合并成一列：它们回答的是不同问题，分别对应模式执行、pipeline 阶段、阅读 UI 和通用聊天。
+
+## 前端资料库与 API
+
+`/library` 是统一研究资料库，左侧四个视图分别读取会话、领域入门、论文精读和论文管理数据。列表只读取稳定展示字段及必要计数，不直接暴露数据库中的 JSON 字符串。
+
+- `GET /api/research/conversations`：会话标题、模式、消息数和最后一条消息摘要。
+- `GET /api/research/domain-onboardings`：领域任务状态、阶段、推荐论文数和质量摘要。
+- `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
+- `GET /api/research/papers`：论文管理状态、备注、精读及标注数。
+- `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理；移出不会删除论文、精读记录或标注。
+- `GET/PUT/DELETE /api/research/papers/{paper_id}/annotations/...`：恢复、保存和删除高亮/注释。
+
+论文工作台仍在浏览器保存一份标注缓存，用于短时离线兜底；SQLite 是正式数据源。首次打开升级后的工作台时，已有浏览器标注会自动补写到 SQLite。

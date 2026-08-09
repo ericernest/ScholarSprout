@@ -17,7 +17,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _now() -> str:
@@ -110,6 +110,22 @@ class LocalResearchStore:
                     reading_status TEXT NOT NULL CHECK(reading_status IN ('unread', 'reading', 'read', 'archived')),
                     note TEXT NOT NULL DEFAULT '',
                     added_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_annotations (
+                    annotation_id TEXT PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    reading_session_id TEXT REFERENCES paper_reading_sessions(reading_session_id) ON DELETE SET NULL,
+                    annotation_type TEXT NOT NULL CHECK(annotation_type IN ('highlight', 'note')),
+                    color TEXT NOT NULL CHECK(color IN ('yellow', 'green', 'blue', 'pink')),
+                    page_number INTEGER NOT NULL CHECK(page_number > 0),
+                    section_id TEXT,
+                    selected_text TEXT NOT NULL,
+                    anchor_schema_version TEXT NOT NULL,
+                    anchor_json TEXT NOT NULL,
+                    note_text TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
 
@@ -241,6 +257,8 @@ class LocalResearchStore:
                     ON work_artifacts(artifact_kind, state, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_reading_sessions_paper
                     ON paper_reading_sessions(paper_id, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_annotations_paper_page
+                    ON paper_annotations(paper_id, page_number, created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_snapshots_conversation
                     ON conversation_memory_snapshots(conversation_id, created_at DESC);
                 """
