@@ -32,6 +32,7 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
 
     trace = DomainOnboardingRequestTrace()
     pipeline_result: PipelineResult | None = None
+    response: dict[str, Any] | None = None
     started_at = perf_counter()
     try:
         try:
@@ -43,19 +44,22 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
             )
         except ValidationError:
             trace.status = "invalid_input"
-            return build_empty_result()
+            response = build_empty_result()
+            return response
 
         pipeline_result = pipeline.run(request, trace)
         trace.status = pipeline_result.status
-        return pipeline_result.to_response()
+        response = pipeline_result.to_response()
+        return response
     except Exception as error:
         trace.status = "internal_error"
-        return {
+        response = {
             "status": "internal_error",
             "mode": "domain_onboarding",
             "query": str(message.content or "").strip(),
             "error": str(error),
         }
+        return response
     finally:
         trace.total_duration_ms = round((perf_counter() - started_at) * 1000, 3)
         audit_sink = getattr(app_state, "domain_onboarding_audit_sink", None)
@@ -75,6 +79,18 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
         metrics = getattr(app_state, "domain_onboarding_metrics", None)
         if metrics is not None:
             metrics.record(trace)
+        research_storage = getattr(app_state, "research_storage", None)
+        if research_storage is not None and response is not None:
+            try:
+                research_storage.persist_domain_onboarding_result(
+                    query=str(message.content or "").strip(),
+                    response=response,
+                    conversation_id=message.session_id,
+                    user_id=message.user_id,
+                )
+            except Exception:
+                # Persistence must not replace a completed pipeline response.
+                trace.audit_write_failed = True
 
 
 __all__ = [

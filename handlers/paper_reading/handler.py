@@ -79,6 +79,8 @@ def handle_paper_reading_message(
         content = message.content
         if isinstance(content, str):
             content = json.loads(content)
+        if isinstance(content, dict) and not str(content.get("session_id") or "").strip():
+            content = {**content, "session_id": message.session_id}
         request = PaperReadingRequest.model_validate(content)
     except Exception as e:
         return _error(f"请求解析失败: {e}")
@@ -115,6 +117,7 @@ def handle_paper_reading_message(
             )
         else:
             result = handler_fn(request, app_state)
+        _persist_skill_outputs(app_state, result)
         return result
     except Exception as e:
         logger.exception("Handler action '%s' failed", request.action)
@@ -536,6 +539,7 @@ def _handle_start_reading(
     if session is None:
         paper_data_for_title = _load_paper_data(storage, request.paper_id)
         session = session_mgr.create_session(
+            session_id=request.session_id or None,
             paper_id=request.paper_id,
             paper_title=(paper_data_for_title or {}).get("title", ""),
             user_id=request.session_id or "default",
@@ -639,6 +643,31 @@ def _handle_start_reading(
         progress=session.progress,
         skill_outputs=skill_outputs,
     )
+
+
+def _persist_skill_outputs(app_state: Any, result: dict[str, Any]) -> None:
+    storage = getattr(app_state, "paper_storage", None)
+    research_store = getattr(storage, "research_store", None)
+    if research_store is None:
+        return
+    session = result.get("session") if isinstance(result.get("session"), dict) else {}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    session_id = str(session.get("session_id") or data.get("session_id") or "")
+    if not session_id:
+        return
+    for output in result.get("skill_outputs") or []:
+        if not isinstance(output, dict):
+            continue
+        content = output.get("content")
+        if not isinstance(content, dict):
+            content = {"value": content}
+        research_store.save_reading_block(
+            session_id,
+            block_type=str(output.get("output_type") or output.get("skill_id") or "analysis"),
+            content_schema_version="paper-reading-skill-output-v1",
+            content=content,
+            rendered_text=str(output.get("rendered") or ""),
+        )
 
 
 def _handle_pause_reading(request: PaperReadingRequest, app_state: Any) -> dict:

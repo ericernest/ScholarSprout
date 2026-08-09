@@ -54,6 +54,7 @@ class JobStore(Protocol):
     def count_active(self, owner_scope: str) -> int: ...
     def append_event(self, task_id: str, event: str, progress: float, provisional: bool, replace_paths: list[str], data: dict[str, Any]) -> dict[str, Any]: ...
     def finish(self, task_id: str, state: str, result: dict[str, Any] | None, error: str | None) -> None: ...
+    def finish_with_event(self, task_id: str, state: str, result: dict[str, Any] | None, error: str | None, event: str, progress: float) -> None: ...
     def request_cancel(self, task_id: str) -> dict[str, Any] | None: ...
     def events_after(self, task_id: str, event_id: int) -> list[dict[str, Any]]: ...
     def recover_interrupted(self, stale_after_seconds: int = 0) -> int: ...
@@ -262,6 +263,55 @@ class SQLiteJobStore:
                 ),
             )
 
+    def finish_with_event(
+        self,
+        task_id: str,
+        state: str,
+        result: dict[str, Any] | None,
+        error: str | None,
+        event: str,
+        progress: float,
+    ) -> None:
+        """Commit terminal state and its replay event in one transaction."""
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT revision FROM jobs WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            revision = int(row["revision"]) + 1
+            db.execute(
+                """UPDATE jobs SET state=?,revision=?,current_stage=?,progress=?,result_json=?,error=?,retryable=?,
+                   partial_json=CASE WHEN ?='completed' THEN '{}' ELSE partial_json END,updated_at=CURRENT_TIMESTAMP
+                   WHERE task_id=?""",
+                (
+                    state,
+                    revision,
+                    event,
+                    progress,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    error,
+                    int(state in RETRYABLE_STATES),
+                    state,
+                    task_id,
+                ),
+            )
+            db.execute(
+                """INSERT INTO job_events(task_id,revision,event,progress,provisional,replace_paths_json,data_json)
+                   VALUES(?,?,?,?,0,?,?)""",
+                (
+                    task_id,
+                    revision,
+                    event,
+                    progress,
+                    json.dumps(["result"] if result is not None else []),
+                    json.dumps(
+                        {"state": state, "result_available": result is not None},
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
     def request_cancel(self, task_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as db:
             row = db.execute("SELECT state FROM jobs WHERE task_id=?", (task_id,)).fetchone()
@@ -374,11 +424,13 @@ class DomainOnboardingJobManager:
         retention_seconds: int = 7 * 24 * 60 * 60,
         recovery_stale_seconds: int = 15 * 60,
         token_secret: str | bytes | None = None,
+        result_store: Any = None,
     ):
         self.pipeline = pipeline
         self.store = store
         self.metrics = metrics
         self.audit_sink = audit_sink
+        self.result_store = result_store
         self.max_workers = max(1, int(max_workers))
         self.max_queue_size = max(0, int(max_queue_size))
         self.per_owner_active_limit = max(1, int(per_owner_active_limit))
@@ -456,6 +508,7 @@ class DomainOnboardingJobManager:
                 self.store.append_event(
                     task_id, "accepted", 0.0, True, [], {"state": "queued"}
                 )
+                self._persist_submission(task_id, request)
                 with self._lock:
                     self._submitted_task_ids.add(task_id)
                 self.executor.submit(self._run, task_id, request)
@@ -538,27 +591,27 @@ class DomainOnboardingJobManager:
             terminal_progress = (
                 1.0 if state == "completed" else float(snapshot.get("progress", 0.0))
             )
-            self.store.finish(task_id, state, response, result.error)
-            self.store.append_event(
+            self._persist_result(task_id, request, response)
+            self._finish_job(
                 task_id,
-                event,
-                terminal_progress,
-                False,
-                ["result"] if response is not None else [],
-                {"state": state, "result_available": response is not None},
+                state=state,
+                result=response,
+                error=result.error,
+                event=event,
+                progress=terminal_progress,
             )
             self._record_job_metric(state)
         except Exception as error:
             trace.status = "internal_error"
             snapshot = self.store.get(task_id) or {}
-            self.store.finish(task_id, "failed", None, str(error))
-            self.store.append_event(
+            self._persist_failure(task_id, str(error))
+            self._finish_job(
                 task_id,
-                "failed",
-                float(snapshot.get("progress", 0.0)),
-                False,
-                [],
-                {"error": str(error), "state": "failed", "result_available": False},
+                state="failed",
+                result=None,
+                error=str(error),
+                event="failed",
+                progress=float(snapshot.get("progress", 0.0)),
             )
             self._record_job_metric("failed")
         finally:
@@ -599,8 +652,111 @@ class DomainOnboardingJobManager:
             self.store.append_event(
                 task_id, event, progress, provisional, replace_paths, data
             )
+            if self.result_store is not None:
+                try:
+                    self.result_store.update_domain_onboarding_state(
+                        task_id,
+                        state="running",
+                        current_stage=event,
+                    )
+                except Exception:
+                    pass
 
         return callback
+
+    def _persist_submission(self, task_id: str, request: DomainOnboardingRequest) -> None:
+        if self.result_store is None:
+            return
+        try:
+            if request.session_id:
+                self.result_store.ensure_conversation(
+                    request.session_id,
+                    title=f"领域入门：{request.query[:60]}",
+                    user_id=request.user_id,
+                )
+                self.result_store.append_message(
+                    request.session_id,
+                    role="user",
+                    content=request.query,
+                    mode="domain_onboarding",
+                    channel="web",
+                )
+            self.result_store.create_domain_onboarding(
+                artifact_id=task_id,
+                title=f"领域入门：{request.query[:80]}",
+                query=request.query,
+                language=request.language,
+                current_stage="queued",
+                conversation_id=request.session_id,
+            )
+        except Exception:
+            # Product persistence cannot alter job admission or execution.
+            return
+
+    def _persist_result(
+        self,
+        task_id: str,
+        request: DomainOnboardingRequest,
+        response: dict[str, Any],
+    ) -> None:
+        if self.result_store is None:
+            return
+        try:
+            self.result_store.persist_domain_onboarding_result(
+                artifact_id=task_id,
+                query=request.query,
+                response=response,
+                conversation_id=request.session_id,
+                user_id=request.user_id,
+            )
+            if request.session_id:
+                text = str(response.get("text") or "领域入门任务已完成。")
+                self.result_store.append_message(
+                    request.session_id,
+                    role="assistant",
+                    content=text,
+                    mode="domain_onboarding",
+                    channel="web",
+                )
+        except Exception:
+            return
+
+    def _persist_failure(self, task_id: str, error: str) -> None:
+        if self.result_store is None:
+            return
+        try:
+            self.result_store.update_domain_onboarding_state(
+                task_id,
+                state="failed",
+                current_stage="internal_error",
+                error_summary=error,
+            )
+        except Exception:
+            return
+
+    def _finish_job(
+        self,
+        task_id: str,
+        *,
+        state: str,
+        result: dict[str, Any] | None,
+        error: str | None,
+        event: str,
+        progress: float,
+    ) -> None:
+        atomic_finish = getattr(self.store, "finish_with_event", None)
+        if callable(atomic_finish):
+            atomic_finish(task_id, state, result, error, event, progress)
+            return
+        self.store.finish(task_id, state, result, error)
+        self.store.append_event(
+            task_id,
+            event,
+            progress,
+            False,
+            ["result"] if result is not None else [],
+            {"state": state, "result_available": result is not None},
+        )
 
     def cancel(self, task_id: str) -> dict[str, Any] | None:
         before = self.store.get(task_id)
@@ -673,9 +829,8 @@ class DomainOnboardingJobManager:
         self.executor.shutdown(wait=True, cancel_futures=False)
 
 
-def create_job_store_from_env() -> SQLiteJobStore:
-    path = os.getenv(
-        "DOMAIN_ONBOARDING_JOB_DB",
-        "~/.novicesynapse/domain_onboarding_jobs.sqlite3",
-    )
+def create_job_store_from_env(default_path: str | Path | None = None) -> SQLiteJobStore:
+    path = os.getenv("DOMAIN_ONBOARDING_JOB_DB")
+    if not path:
+        path = str(default_path or "~/.novicesynapse/research.sqlite3")
     return SQLiteJobStore(path)

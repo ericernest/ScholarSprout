@@ -1,6 +1,13 @@
 # 本地存储字段设计（v1）
 
-本目录记录论文管理、领域入门、论文精读、会话与会话内记忆的数据库契约。实现位于 `models/storage/local_store.py`，默认使用 SQLite；PDF、抽取全文和图片仍保存在本地文件系统，数据库只保存其有意义的索引（类型、位置、SHA-256）。
+本目录记录论文管理、领域入门、论文精读、会话与会话内记忆的数据库契约。实现位于仓库根级独立包 `storage/`，默认使用 SQLite；PDF 和图片保存在本地文件系统，结构化论文全文、模式结果和会话状态写入同一个 `research.sqlite3`。
+
+## 运行时接入
+
+- 日常聊天：`gateway/message_flow.py` 在 handler 前后分别保存用户消息和可见的助手回复。
+- 领域入门：同步 handler 保存完整分块结果；异步 job 在提交、阶段推进和完成/失败时更新同一个 artifact。
+- 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。
+- 默认数据目录为 `~/.novicesynapse/`，可通过 `NOVICESYNAPSE_DATA_DIR` 修改。领域入门 job 默认也使用同一个 `research.sqlite3`；只有显式配置 `DOMAIN_ONBOARDING_JOB_DB` 时才使用独立文件。
 
 ## 字段策略：关系字段 + 分块 JSON
 
@@ -20,6 +27,8 @@
 |---|---|---|
 | `papers` | `paper_id`, `title`, `authors_json`, `abstract`, `publication_year`, `venue`, `doi`, `arxiv_id`, `source_url`, 时间 | 唯一的论文实体；DOI/arXiv 用于去重。被推荐、精读不等于已收藏。 |
 | `paper_files` | `paper_file_id`, `paper_id`, `file_kind`, `storage_uri`, `sha256`, `created_at` | PDF、抽取全文或图片的本地文件索引及完整性校验。 |
+| `paper_documents` | `paper_id`, `content_schema_version`, `document_json`, `updated_at` | 解析后的章节、图表索引、导读地图及仍在迭代的论文文档结构。 |
+| `paper_knowledge_graphs` | `graph_id`, `paper_id`, `graph_scope`, `graph_json`, `updated_at` | 单篇或跨论文知识图谱快照。 |
 | `library_items` | `paper_id`, `reading_status`, `note`, `added_at`, `updated_at` | 用户明确“加入论文管理”才创建。阅读状态仅为 `unread / reading / read / archived`。 |
 
 领域入门推荐论文后：
@@ -42,7 +51,7 @@
 
 | 表 | 字段 | 用途 |
 |---|---|---|
-| `paper_reading_sessions` | `reading_session_id`, `artifact_id`, `paper_id`, `conversation_id`, `parent_reading_session_id`, `fork_context`, `state`, 当前章节/段落、章节数、已激活技能、完成章节、章节状态、`reading_map_json`、时间 | 保存真实的精读 UI 状态，可暂停、恢复与 fork。`parent_reading_session_id` 取代冗余的子会话 ID 数组。 |
+| `paper_reading_sessions` | `reading_session_id`, `artifact_id`, `paper_id`, `conversation_id`, `parent_reading_session_id`, `fork_context`, `state`, 当前章节/段落、章节数、已激活技能、完成章节、章节状态、`progress_json`、时间 | 保存真实的精读 UI 状态，可暂停、恢复与 fork。`parent_reading_session_id` 取代冗余的子会话 ID 数组。 |
 | `paper_reading_blocks` | `reading_block_id`, `reading_session_id`, `block_type`, `content_schema_version`, `content_json`, `rendered_text`, `created_at` | 导读地图、方法分析、数学验证、批判性评价、idea 等可展示结果。每种 block 在一次精读会话中只有当前一版。 |
 | `reading_checkpoints` | `checkpoint_id`, `reading_session_id`, 当前章节/段落、已激活技能、`knowledge_graph_json`, `created_at` | 暂停或显式保存时的恢复点；不复制聊天记录。 |
 
@@ -53,7 +62,7 @@
 | 表 | 字段 | 用途 |
 |---|---|---|
 | `conversations` | `conversation_id`, `title`, `state`, `parent_conversation_id`, `forked_from_message_id`, 时间 | 通用 Agent 对话；可独立于精读模式存在，也能作为精读 fork 的对话承载体。 |
-| `messages` | `message_id`, `conversation_id`, `sequence_number`, `role`, `content`, `created_at` | 用户、助手和确需展示的工具消息。 |
+| `messages` | `message_id`, `conversation_id`, `sequence_number`, `role`, `mode`, `channel`, `content`, `created_at` | 三种模式下用户、助手和确需展示的工具消息。论文上传正文不会保存 base64。 |
 | `conversation_artifacts` | `conversation_id`, `artifact_id`, `relation`, `linked_at` | 会话与领域入门/论文精读的 `created / continued / discussed` 关系。 |
 | `conversation_memory_snapshots` | `memory_snapshot_id`, `conversation_id`, `through_message_id`, `current_goal`, `confirmed_decisions_json`, `open_questions_json`, `summary`, `created_at` | 仅服务当前会话的压缩记忆。fork 可从分叉点的最新快照继承后独立更新。 |
 

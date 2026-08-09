@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from models.storage import LocalResearchStore
+from storage import LocalResearchStore
 
 
 class LocalResearchStoreTests(unittest.TestCase):
