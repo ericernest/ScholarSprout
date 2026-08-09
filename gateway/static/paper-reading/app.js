@@ -115,8 +115,19 @@ function bindWorkbench() {
     if (!question) return;
     input.value = "";
     const fork = state.forks.find((item) => item.id === state.activeFeedId);
-    if (fork) runForkTurn(fork, question);
-    else startReading(question);
+    if (fork) {
+      appendUserQuestion(question, fork.feedEl);
+      runForkTurn(fork, question);
+    } else {
+      appendUserQuestion(question);
+      startReading(question);
+    }
+  });
+  $("reading-chat-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("reading-chat-form").requestSubmit();
+    }
   });
   $("reading-stop-button").addEventListener("click", interruptReadingResponse);
   window.addEventListener("beforeunload", saveBeforeUnload);
@@ -2166,6 +2177,15 @@ async function loadPdfMarks() {
     state.pdfMarks = cached;
   }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
+}
+
+function appendUserQuestion(text, target = $("analysis-feed")) {
+  const card = create("article", "user-question-card");
+  const header = create("header");
+  header.append(create("strong", "", "你"), create("span", "", "提问"));
+  card.append(header, create("p", "", text));
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
 }
 
 function annotationToPdfMark(annotation) {

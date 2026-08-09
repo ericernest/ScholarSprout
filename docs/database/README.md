@@ -31,14 +31,18 @@
 | `paper_files` | `paper_file_id`, `paper_id`, `file_kind`, `storage_uri`, `sha256`, `created_at` | PDF、抽取全文或图片的本地文件索引及完整性校验。 |
 | `paper_documents` | `paper_id`, `content_schema_version`, `document_json`, `updated_at` | 解析后的章节、图表索引、导读地图及仍在迭代的论文文档结构。 |
 | `paper_knowledge_graphs` | `graph_id`, `paper_id`, `graph_scope`, `graph_json`, `updated_at` | 单篇或跨论文知识图谱快照。 |
-| `library_items` | `paper_id`, `reading_status`, `note`, `added_at`, `updated_at` | 用户明确“加入论文管理”才创建。阅读状态仅为 `unread / reading / read / archived`。 |
+| `paper_folders` | `folder_id`, `name`, `parent_folder_id`, 时间 | 论文管理中的分类/文件夹；v1 界面先使用单层目录，数据关系保留后续层级能力。 |
+| `library_items` | `paper_id`, `reading_status`, `note`, `folder_id`, `added_at`, `updated_at` | 进入论文管理的论文及其阅读状态、备注和分类。阅读状态仅为 `unread / reading / read / archived`。 |
+| `paper_tags` / `paper_tag_links` | 标签身份、论文关联、添加时间 | 多对多标签。标签用于交叉主题，文件夹用于主分类，两者不混成一个字段。 |
 | `paper_annotations` | `annotation_id`, `paper_id`, `reading_session_id`, `annotation_type`, `color`, `page_number`, `section_id`, `selected_text`, `anchor_schema_version`, `anchor_json`, `note_text`, 时间 | PDF 高亮与注释。`anchor_json` 使用 `pdf-rects-v1`，保存页面内归一化矩形，因此缩放后仍能准确恢复；会话字段只记录来源，标注归属于论文并在该论文的 Fork/精读会话间共享。 |
 
 领域入门推荐论文后：
 
 1. 选择“加入论文管理”时，创建/复用 `papers`，再写入 `library_items`。
-2. 选择“直接论文精读”时，创建/复用 `papers` 并创建精读会话，但不创建 `library_items`。
-3. 后续收藏同一篇已精读论文时，只补 `library_items`，不会复制论文或精读结果。
+2. 选择“论文精读”时，导入/复用论文并默认写入 `library_items`；真正开始问答后，仅把 `unread` 推进为 `reading`，不会覆盖用户已有的备注、文件夹或标签。
+3. 论文管理页也可直接上传 PDF 或粘贴 PDF 链接，导入完成即进入管理列表，并提供相同的精读入口。
+
+推荐论文已经有 `paper_id` 时，精读导入会把 PDF 附着到该论文实体，而不是另建一条同名记录；没有可下载链接时，论文卡片会要求用户选择本地 PDF。
 
 ### 领域入门
 
@@ -86,9 +90,11 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 
 - `GET /api/research/conversations`：会话标题、模式、消息数和最后一条消息摘要。
 - `GET /api/research/domain-onboardings`：领域任务状态、阶段、推荐论文数和质量摘要。
+- `GET /api/research/domain-onboardings/{artifact_id}`：打开领域结果详情及推荐论文操作，不依赖自动页面跳转。
 - `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
-- `GET /api/research/papers`：论文管理状态、备注、精读及标注数。
-- `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理；移出不会删除论文、精读记录或标注。
+- `GET /api/research/papers`：论文管理状态、备注、文件夹、标签、精读及标注数；可按 `folder_id` 筛选。
+- `GET/POST/DELETE /api/research/paper-folders`：读取、新建和删除论文分类；删除分类只会把论文变为未分类。
+- `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理，更新体包含状态、备注、文件夹和标签；移出不会删除论文、精读记录或标注。
 - `GET/PUT/DELETE /api/research/papers/{paper_id}/annotations/...`：恢复、保存和删除高亮/注释。
 
 论文工作台仍在浏览器保存一份标注缓存，用于短时离线兜底；SQLite 是正式数据源。首次打开升级后的工作台时，已有浏览器标注会自动补写到 SQLite。

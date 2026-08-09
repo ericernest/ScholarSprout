@@ -204,7 +204,7 @@ async function sendMessage() {
       const job = await submitDomainOnboardingJob(content);
       appendDomainOnboardingCard(job, content);
       updateDomainOnboardingCard(job.task_id, job);
-      window.location.assign(`/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`);
+      watchDomainOnboardingCard(job.task_id, job.access_token || "");
       return;
     }
 

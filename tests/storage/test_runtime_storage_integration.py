@@ -3,10 +3,12 @@ from __future__ import annotations
 import sqlite3
 import time
 import unittest
+from base64 import b64encode
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from channels.base import ChannelMessage
 from gateway.message_flow import process_channel_message
@@ -14,7 +16,9 @@ from handlers.domain_onboarding.jobs import DomainOnboardingJobManager, SQLiteJo
 from handlers.domain_onboarding.metrics import DomainOnboardingMetrics
 from handlers.domain_onboarding.schemas import DomainOnboardingRequest, PipelineResult
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
-from storage import LocalResearchStore, PaperReadingStorage
+from handlers.paper_reading.handler import _handle_upload_paper
+from handlers.paper_reading.schemas import PaperReadingRequest
+from storage import LocalResearchStore, PaperReadingStorage, ResearchCatalog
 
 
 class _Channel:
@@ -161,6 +165,31 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM paper_files WHERE paper_id = 'paper-1'"
                 ).fetchone()[0]
             self.assertEqual(file_count, 1)
+
+    def test_upload_attaches_to_existing_paper_and_enters_library(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = LocalResearchStore(root / "research.sqlite3")
+            store.initialize()
+            paper_id = store.upsert_paper(
+                paper_id="recommended-paper", title="Recommended Paper", authors=[]
+            )
+            paper_storage = PaperReadingStorage(root / "paper_reading", store)
+            state = SimpleNamespace(paper_pipeline=object(), paper_storage=paper_storage)
+            request = PaperReadingRequest(
+                action="upload_paper",
+                paper_id=paper_id,
+                pdf_data=b64encode(b"%PDF-1.4\n%%EOF").decode("ascii"),
+                metadata={"original_filename": "recommended.pdf"},
+            )
+
+            with patch("handlers.paper_reading.handler._schedule_background_parse"):
+                response = _handle_upload_paper(request, state)
+
+            self.assertEqual(response["data"]["paper_id"], paper_id)
+            library = ResearchCatalog(store).list_papers(library_only=True)
+            self.assertEqual(library[0]["paper_id"], paper_id)
+            self.assertEqual(library[0]["reading_status"], "unread")
 
 
 if __name__ == "__main__":

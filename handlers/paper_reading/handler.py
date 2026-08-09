@@ -206,7 +206,9 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     except Exception as e:
         return _error(f"PDF 获取失败: {e}", action="upload_paper")
 
-    paper_id = str(uuid4())
+    # Passing an existing paper_id attaches a PDF to a catalog/recommendation item
+    # instead of creating a duplicate paper record.
+    paper_id = request.paper_id or str(uuid4())
     quick_payload = _build_quick_paper_payload(
         paper_id=paper_id,
         pdf_bytes=pdf_bytes,
@@ -215,6 +217,9 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     )
     storage.save_upload(paper_id, pdf_bytes)
     storage.save_paper(paper_id, quick_payload)
+    research_store = getattr(storage, "research_store", None)
+    if research_store is not None:
+        research_store.ensure_library_item(paper_id, reading_status="unread")
     _schedule_background_parse(app_state, paper_id, pdf_bytes)
 
     response_data = {
@@ -546,6 +551,11 @@ def _handle_start_reading(
         )
 
     paper_data = _load_paper_data(storage, session.paper_id or request.paper_id)
+    research_store = getattr(storage, "research_store", None)
+    if research_store is not None and (session.paper_id or request.paper_id):
+        research_store.ensure_library_item(
+            session.paper_id or request.paper_id, reading_status="reading"
+        )
     if paper_data and not session.paper_title:
         session.paper_title = paper_data.get("title", "")
     if paper_data:

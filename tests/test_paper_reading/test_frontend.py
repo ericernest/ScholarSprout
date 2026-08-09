@@ -165,6 +165,15 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertNotIn('action: "pause_reading"', javascript)
         self.assertIn("function saveBeforeUnload()", javascript)
 
+    def test_agent_chat_shows_questions_and_enter_submits(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function appendUserQuestion", javascript)
+        self.assertIn('event.key === "Enter" && !event.shiftKey', javascript)
+        self.assertIn('$("reading-chat-form").requestSubmit()', javascript)
+        self.assertIn("Enter 发送，Shift+Enter 换行", html)
+
     def test_annotation_and_pdf_jump_use_workspace_ui(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")

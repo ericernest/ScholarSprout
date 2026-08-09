@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -17,6 +18,13 @@ Limit = Annotated[int, Query(ge=1, le=200)]
 class LibraryItemUpdate(BaseModel):
     reading_status: Literal["unread", "reading", "read", "archived"] = "unread"
     note: str = Field(default="", max_length=4000)
+    folder_id: str | None = Field(default=None, max_length=180)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    parent_folder_id: str | None = Field(default=None, max_length=180)
 
 
 class PdfRect(BaseModel):
@@ -73,6 +81,14 @@ def domain_onboardings(request: Request, search: Search = "", limit: Limit = 100
     return _catalog(request).list_domain_onboardings(search=search, limit=limit)
 
 
+@router.get("/domain-onboardings/{artifact_id}")
+def domain_onboarding_detail(artifact_id: str, request: Request) -> dict:
+    item = _catalog(request).get_domain_onboarding(artifact_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="领域入门记录不存在。")
+    return item
+
+
 @router.get("/paper-readings")
 def paper_readings(request: Request, search: Search = "", limit: Limit = 100) -> list[dict]:
     return _catalog(request).list_paper_readings(search=search, limit=limit)
@@ -83,17 +99,44 @@ def papers(
     request: Request,
     search: Search = "",
     library_only: bool = True,
+    folder_id: str | None = Query(default=None, max_length=180),
     limit: Limit = 100,
 ) -> list[dict]:
     return _catalog(request).list_papers(
-        search=search, library_only=library_only, limit=limit
+        search=search, library_only=library_only, folder_id=folder_id, limit=limit
     )
+
+
+@router.get("/paper-folders")
+def paper_folders(request: Request) -> list[dict]:
+    return _catalog(request).list_folders()
+
+
+@router.post("/paper-folders", status_code=201)
+def create_paper_folder(payload: FolderCreate, request: Request) -> dict:
+    try:
+        return _catalog(request).create_folder(
+            payload.name.strip(), parent_folder_id=payload.parent_folder_id
+        )
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="文件夹名称已存在，或上级文件夹无效。") from error
+
+
+@router.delete("/paper-folders/{folder_id}")
+def delete_paper_folder(folder_id: str, request: Request) -> dict:
+    if not _catalog(request).delete_folder(folder_id):
+        raise HTTPException(status_code=404, detail="文件夹不存在。")
+    return {"folder_id": folder_id, "deleted": True}
 
 
 @router.put("/papers/{paper_id}/library")
 def save_library_item(paper_id: str, payload: LibraryItemUpdate, request: Request) -> dict:
     if not _catalog(request).set_library_item(
-        paper_id, reading_status=payload.reading_status, note=payload.note.strip()
+        paper_id,
+        reading_status=payload.reading_status,
+        note=payload.note.strip(),
+        folder_id=payload.folder_id,
+        tags=payload.tags,
     ):
         raise HTTPException(status_code=404, detail="论文不存在。")
     return {"paper_id": paper_id, "saved": True}

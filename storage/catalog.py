@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .local_store import LocalResearchStore, _json, _now
+from .local_store import LocalResearchStore, _id, _json, _now
 
 
 def _loads(value: str | None, fallback: Any) -> Any:
@@ -129,6 +129,58 @@ class ResearchCatalog:
             )
         return items
 
+    def get_domain_onboarding(self, artifact_id: str) -> dict[str, Any] | None:
+        with self.store._connection() as connection:
+            row = connection.execute(
+                """SELECT d.*, w.title, w.state, w.created_at, w.updated_at
+                   FROM domain_onboardings d JOIN work_artifacts w USING(artifact_id)
+                   WHERE d.artifact_id = ?""",
+                (artifact_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            recommendations = connection.execute(
+                """SELECT r.*, p.title, p.authors_json, p.abstract, p.publication_year,
+                          p.venue, p.doi, p.arxiv_id, p.source_url,
+                          CASE WHEN l.paper_id IS NULL THEN 0 ELSE 1 END AS in_library
+                   FROM domain_recommendations r
+                   JOIN papers p ON p.paper_id = r.paper_id
+                   LEFT JOIN library_items l ON l.paper_id = p.paper_id
+                   WHERE r.artifact_id = ? ORDER BY r.recommendation_rank""",
+                (artifact_id,),
+            ).fetchall()
+        return {
+            "artifact_id": row["artifact_id"],
+            "title": row["title"],
+            "query": row["query"],
+            "state": row["state"],
+            "current_stage": row["current_stage"],
+            "overview": _loads(row["overview_json"], {}),
+            "research_plan": _loads(row["research_plan_json"], {}),
+            "learning_path": _loads(row["learning_path_json"], []),
+            "quality": _loads(row["quality_json"], {}),
+            "recommendations": [
+                {
+                    "paper_id": item["paper_id"],
+                    "title": item["title"],
+                    "authors": _loads(item["authors_json"], []),
+                    "abstract": item["abstract"] or "",
+                    "publication_year": item["publication_year"],
+                    "venue": item["venue"] or "",
+                    "doi": item["doi"] or "",
+                    "arxiv_id": item["arxiv_id"] or "",
+                    "source_url": item["source_url"] or "",
+                    "reason": item["reason"],
+                    "reading_focus": _loads(item["reading_focus_json"], []),
+                    "reading_priority": item["reading_priority"],
+                    "in_library": bool(item["in_library"]),
+                }
+                for item in recommendations
+            ],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
     def list_paper_readings(self, *, search: str = "", limit: int = 100) -> list[dict[str, Any]]:
         pattern = f"%{search.strip()}%"
         with self.store._connection() as connection:
@@ -166,25 +218,41 @@ class ResearchCatalog:
         ]
 
     def list_papers(
-        self, *, search: str = "", library_only: bool = False, limit: int = 100
+        self,
+        *,
+        search: str = "",
+        library_only: bool = False,
+        folder_id: str | None = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         pattern = f"%{search.strip()}%"
         library_clause = "AND l.paper_id IS NOT NULL" if library_only else ""
+        folder_clause = "AND l.folder_id = ?" if folder_id else ""
+        parameters: list[Any] = [pattern, pattern, pattern]
+        if folder_id:
+            parameters.append(folder_id)
+        parameters.append(limit)
         with self.store._connection() as connection:
             rows = connection.execute(
                 f"""SELECT p.*, l.reading_status, l.note AS library_note, l.added_at,
+                           l.folder_id, f.name AS folder_name,
+                           (SELECT GROUP_CONCAT(t.name, char(31))
+                            FROM paper_tag_links pt JOIN paper_tags t ON t.tag_id = pt.tag_id
+                            WHERE pt.paper_id = p.paper_id) AS tag_names,
                            COUNT(DISTINCT s.reading_session_id) AS reading_count,
                            COUNT(DISTINCT a.annotation_id) AS annotation_count,
                            CASE WHEN d.paper_id IS NULL THEN 0 ELSE 1 END AS has_document
                     FROM papers p
                     LEFT JOIN library_items l ON l.paper_id = p.paper_id
+                    LEFT JOIN paper_folders f ON f.folder_id = l.folder_id
                     LEFT JOIN paper_documents d ON d.paper_id = p.paper_id
                     LEFT JOIN paper_reading_sessions s ON s.paper_id = p.paper_id
                     LEFT JOIN paper_annotations a ON a.paper_id = p.paper_id
                     WHERE (p.title LIKE ? OR p.abstract LIKE ? OR p.authors_json LIKE ?)
                     {library_clause}
+                    {folder_clause}
                     GROUP BY p.paper_id ORDER BY COALESCE(l.updated_at, p.updated_at) DESC LIMIT ?""",
-                (pattern, pattern, pattern, limit),
+                parameters,
             ).fetchall()
         return [
             {
@@ -200,6 +268,12 @@ class ResearchCatalog:
                 "in_library": row["reading_status"] is not None,
                 "reading_status": row["reading_status"] or "",
                 "library_note": row["library_note"] or "",
+                "folder_id": row["folder_id"] or "",
+                "folder_name": row["folder_name"] or "",
+                "tags": sorted(
+                    [name for name in str(row["tag_names"] or "").split(chr(31)) if name],
+                    key=str.casefold,
+                ),
                 "reading_count": int(row["reading_count"]),
                 "annotation_count": int(row["annotation_count"]),
                 "has_document": bool(row["has_document"]),
@@ -209,15 +283,71 @@ class ResearchCatalog:
             for row in rows
         ]
 
-    def set_library_item(self, paper_id: str, *, reading_status: str, note: str) -> bool:
+    def set_library_item(
+        self,
+        paper_id: str,
+        *,
+        reading_status: str,
+        note: str,
+        folder_id: str | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
         with self.store._connection() as connection:
             exists = connection.execute(
                 "SELECT 1 FROM papers WHERE paper_id = ?", (paper_id,)
             ).fetchone()
+            if folder_id and connection.execute(
+                "SELECT 1 FROM paper_folders WHERE folder_id = ?", (folder_id,)
+            ).fetchone() is None:
+                return False
         if exists is None:
             return False
-        self.store.add_to_library(paper_id, reading_status=reading_status, note=note)
+        self.store.add_to_library(
+            paper_id, reading_status=reading_status, note=note, folder_id=folder_id
+        )
+        if tags is not None:
+            cleaned = list(dict.fromkeys(name.strip() for name in tags if name.strip()))[:30]
+            now = _now()
+            with self.store._connection() as connection:
+                connection.execute("DELETE FROM paper_tag_links WHERE paper_id = ?", (paper_id,))
+                for name in cleaned:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO paper_tags(tag_id, name, created_at) VALUES (?, ?, ?)",
+                        (_id("tag"), name, now),
+                    )
+                    tag = connection.execute(
+                        "SELECT tag_id FROM paper_tags WHERE name = ? COLLATE NOCASE", (name,)
+                    ).fetchone()
+                    connection.execute(
+                        "INSERT INTO paper_tag_links(paper_id, tag_id, added_at) VALUES (?, ?, ?)",
+                        (paper_id, tag["tag_id"], now),
+                    )
         return True
+
+    def list_folders(self) -> list[dict[str, Any]]:
+        with self.store._connection() as connection:
+            rows = connection.execute(
+                """SELECT f.*, COUNT(l.paper_id) AS paper_count
+                   FROM paper_folders f LEFT JOIN library_items l ON l.folder_id = f.folder_id
+                   GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_folder(self, name: str, *, parent_folder_id: str | None = None) -> dict[str, Any]:
+        now = _now()
+        folder_id = _id("folder")
+        with self.store._connection() as connection:
+            connection.execute(
+                """INSERT INTO paper_folders(folder_id, name, parent_folder_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (folder_id, name.strip(), parent_folder_id, now, now),
+            )
+        return {"folder_id": folder_id, "name": name.strip(), "parent_folder_id": parent_folder_id, "paper_count": 0}
+
+    def delete_folder(self, folder_id: str) -> bool:
+        with self.store._connection() as connection:
+            cursor = connection.execute("DELETE FROM paper_folders WHERE folder_id = ?", (folder_id,))
+        return cursor.rowcount > 0
 
     def remove_library_item(self, paper_id: str) -> bool:
         with self.store._connection() as connection:

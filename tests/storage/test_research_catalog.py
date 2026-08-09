@@ -77,12 +77,39 @@ class ResearchCatalogTests(unittest.TestCase):
     def test_paper_annotations_are_in_schema(self) -> None:
         self.assertIn("paper_annotations", self.store.list_table_names())
 
+    def test_folder_and_tags_round_trip_without_pipeline_overwrite(self) -> None:
+        folder = self.catalog.create_folder("量子控制")
+        saved = self.catalog.set_library_item(
+            self.paper_id,
+            reading_status="unread",
+            note="保留这条备注",
+            folder_id=folder["folder_id"],
+            tags=["控制", "鲁棒性", "控制"],
+        )
+        self.assertTrue(saved)
+
+        self.store.ensure_library_item(self.paper_id, reading_status="reading")
+        paper = self.catalog.list_papers(library_only=True)[0]
+
+        self.assertEqual(paper["reading_status"], "reading")
+        self.assertEqual(paper["library_note"], "保留这条备注")
+        self.assertEqual(paper["folder_name"], "量子控制")
+        self.assertEqual(paper["tags"], ["控制", "鲁棒性"])
+        self.assertEqual(self.catalog.list_papers(folder_id=folder["folder_id"])[0]["paper_id"], self.paper_id)
+
 
 class ResearchLibraryApiTests(unittest.TestCase):
     def test_library_page_is_available(self) -> None:
         response = TestClient(app).get("/library")
         self.assertEqual(response.status_code, 200)
         self.assertIn("研究资料库", response.text)
+        self.assertIn('id="paper-import"', response.text)
+        self.assertIn('id="folder-filter"', response.text)
+
+        script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
+        self.assertIn("card.tabIndex = 0", script)
+        self.assertIn("function openDomainDetail", script)
+        self.assertIn("function attachManagedPaper", script)
 
     def test_library_and_annotation_endpoints(self) -> None:
         with TemporaryDirectory() as directory:
@@ -112,6 +139,34 @@ class ResearchLibraryApiTests(unittest.TestCase):
             self.assertEqual(annotation.status_code, 200)
             self.assertEqual(listed.json()[0]["selected_text"], "important result")
             self.assertNotIn("anchor_json", listed.text)
+
+    def test_folder_api_and_library_classification(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = LocalResearchStore(Path(directory) / "research.sqlite3")
+            store.initialize()
+            paper_id = store.upsert_paper(title="Categorized Paper", authors=[])
+            app.state.research_storage = store
+            client = TestClient(app)
+
+            folder = client.post("/api/research/paper-folders", json={"name": "方法论文"})
+            saved = client.put(
+                f"/api/research/papers/{paper_id}/library",
+                json={
+                    "reading_status": "unread",
+                    "note": "先看实验",
+                    "folder_id": folder.json()["folder_id"],
+                    "tags": ["benchmark", "实验"],
+                },
+            )
+            listed = client.get(
+                "/api/research/papers",
+                params={"folder_id": folder.json()["folder_id"]},
+            )
+
+            self.assertEqual(folder.status_code, 201)
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(listed.json()[0]["folder_name"], "方法论文")
+            self.assertEqual(listed.json()[0]["tags"], ["benchmark", "实验"])
 
     def test_annotation_rejects_page_overflow(self) -> None:
         with TemporaryDirectory() as directory:

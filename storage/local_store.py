@@ -17,7 +17,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _now() -> str:
@@ -105,12 +105,34 @@ class LocalResearchStore:
                     UNIQUE(paper_id, graph_scope)
                 );
 
+                CREATE TABLE IF NOT EXISTS paper_folders (
+                    folder_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    parent_folder_id TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_tags (
+                    tag_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS library_items (
                     paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
                     reading_status TEXT NOT NULL CHECK(reading_status IN ('unread', 'reading', 'read', 'archived')),
                     note TEXT NOT NULL DEFAULT '',
+                    folder_id TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL,
                     added_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_tag_links (
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    tag_id TEXT NOT NULL REFERENCES paper_tags(tag_id) ON DELETE CASCADE,
+                    added_at TEXT NOT NULL,
+                    PRIMARY KEY(paper_id, tag_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS paper_annotations (
@@ -259,6 +281,8 @@ class LocalResearchStore:
                     ON paper_reading_sessions(paper_id, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_annotations_paper_page
                     ON paper_annotations(paper_id, page_number, created_at);
+                CREATE INDEX IF NOT EXISTS idx_paper_tag_links_tag
+                    ON paper_tag_links(tag_id, paper_id);
                 CREATE INDEX IF NOT EXISTS idx_memory_snapshots_conversation
                     ON conversation_memory_snapshots(conversation_id, created_at DESC);
                 """
@@ -271,6 +295,15 @@ class LocalResearchStore:
                 connection, "messages", "channel", "TEXT NOT NULL DEFAULT 'web'"
             )
             self._ensure_column(connection, "paper_reading_sessions", "user_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "library_items",
+                "folder_id",
+                "TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL",
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_library_items_folder ON library_items(folder_id, updated_at DESC)"
+            )
             self._ensure_column(
                 connection,
                 "paper_reading_sessions",
@@ -338,16 +371,41 @@ class LocalResearchStore:
                 )
         return paper_id
 
-    def add_to_library(self, paper_id: str, *, reading_status: str = "unread", note: str = "") -> None:
+    def add_to_library(
+        self,
+        paper_id: str,
+        *,
+        reading_status: str = "unread",
+        note: str = "",
+        folder_id: str | None = None,
+    ) -> None:
         now = _now()
         with self._connection() as connection:
             connection.execute(
-                """INSERT INTO library_items(paper_id, reading_status, note, added_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO library_items(paper_id, reading_status, note, folder_id, added_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(paper_id) DO UPDATE SET reading_status = excluded.reading_status,
-                   note = excluded.note, updated_at = excluded.updated_at""",
-                (paper_id, reading_status, note, now, now),
+                   note = excluded.note, folder_id = excluded.folder_id,
+                   updated_at = excluded.updated_at""",
+                (paper_id, reading_status, note, folder_id, now, now),
             )
+
+    def ensure_library_item(self, paper_id: str, *, reading_status: str = "unread") -> None:
+        """Add pipeline-created papers without overwriting user-managed notes or folders."""
+        now = _now()
+        with self._connection() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO library_items(
+                   paper_id, reading_status, note, folder_id, added_at, updated_at)
+                   VALUES (?, ?, '', NULL, ?, ?)""",
+                (paper_id, reading_status, now, now),
+            )
+            if reading_status == "reading":
+                connection.execute(
+                    """UPDATE library_items SET reading_status = 'reading', updated_at = ?
+                       WHERE paper_id = ? AND reading_status = 'unread'""",
+                    (now, paper_id),
+                )
 
     def ensure_paper_reference(self, paper_id: str, *, title: str) -> None:
         """Create a minimal FK target without overwriting parsed paper metadata."""

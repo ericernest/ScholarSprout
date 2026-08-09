@@ -28,13 +28,27 @@
         </header>
         <div class="toolbar">
           <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="搜索标题或内容" autocomplete="off" /></label>
-          <label id="paper-scope" class="scope-switch" hidden><input id="show-all-papers" type="checkbox" /><span>显示全部论文</span></label>
+          <div id="paper-scope" class="paper-scope" hidden>
+            <label class="scope-switch"><input id="show-all-papers" type="checkbox" /><span>显示全部论文</span></label>
+            <select id="folder-filter" aria-label="按文件夹筛选"><option value="">全部文件夹</option></select>
+            <button id="create-folder-button" type="button">＋ 新建文件夹</button>
+          </div>
         </div>
+        <section id="paper-import" class="paper-import" hidden>
+          <div><strong>添加论文</strong><span>上传 PDF 或粘贴 PDF 链接，导入后自动进入论文管理。</span></div>
+          <input id="paper-file-input" type="file" accept="application/pdf,.pdf" />
+          <input id="paper-url-input" type="url" placeholder="https://…/paper.pdf" />
+          <button id="paper-import-button" type="button">添加到论文管理</button>
+        </section>
         <section id="result-summary" class="result-summary"></section>
         <section id="items" class="items" aria-live="polite"></section>
         <section id="empty-state" class="empty-state" hidden><span>✦</span><h2 id="empty-title">这里还没有内容</h2><p id="empty-copy">从一次新会话开始，结果会自动出现在这里。</p><a href="/app">开始使用</a></section>
       </section>
     </main>
+    <dialog id="domain-detail-dialog" class="detail-dialog">
+      <button id="detail-close-button" class="detail-close" type="button" aria-label="关闭">×</button>
+      <div id="domain-detail-content"></div>
+    </dialog>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="/static/library/app.js"></script>
   </body>

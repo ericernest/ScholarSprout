@@ -5,7 +5,7 @@ const VIEWS = {
   papers: { title: "论文管理", kicker: "PAPER LIBRARY", description: "收藏、标记阅读状态，并管理论文上的高亮与注释。", endpoint: "/api/research/papers", empty: "在全部论文中选择需要长期管理的论文。" },
 };
 
-const state = { view: new URLSearchParams(location.search).get("view") || "conversations", search: "", allPapers: false, items: [] };
+const state = { view: new URLSearchParams(location.search).get("view") || "conversations", search: "", allPapers: false, items: [], folders: [], folderId: "" };
 if (!(state.view in VIEWS)) state.view = "conversations";
 const items = document.querySelector("#items");
 let searchTimer = null;
@@ -26,7 +26,20 @@ function boot() {
     state.allPapers = event.target.checked;
     loadItems();
   });
+  document.querySelector("#folder-filter").addEventListener("change", (event) => {
+    state.folderId = event.target.value;
+    loadItems();
+  });
+  document.querySelector("#create-folder-button").addEventListener("click", createFolder);
+  document.querySelector("#paper-import-button").addEventListener("click", importPaper);
+  document.querySelector("#detail-close-button").addEventListener("click", () => document.querySelector("#domain-detail-dialog").close());
   items.addEventListener("click", handleItemAction);
+  items.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches(".item-card")) {
+      event.preventDefault();
+      openCard(event.target);
+    }
+  });
   loadCounts();
   setView(state.view, false);
 }
@@ -49,9 +62,21 @@ function setView(view, updateUrl = true) {
   document.querySelector("#view-kicker").textContent = config.kicker;
   document.querySelector("#view-description").textContent = config.description;
   document.querySelector("#paper-scope").hidden = state.view !== "papers";
+  document.querySelector("#paper-import").hidden = state.view !== "papers";
   document.querySelector("#search-input").placeholder = state.view === "papers" ? "搜索标题、作者或摘要" : "搜索标题或内容";
   if (updateUrl) history.replaceState(null, "", `/library?view=${encodeURIComponent(state.view)}`);
-  loadItems();
+  if (state.view === "papers") {
+    loadFolders().then(loadItems).catch((error) => toast(error.message, true));
+  } else {
+    loadItems();
+  }
+}
+
+async function loadFolders() {
+  state.folders = await fetchJson("/api/research/paper-folders");
+  const filter = document.querySelector("#folder-filter");
+  filter.replaceChildren(new Option("全部文件夹", ""));
+  state.folders.forEach((folder) => filter.add(new Option(`${folder.name}（${folder.paper_count}）`, folder.folder_id, false, folder.folder_id === state.folderId)));
 }
 
 async function loadItems() {
@@ -61,6 +86,7 @@ async function loadItems() {
     const url = new URL(config.endpoint, location.origin);
     if (state.search) url.searchParams.set("search", state.search);
     if (state.view === "papers") url.searchParams.set("library_only", String(!state.allPapers));
+    if (state.view === "papers" && state.folderId) url.searchParams.set("folder_id", state.folderId);
     state.items = await fetchJson(url);
     renderItems();
   } catch (error) {
@@ -82,7 +108,13 @@ function renderItems() {
 
 function renderCard(item) {
   const card = element("article", "item-card");
+  card.tabIndex = 0;
+  card.setAttribute("role", "link");
   card.dataset.id = item.conversation_id || item.artifact_id || item.reading_session_id || item.paper_id;
+  if (state.view === "conversations") card.dataset.href = `/app?conversation_id=${encodeURIComponent(item.conversation_id)}`;
+  if (state.view === "paper-readings") card.dataset.href = paperWorkspace(item.paper_id, item.reading_session_id);
+  if (state.view === "papers") card.dataset.href = item.has_document || item.reading_count ? paperWorkspace(item.paper_id, "") : (item.source_url || "");
+  if (state.view === "domain-onboardings") card.dataset.domainId = item.artifact_id;
   const head = element("div", "item-head");
   head.append(element("h2", "item-title", item.paper_title || item.title || item.query || "未命名记录"), element("time", "item-time", formatDate(item.updated_at)));
   card.append(head);
@@ -95,11 +127,22 @@ function renderCard(item) {
   if (state.view === "conversations") {
     actions.append(link(`/app?conversation_id=${encodeURIComponent(item.conversation_id)}`, "继续会话", true));
   } else if (state.view === "domain-onboardings") {
-    actions.append(element("span", "chip", "结果已完整保存"));
+    const open = element("button", "accent", "查看领域结果");
+    open.dataset.action = "open-domain";
+    open.dataset.domainId = item.artifact_id;
+    actions.append(open);
   } else if (state.view === "paper-readings") {
     actions.append(link(paperWorkspace(item.paper_id, item.reading_session_id), "继续精读", true));
   } else {
-    actions.append(link(paperWorkspace(item.paper_id, ""), item.reading_count ? "打开论文" : "开始精读", true));
+    if (item.has_document || item.reading_count) {
+      actions.append(link(paperWorkspace(item.paper_id, ""), item.reading_count ? "打开论文" : "开始精读", true));
+    } else {
+      const start = element("button", "accent", paperPdfUrl(item) ? "导入 PDF 并精读" : "上传 PDF 并精读");
+      start.dataset.action = "attach-paper";
+      start.dataset.paperId = item.paper_id;
+      start.dataset.pdfUrl = paperPdfUrl(item);
+      actions.append(start);
+    }
     actions.append(renderPaperControls(item));
   }
   card.append(actions);
@@ -115,10 +158,18 @@ function renderPaperControls(item) {
   note.dataset.paperNote = item.paper_id;
   note.placeholder = "论文备注（可选）";
   note.value = item.library_note || "";
+  const folder = document.createElement("select");
+  folder.dataset.paperFolder = item.paper_id;
+  folder.add(new Option("未分类", ""));
+  state.folders.forEach((entry) => folder.add(new Option(entry.name, entry.folder_id, false, entry.folder_id === item.folder_id)));
+  const tags = document.createElement("input");
+  tags.dataset.paperTags = item.paper_id;
+  tags.placeholder = "标签，用逗号分隔";
+  tags.value = (item.tags || []).join(", ");
   const save = element("button", "", item.in_library ? "保存管理信息" : "加入论文库");
   save.dataset.action = "save-paper";
   save.dataset.paperId = item.paper_id;
-  wrap.append(select, note, save);
+  wrap.append(select, folder, tags, note, save);
   if (item.in_library) {
     const remove = element("button", "remove", "移出论文库");
     remove.dataset.action = "remove-paper";
@@ -130,22 +181,179 @@ function renderPaperControls(item) {
 
 async function handleItemAction(event) {
   const button = event.target.closest("[data-action]");
-  if (!button) return;
+  if (!button) {
+    if (!event.target.closest("a,button,input,select,textarea")) openCard(event.target.closest(".item-card"));
+    return;
+  }
+  event.stopPropagation();
+  if (button.dataset.action === "open-domain") {
+    await openDomainDetail(button.dataset.domainId);
+    return;
+  }
+  if (button.dataset.action === "attach-paper") {
+    await attachManagedPaper(button.dataset.paperId, button.dataset.pdfUrl, button);
+    return;
+  }
   const paperId = button.dataset.paperId;
   button.disabled = true;
   try {
     if (button.dataset.action === "save-paper") {
       const readingStatus = document.querySelector(`[data-paper-status="${cssEscape(paperId)}"]`).value;
       const note = document.querySelector(`[data-paper-note="${cssEscape(paperId)}"]`).value.trim();
-      await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/library`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reading_status: readingStatus, note }) });
+      const folderId = document.querySelector(`[data-paper-folder="${cssEscape(paperId)}"]`).value || null;
+      const tags = document.querySelector(`[data-paper-tags="${cssEscape(paperId)}"]`).value.split(/[,，]/).map((value) => value.trim()).filter(Boolean);
+      await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/library`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reading_status: readingStatus, note, folder_id: folderId, tags }) });
       toast("论文管理信息已保存。");
     } else {
       await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/library`, { method: "DELETE" });
       toast("论文已移出论文库，精读记录和标注仍然保留。");
     }
-    await Promise.all([loadCounts(), loadItems()]);
+    await Promise.all([loadCounts(), loadFolders(), loadItems()]);
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
+}
+
+function openCard(card) {
+  if (!card) return;
+  if (card.dataset.domainId) openDomainDetail(card.dataset.domainId);
+  else if (card.dataset.href) window.location.href = card.dataset.href;
+}
+
+async function openDomainDetail(artifactId) {
+  const dialog = document.querySelector("#domain-detail-dialog");
+  const content = document.querySelector("#domain-detail-content");
+  content.replaceChildren(element("p", "detail-loading", "正在读取领域结果…"));
+  if (!dialog.open) dialog.showModal();
+  try {
+    const item = await fetchJson(`/api/research/domain-onboardings/${encodeURIComponent(artifactId)}`);
+    const header = element("header", "detail-header");
+    header.append(element("p", "eyebrow", "DOMAIN ONBOARDING"), element("h2", "", item.title || item.query));
+    const summary = item.overview?.summary || item.overview?.domain_definition || item.query;
+    header.append(element("p", "detail-summary", summary));
+    const path = element("section", "detail-section");
+    path.append(element("h3", "", `学习路径（${item.learning_path?.length || 0}）`));
+    const pathList = element("ol", "detail-list");
+    (item.learning_path || []).forEach((step) => pathList.append(element("li", "", step.title || step.name || step.topic || JSON.stringify(step))));
+    if (!pathList.childElementCount) pathList.append(element("li", "", "暂无学习路径"));
+    path.append(pathList);
+    const papers = element("section", "detail-section");
+    papers.append(element("h3", "", `推荐论文（${item.recommendations?.length || 0}）`));
+    (item.recommendations || []).forEach((paper) => papers.append(renderRecommendation(paper)));
+    content.replaceChildren(header, path, papers);
+  } catch (error) {
+    content.replaceChildren(element("p", "detail-error", error.message));
+  }
+}
+
+function renderRecommendation(paper) {
+  const card = element("article", "recommendation-card");
+  card.append(element("strong", "", paper.title), element("p", "", paper.reason || paper.abstract || ""));
+  const actions = element("div", "recommendation-actions");
+  const add = element("button", "", paper.in_library ? "已在论文管理" : "加入论文管理");
+  add.disabled = paper.in_library;
+  add.addEventListener("click", async () => {
+    add.disabled = true;
+    try {
+      await fetchJson(`/api/research/papers/${encodeURIComponent(paper.paper_id)}/library`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reading_status: "unread", note: "", tags: [] }) });
+      add.textContent = "已在论文管理";
+      loadCounts();
+    } catch (error) { add.disabled = false; toast(error.message, true); }
+  });
+  const pdfUrl = paperPdfUrl(paper);
+  const read = element("button", "accent", "论文精读");
+  read.disabled = !pdfUrl;
+  read.title = pdfUrl ? "导入 PDF 并进入精读" : "该推荐项没有可用的 PDF 链接";
+  read.addEventListener("click", async () => {
+    read.disabled = true;
+    try {
+      const uploaded = await uploadPaperPayload({ paper_id: paper.paper_id, pdf_url: pdfUrl, metadata: { title: paper.title } });
+      window.location.href = paperWorkspace(uploaded.paper_id, "");
+    } catch (error) { read.disabled = false; toast(error.message, true); }
+  });
+  actions.append(add, read);
+  card.append(actions);
+  return card;
+}
+
+async function createFolder() {
+  const name = window.prompt("文件夹名称");
+  if (!name?.trim()) return;
+  try {
+    await fetchJson("/api/research/paper-folders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+    await loadFolders();
+    renderItems();
+    toast("文件夹已创建。");
+  } catch (error) { toast(error.message, true); }
+}
+
+async function importPaper() {
+  const button = document.querySelector("#paper-import-button");
+  const file = document.querySelector("#paper-file-input").files[0];
+  const pdfUrl = document.querySelector("#paper-url-input").value.trim();
+  if (!file && !pdfUrl) return toast("请选择 PDF 文件或填写链接。", true);
+  button.disabled = true;
+  button.textContent = "正在添加…";
+  try {
+    const payload = file
+      ? { pdf_data: await fileToBase64(file), metadata: { original_filename: file.name, size_bytes: file.size } }
+      : { pdf_url: pdfUrl };
+    await uploadPaperPayload(payload);
+    document.querySelector("#paper-file-input").value = "";
+    document.querySelector("#paper-url-input").value = "";
+    await Promise.all([loadCounts(), loadItems()]);
+    toast("论文已添加到论文管理，可直接开始精读。");
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "添加到论文管理"; }
+}
+
+async function uploadPaperPayload(payload) {
+  const response = await fetch("/paper_reading", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "upload_paper", session_id: "", paper_id: "", content: "", metadata: {}, ...payload }) });
+  const envelope = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(envelope.detail || `导入失败（HTTP ${response.status}）`);
+  let data = envelope.content ?? envelope;
+  if (typeof data === "string") data = JSON.parse(data);
+  if (data.status === "error") throw new Error(data.message || data.error || "论文导入失败");
+  return data.data || data;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(new Error("读取 PDF 文件失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function paperPdfUrl(paper) {
+  if (paper.arxiv_id) return `https://arxiv.org/pdf/${paper.arxiv_id}`;
+  return /\.pdf(?:$|[?#])/i.test(paper.source_url || "") ? paper.source_url : "";
+}
+
+async function attachManagedPaper(paperId, pdfUrl, button) {
+  let payload = { paper_id: paperId };
+  if (pdfUrl) {
+    payload.pdf_url = pdfUrl;
+  } else {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/pdf,.pdf";
+    const file = await new Promise((resolve) => {
+      input.addEventListener("change", () => resolve(input.files[0] || null), { once: true });
+      input.click();
+    });
+    if (!file) { button.disabled = false; return; }
+    payload.pdf_data = await fileToBase64(file);
+    payload.metadata = { original_filename: file.name, size_bytes: file.size };
+  }
+  button.disabled = true;
+  try {
+    const uploaded = await uploadPaperPayload(payload);
+    window.location.href = paperWorkspace(uploaded.paper_id, "");
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message, true);
+  }
 }
 
 function previewFor(item) {
@@ -158,7 +366,7 @@ function metaFor(item) {
   if (state.view === "conversations") return [[`${item.message_count} 条消息`], ...(item.modes || []).map((mode) => [modeLabel(mode), true]), item.parent_conversation_id ? ["Fork 会话", true] : null].filter(Boolean);
   if (state.view === "domain-onboardings") return [[stateLabel(item.state)], [`阶段：${item.current_stage}`, true], [`${item.recommendation_count} 篇推荐论文`], item.quality_score != null ? [`质量 ${Math.round(item.quality_score * 100)}%`, true] : null].filter(Boolean);
   if (state.view === "paper-readings") return [[readingState(item.state)], [`${Math.round(Number(item.progress?.percentage || 0))}%`], [`${item.block_count} 个分析块`, true], [`${item.annotation_count} 条标注`, true]];
-  return [[item.in_library ? statusLabel(item.reading_status) : "未加入论文库"], item.publication_year ? [String(item.publication_year), true] : null, [`${item.reading_count} 次精读`], [`${item.annotation_count} 条标注`, true]].filter(Boolean);
+  return [[item.in_library ? statusLabel(item.reading_status) : "未加入论文库"], item.folder_name ? [`文件夹：${item.folder_name}`, true] : null, ...(item.tags || []).map((tag) => [`# ${tag}`]), item.publication_year ? [String(item.publication_year), true] : null, [`${item.reading_count} 次精读`], [`${item.annotation_count} 条标注`, true]].filter(Boolean);
 }
 
 function showSkeletons() { document.querySelector("#empty-state").hidden = true; items.replaceChildren(...[1,2,3].map(() => element("div", "skeleton"))); }
