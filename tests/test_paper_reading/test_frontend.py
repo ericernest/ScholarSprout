@@ -52,8 +52,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "start_reading",
             "fork",
             "merge",
-            "kg_query",
             "get_session_state",
+            "regenerate_reading_map",
         }
 
         for action in actions:
@@ -72,7 +72,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "structured-reader",
             "pdf-frame",
             "analysis-feed",
-            "kg-graph",
+            "reading-map-grid",
+            "reading-map-status-copy",
+            "regenerate-reading-map-button",
             "fork-panel",
             "pdf-fit-select",
             "paper-boot",
@@ -145,6 +147,12 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function renderPaperFigure(figure)", javascript)
         self.assertIn("figure.image_url", javascript)
         self.assertIn('id="fork-panel"', html)
+        self.assertIn('id="outline-source-warning"', html)
+        self.assertIn("function renderOutlineSourceWarning()", javascript)
+        self.assertIn("function readingMapPhaseText()", javascript)
+        self.assertIn("extracting_sections", javascript)
+        self.assertIn("readingMapProgress", javascript)
+        self.assertIn("未找到 PDF 内置目录", javascript)
         self.assertNotIn("<dialog", html)
         self.assertNotIn(".showModal()", javascript)
 
@@ -173,6 +181,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertNotIn('id="ready-nodes"', html)
         self.assertNotIn('id="ready-edges"', html)
         self.assertIn("智能索引自动生成", html)
+        self.assertNotIn("kg_query", javascript)
+        self.assertNotIn("知识图谱", html)
 
 
 if __name__ == "__main__":

@@ -37,10 +37,6 @@ class PaperReadingResponse(BaseModel):
         default=None,
         description="阅读进度信息",
     )
-    kg_update: KnowledgeGraphUpdate | None = Field(
-        default=None,
-        description="本次操作导致的 KG 变更摘要",
-    )
     skill_outputs: list[SkillOutput] = Field(
         default_factory=list,
         description="已激活 Skill 的输出结果",
@@ -104,7 +100,7 @@ class SectionProgress(BaseModel):
     title: str = ""
     level: int = Field(default=1, ge=1, le=6)
     status: Literal["not_started", "reading", "completed"] = "not_started"
-    kg_nodes_created: int = Field(default=0, ge=0)
+    insights_created: int = Field(default=0, ge=0)
 
 
 # ── Skill 输出 ──
@@ -129,29 +125,6 @@ class SkillOutput(BaseModel):
     )
 
 
-# ── KG 变更摘要 ──
-
-class KnowledgeGraphUpdate(BaseModel):
-    """单次操作后的 KG 变更摘要。"""
-
-    new_nodes: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="本次新增的 KG 节点",
-    )
-    new_edges: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="本次新增的 KG 边",
-    )
-    updated_nodes: list[str] = Field(
-        default_factory=list,
-        description="本次更新的节点 ID 列表",
-    )
-    fusion_events: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="跨论文融合事件",
-    )
-
-
 # ── search_paper action 的 data 结构 ──
 
 class PaperSearchResult(BaseModel):
@@ -166,14 +139,3 @@ class PaperSearchResult(BaseModel):
     url: str = ""
     pdf_url: str = ""
     citation_count: int | None = None
-
-
-# ── kg_query action 的 data 结构 ──
-
-class KGQueryResultData(BaseModel):
-    """KG 查询结果。"""
-
-    question: str = ""
-    answer: str = ""
-    reasoning_paths: list[dict[str, Any]] = Field(default_factory=list)
-    cytoscape_elements: list[dict[str, Any]] = Field(default_factory=list)

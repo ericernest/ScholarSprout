@@ -175,6 +175,23 @@ class PaperMetadata(BaseModel):
     layout_elements: list[PaperLayoutElement] = Field(default_factory=list)
     references: list[PaperReference] = Field(default_factory=list)
     full_text: str = Field(default="", description="解析后的全文文本")
+    section_extraction_source: str = Field(
+        default="",
+        description="章节来源：pdf_outline 或 heuristic",
+    )
+    section_extraction_status: str = Field(
+        default="",
+        description="章节提取状态",
+    )
+    section_extraction_message: str = Field(
+        default="",
+        description="章节提取说明，前端用于提示目录可信度",
+    )
+    outline_entries_count: int = Field(
+        default=0,
+        ge=0,
+        description="PDF 内置 outline 条目数量",
+    )
 
     # ── 内部标记 ──
     parse_status: Literal["pending", "parsing", "done", "failed"] = "pending"

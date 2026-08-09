@@ -15,12 +15,15 @@ from handlers.paper_reading.pipeline.metadata import PaperMetadata, Author
 m = PaperMetadata(paper_id='test', title='Test Paper', source='arxiv', abstract='Test abstract')
 print(f"  PaperMetadata created: {m.title}")
 
-test("3. KG Models")
-from handlers.paper_reading.kg.models import ALL_NODE_TYPES, ALL_EDGE_TYPES, KGNode
-print(f"  {len(ALL_NODE_TYPES)} node types")
-print(f"  {len(ALL_EDGE_TYPES)} edge types")
-n = KGNode(node_type='Concept', label='Test', paper_id='p1')
-print(f"  KGNode OK")
+test("3. Parser + Reading Map")
+from handlers.paper_reading.pipeline.parser import PaperParser, Section
+from handlers.paper_reading.handler import _empty_reading_map
+parser = PaperParser()
+section = Section(section_id='1', title='Introduction', level=1, start_page=1, end_page=1, text='Intro text')
+reading_map = _empty_reading_map()
+print(f"  Parser OK: {parser.__class__.__name__}")
+print(f"  Section OK: {section.title}")
+print(f"  Reading map keys: {', '.join(sorted(reading_map.keys())[:5])} ...")
 
 test("4. Storage")
 from handlers.paper_reading.harness.storage import PaperReadingStorage
@@ -56,54 +59,18 @@ if fork:
 else:
     print("  Fork: FAILED")
 
-test("8. KG Engine + Builder + Fusion")
-from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
-from handlers.paper_reading.kg.models import MotivatesEdge
-engine = KnowledgeGraphEngine()
-n1 = KGNode(node_type='Problem', label='Few-shot Learning', paper_id='p1', properties={'domain': 'meta-learning'})
-n2 = KGNode(node_type='Method', label='ProtoNet', paper_id='p1', properties={'category': 'metric-learning'})
-engine.add_node(n1)
-engine.add_node(n2)
-nodes_p1 = engine.list_nodes_by_paper('p1')
-e = MotivatesEdge(source_id=nodes_p1[0]['node_id'], target_id=nodes_p1[1]['node_id'], paper_id='p1')
-engine.add_edge(e.source_id, e.target_id, e)
-print(f"  Nodes: {engine.size[0]}, Edges: {engine.size[1]}")
-print(f"  Search Proto: {len(engine.search_nodes('Proto'))} results")
-print(f"  Path query: {len(engine.query_path('Few-shot', 'Proto'))} results")
-
-# Builder
-from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
-builder = ProgressiveKGBuilder(engine)
-for sec_id, exp in [('3.2. Method', 'method'), ('Abstract', 'abstract'), ('1. Intro', 'introduction')]:
-    r = builder.classify_section(sec_id)
-    print(f"  Classify '{sec_id}' -> {r} {'OK' if r == exp else 'FAIL'}")
-
-# Fusion
-from handlers.paper_reading.kg.fusion import CrossPaperFusion
-n3 = KGNode(node_type='Dataset', label='miniImageNet', paper_id='p2')
-engine.add_node(n3)
-n4 = KGNode(node_type='Dataset', label='miniImageNet', paper_id='p1')
-engine.add_node(n4)
-fusion = CrossPaperFusion(engine)
-result = fusion.fuse('p1', 'p2')
-print(f"  Fusion: {len(result.events)} events")
+test("8. Reading Map Skeleton")
+empty = _empty_reading_map()
+print(f"  Paper type: {empty['paper_type']}")
+print(f"  Research groups: {len(empty['research_map'])}")
+print(f"  Survey groups: {len(empty['survey_map'])}")
+print(f"  Section guides: {len(empty['section_guides'])}")
 
 test("9. Tools")
 from tools.builtin.paper_search_tool import PaperSearchTool
 from tools.builtin.pdf_parse_tool import PDFParseTool
-from tools.builtin.kg_query_tool import KGQueryTool, set_kg_engine
-from tools.builtin.kg_build_tool import KGBuildTool, set_kg_builder
-set_kg_engine(engine)
-set_kg_builder(builder)
 print(f"  {PaperSearchTool().spec.name}")
 print(f"  {PDFParseTool().spec.name}")
-print(f"  {KGQueryTool().spec.name}")
-print(f"  {KGBuildTool().spec.name}")
-
-# Test KG query
-qt = KGQueryTool()
-r = qt.run({'query_type': 'search', 'keyword': 'Proto'})
-print(f"  KGQuery search: {r.get('count', 0)} nodes found")
 
 test("10. Tool Registry")
 from tools.registry import create_builtin_tool_registry

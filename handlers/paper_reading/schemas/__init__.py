@@ -7,9 +7,7 @@ from handlers.paper_reading.schemas.response import (
     ReadingProgress,
     SectionProgress,
     SkillOutput,
-    KnowledgeGraphUpdate,
     PaperSearchResult,
-    KGQueryResultData,
 )
 
 __all__ = [
@@ -19,7 +17,5 @@ __all__ = [
     "ReadingProgress",
     "SectionProgress",
     "SkillOutput",
-    "KnowledgeGraphUpdate",
     "PaperSearchResult",
-    "KGQueryResultData",
 ]

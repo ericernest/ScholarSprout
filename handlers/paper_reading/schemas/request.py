@@ -27,10 +27,10 @@ class PaperReadingRequest(BaseModel):
         "merge",               # 合并分支探索成果
         "load_skill",          # 手动加载 Skill
         "unload_skill",        # 手动卸载 Skill
-        "kg_query",            # 知识图谱驱动的智能问答
         "get_session_state",   # 获取会话完整状态
         "get_progress",        # 获取阅读进度
         "get_paper_detail",    # 获取论文完整元数据和章节正文
+        "regenerate_reading_map",  # 重新生成导读地图与智能索引
     ] = "start_reading"
 
     # ── 通用字段 ──
@@ -111,26 +111,4 @@ class PaperReadingRequest(BaseModel):
     skill_ids: list[str] = Field(
         default_factory=list,
         description="要加载/卸载的 Skill ID 列表",
-    )
-
-    # ── kg_query action 专用字段 ──
-    kg_question: str = Field(
-        default="",
-        description="知识图谱查询问题（自然语言）",
-    )
-    kg_query_type: Literal["path", "neighbors", "search", "subgraph"] = Field(
-        default="search",
-        description="KG 查询类型",
-    )
-    kg_node_id: str = Field(
-        default="",
-        description="KG 节点 ID（neighbors 查询用）",
-    )
-    kg_source_label: str = Field(
-        default="",
-        description="KG 实体标签（path 查询的起点）",
-    )
-    kg_target_label: str = Field(
-        default="",
-        description="KG 实体标签（path 查询的终点）",
     )

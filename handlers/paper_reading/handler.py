@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import asyncio
-import copy
+import hashlib
 import json
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -20,24 +21,36 @@ from channels.base import ChannelMessage
 from runtime.agent_runner import AgentRunResult, run_agent_detailed
 
 from handlers.paper_reading.schemas.request import PaperReadingRequest
-from handlers.paper_reading.schemas.response import (
-    KnowledgeGraphUpdate,
-    PaperReadingResponse,
-    ReadingProgress,
-    SessionState,
-    SkillOutput,
-)
 from handlers.paper_reading.harness.progress import format_progress_message
-from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.pipeline.parser import PDFParser
 from handlers.paper_reading.postprocessors.common import extract_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
 LAYOUT_PARSER_VERSION = "section-first-v7-bbox-text"
-READING_MAP_VERSION = "novice-reading-map-v1"
+READING_MAP_VERSION = "novice-reading-map-v2"
 READING_MAP_SKILL_ID = "reading.novice_map_builder"
 PAPER_READING_AGENT_MAX_STEPS = 7
+SURVEY_CHUNK_MAX_CHARS = 16000
+SURVEY_CHUNK_MAX_WORKERS = 3
+SURVEY_CHUNK_BATCH_SIZE = 3
+SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS = 180
+SURVEY_MERGE_PROMPT_LIMIT = 60000
+SURVEY_CARD_SECTION_TEXT_LIMIT = 12000
+SURVEY_CARD_CONTEXT_LIMIT = 26000
+SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
+SURVEY_MAP_GROUP_KEYS = (
+    "field_overview",
+    "development_timeline",
+    "pain_points",
+    "taxonomy",
+    "technical_routes",
+    "representative_methods",
+    "datasets",
+    "evaluation_protocols",
+    "applications",
+    "open_challenges",
+)
 
 
 # ── 主入口 ──
@@ -81,10 +94,10 @@ def handle_paper_reading_message(
         "merge": _handle_merge,
         "load_skill": _handle_load_skill,
         "unload_skill": _handle_unload_skill,
-        "kg_query": _handle_kg_query,
         "get_session_state": _handle_get_session_state,
         "get_progress": _handle_get_progress,
         "get_paper_detail": _handle_get_paper_detail,
+        "regenerate_reading_map": _handle_regenerate_reading_map,
     }
 
     handler_fn = handler_map.get(request.action)
@@ -212,6 +225,10 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
         "tables_count": 0,
         "layout_elements_count": 0,
         "parse_status": quick_payload.get("parse_status", "queued"),
+        "section_extraction_source": quick_payload.get("section_extraction_source", "pending"),
+        "section_extraction_status": quick_payload.get("section_extraction_status", "pending"),
+        "section_extraction_message": quick_payload.get("section_extraction_message", ""),
+        "outline_entries_count": quick_payload.get("outline_entries_count", 0),
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf",
         "has_pdf": True,
         "page_count": quick_payload.get("page_count", 0),
@@ -283,6 +300,10 @@ def _build_quick_paper_payload(
         "layout_elements": [],
         "references": [],
         "full_text": first_text,
+        "section_extraction_source": "pending",
+        "section_extraction_status": "pending",
+        "section_extraction_message": "PDF 正在解析，尚未确定目录来源。",
+        "outline_entries_count": 0,
         "parse_status": "parsing",
         "parse_error": "",
         "stored_at": now,
@@ -352,20 +373,50 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         payload["figure_extraction_status"] = "done"
         payload["layout_extraction_status"] = "done"
         payload["layout_parser_version"] = LAYOUT_PARSER_VERSION
-        payload["reading_map"] = _build_reading_map(payload)
+        generation_id = str(uuid4())
+        fallback_reading_map = _build_reading_map(payload)
+        payload["reading_map"] = _empty_reading_map("llm_running")
         payload["reading_map_status"] = "llm_running"
+        payload["reading_map_phase"] = "queued"
+        payload["reading_map_progress"] = 0
+        payload["reading_map_error"] = ""
+        payload["reading_map_generation_id"] = generation_id
         _persist_figure_assets(storage, paper_id, metadata.figures)
         _persist_table_assets(storage, paper_id, metadata.tables)
         _persist_layout_assets(storage, paper_id, metadata.layout_elements)
         storage.save_paper(paper_id, payload)
-        payload["reading_map"] = _build_llm_reading_map(
-            paper=payload,
-            fallback=payload["reading_map"],
-            model=getattr(app_state, "model", None),
-            skill_registry=getattr(app_state, "skill_registry", None),
-        )
-        payload["reading_map_status"] = payload["reading_map"].get("status", "done")
-        storage.save_paper(paper_id, payload)
+        try:
+            payload["reading_map"] = _generate_reading_map_for_paper(
+                paper=payload,
+                fallback=fallback_reading_map,
+                model=getattr(app_state, "model", None),
+                skill_registry=getattr(app_state, "skill_registry", None),
+                storage=storage,
+                paper_id=paper_id,
+                generation_id=generation_id,
+            )
+        except Exception as error:
+            logger.exception("Background reading map generation failed for %s", paper_id)
+            _persist_failed_reading_map(
+                storage,
+                paper_id,
+                f"导读地图与智能索引生成失败：{error}",
+                generation_id=generation_id,
+            )
+            return
+        latest = storage.load_paper(paper_id) or payload
+        if latest.get("reading_map_generation_id") != generation_id:
+            return
+        latest["reading_map"] = payload["reading_map"]
+        latest["reading_map_status"] = payload["reading_map"].get("status", "failed")
+        if latest["reading_map_status"] == "llm_done":
+            latest["reading_map_phase"] = "llm_done"
+            latest["reading_map_progress"] = 100
+            latest["reading_map_error"] = ""
+        elif latest["reading_map_status"] in {"failed", "failed_partial"}:
+            latest["reading_map_phase"] = "failed"
+            latest["reading_map_error"] = payload["reading_map"].get("error", "")
+        storage.save_paper(paper_id, latest)
     except Exception as error:
         logger.exception("Background PDF parse failed for %s", paper_id)
         paper = storage.load_paper(paper_id) or {"paper_id": paper_id}
@@ -373,7 +424,91 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         paper["parse_error"] = str(error)
         paper["reading_map"] = _empty_reading_map("failed")
         paper["reading_map_status"] = "failed"
+        paper["reading_map_phase"] = "failed"
+        paper["reading_map_progress"] = 0
+        paper["reading_map_error"] = str(error)
         storage.save_paper(paper_id, paper)
+
+
+def _schedule_reading_map_generation(
+    app_state: Any,
+    paper_id: str,
+    *,
+    generation_id: str = "",
+    force: bool = False,
+) -> None:
+    running = getattr(app_state, "_paper_reading_map_threads", None)
+    if running is None:
+        running = set()
+        setattr(app_state, "_paper_reading_map_threads", running)
+    if paper_id in running and not force:
+        return
+    running.add(paper_id)
+
+    def worker() -> None:
+        try:
+            _run_reading_map_generation(app_state, paper_id, generation_id=generation_id)
+        finally:
+            running.discard(paper_id)
+
+    thread = threading.Thread(
+        target=worker,
+        name=f"reading-map-{paper_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id: str = "") -> None:
+    storage = getattr(app_state, "paper_storage", None)
+    if storage is None:
+        return
+    try:
+        paper = _load_paper_data(storage, paper_id)
+        if paper is None:
+            return
+        if generation_id and paper.get("reading_map_generation_id") != generation_id:
+            return
+        if not paper.get("sections"):
+            _persist_failed_reading_map(
+                storage,
+                paper_id,
+                "论文目录和章节正文尚未解析完成，无法生成导读地图。",
+                generation_id=generation_id,
+            )
+            return
+        fallback = _build_reading_map(paper)
+        reading_map = _generate_reading_map_for_paper(
+            paper=paper,
+            fallback=fallback,
+            model=getattr(app_state, "model", None),
+            skill_registry=getattr(app_state, "skill_registry", None),
+            storage=storage,
+            paper_id=paper_id,
+            generation_id=generation_id,
+        )
+        latest = _load_paper_data(storage, paper_id) or paper
+        if generation_id and latest.get("reading_map_generation_id") != generation_id:
+            return
+        paper = latest
+        paper["reading_map"] = reading_map
+        paper["reading_map_status"] = paper["reading_map"].get("status", "failed")
+        if paper["reading_map_status"] == "llm_done":
+            paper["reading_map_phase"] = "llm_done"
+            paper["reading_map_progress"] = 100
+            paper["reading_map_error"] = ""
+        elif paper["reading_map_status"] in {"failed", "failed_partial"}:
+            paper["reading_map_phase"] = "failed"
+            paper["reading_map_error"] = paper["reading_map"].get("error", "")
+        storage.save_paper(paper_id, paper)
+    except Exception as error:
+        logger.exception("Reading map generation failed for %s", paper_id)
+        _persist_failed_reading_map(
+            storage,
+            paper_id,
+            f"导读地图与智能索引生成失败：{error}",
+            generation_id=generation_id,
+        )
 
 
 def _handle_start_reading(
@@ -386,8 +521,6 @@ def _handle_start_reading(
 ) -> dict:
     """开始/继续阅读 — 核心阅读逻辑。"""
     session_mgr = getattr(app_state, "session_manager", None)
-    kg_builder = getattr(app_state, "kg_builder", None)
-    kg_engine = getattr(app_state, "kg_engine", None)
     paper_agent = getattr(app_state, "paper_reading_agent", None)
     storage = getattr(app_state, "paper_storage", None)
 
@@ -415,22 +548,11 @@ def _handle_start_reading(
         session_mgr.set_total_sections(session.session_id, len(paper_data.get("sections", []) or []))
 
     current_section = _select_current_section(request, session, paper_data)
-    kg_result = None
-    revealed_kg: dict[str, Any] = {}
-    if kg_builder is not None and kg_engine is not None and paper_data:
-        paper_id_for_kg = session.paper_id or request.paper_id
-        if kg_engine.list_nodes_by_paper(paper_id_for_kg):
-            revealed_kg = kg_builder.get_revealed_subgraph(
-                paper_id=paper_id_for_kg,
-                current_section="general",
-            )
-
     content_msg = _build_start_reading_context(
         request=request,
         session=session,
         paper_data=paper_data,
         current_section=current_section,
-        revealed_kg=revealed_kg,
     )
 
     # 3. 执行 Agent
@@ -467,7 +589,6 @@ def _handle_start_reading(
                 "active_skills": session.active_skills,
             },
             progress=session.progress,
-            kg_update={"new_nodes": [], "new_edges": [], "updated_nodes": [], "fusion_events": []},
             skill_outputs=[],
         )
 
@@ -502,17 +623,9 @@ def _handle_start_reading(
         "current_section": current_section,
         "context": {
             "paper_loaded": paper_data is not None,
-            "kg_mode": "full_paper_once_full_display",
             "active_skill_ids": active_skill_ids,
         },
-        "revealed_kg": revealed_kg,
     }
-    if kg_result is not None:
-        data["kg_build"] = {
-            "section_type": kg_result.section_type,
-            "new_nodes": len(kg_result.new_nodes),
-            "new_edges": len(kg_result.new_edges),
-        }
 
     return _ok("start_reading", data,
         session={
@@ -524,18 +637,6 @@ def _handle_start_reading(
             "active_skills": session.active_skills,
         },
         progress=session.progress,
-        kg_update={
-            "new_nodes": [
-                {"node_id": node.node_id, "node_type": node.node_type, "label": node.label}
-                for node in (kg_result.new_nodes if kg_result else [])
-            ],
-            "new_edges": [
-                {"edge_id": edge.edge_id, "edge_type": edge.edge_type, "label": edge.label}
-                for edge in (kg_result.new_edges if kg_result else [])
-            ],
-            "updated_nodes": [],
-            "fusion_events": [],
-        },
         skill_outputs=skill_outputs,
     )
 
@@ -649,43 +750,6 @@ def _handle_unload_skill(request: PaperReadingRequest, app_state: Any) -> dict:
     })
 
 
-def _handle_kg_query(request: PaperReadingRequest, app_state: Any) -> dict:
-    """KG 驱动问答。"""
-    kg_engine = getattr(app_state, "kg_engine", None)
-    if kg_engine is None:
-        return _error("KG 引擎未初始化", action="kg_query")
-
-    question = request.kg_question or request.content
-    if not question:
-        return _error("请提供 kg_question", action="kg_query")
-
-    storage = getattr(app_state, "paper_storage", None)
-    kg_builder = getattr(app_state, "kg_builder", None)
-    paper_id = request.paper_id or ""
-    paper_data = _load_paper_data(storage, paper_id)
-    if kg_builder is not None and paper_data:
-        kg_builder.ensure_full_paper_kg(
-            paper_id=paper_id,
-            paper_data=paper_data,
-            model=getattr(app_state, "model", None),
-        )
-
-    query_engine = getattr(app_state, "kg_query_engine", None)
-    if query_engine is None:
-        query_engine = KGQueryEngine(kg_engine, getattr(app_state, "model", None))
-
-    data = query_engine.answer(
-        question=question,
-        paper_id=paper_id,
-        query_type=request.kg_query_type,
-        source_label=request.kg_source_label,
-        target_label=request.kg_target_label,
-        node_id=request.kg_node_id,
-    )
-
-    return _ok("kg_query", data)
-
-
 def _handle_get_session_state(request: PaperReadingRequest, app_state: Any) -> dict:
     """获取会话完整状态。"""
     session_mgr = getattr(app_state, "session_manager", None)
@@ -727,6 +791,45 @@ def _handle_get_progress(request: PaperReadingRequest, app_state: Any) -> dict:
     })
 
 
+def _handle_regenerate_reading_map(request: PaperReadingRequest, app_state: Any) -> dict:
+    storage = getattr(app_state, "paper_storage", None)
+    if storage is None:
+        return _error("Paper storage 未初始化", action="regenerate_reading_map")
+    paper_id = request.paper_id or ""
+    if not paper_id and request.session_id:
+        session_mgr = getattr(app_state, "session_manager", None)
+        session = session_mgr.get_session(request.session_id) if session_mgr else None
+        paper_id = session.paper_id if session else ""
+    if not paper_id:
+        return _error("请提供 paper_id", action="regenerate_reading_map")
+
+    paper = _load_paper_data(storage, paper_id)
+    if paper is None:
+        return _error("论文不存在", action="regenerate_reading_map")
+    if not paper.get("sections"):
+        return _error("论文目录和章节正文尚未解析完成，暂时无法生成导读地图。", action="regenerate_reading_map")
+
+    generation_id = str(uuid4())
+    paper["reading_map"] = _empty_reading_map("llm_running")
+    paper["reading_map_status"] = "llm_running"
+    paper["reading_map_phase"] = "queued"
+    paper["reading_map_progress"] = 0
+    paper["reading_map_error"] = ""
+    paper["reading_map_generation_id"] = generation_id
+    storage.save_paper(paper_id, paper)
+    _schedule_reading_map_generation(app_state, paper_id, generation_id=generation_id, force=True)
+    return _ok("regenerate_reading_map", {
+        "paper_id": paper_id,
+        "reading_map": paper["reading_map"],
+        "reading_map_status": "llm_running",
+        "reading_map_phase": "queued",
+        "reading_map_progress": 0,
+        "reading_map_error": "",
+        "reading_map_card_progress": {},
+        "message": "导读地图与智能索引已重新提交生成。",
+    })
+
+
 def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> dict:
     """获取论文完整 metadata、sections 正文和 PDF 恢复 URL。"""
     storage = getattr(app_state, "paper_storage", None)
@@ -758,42 +861,30 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
     paper_detail["paper_index"] = paper_index
     reading_map = paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending"))
     paper_detail["reading_map"] = reading_map
+    reading_map_artifacts = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
+    card_progress = reading_map_artifacts.get("survey_card_progress") if isinstance(reading_map_artifacts.get("survey_card_progress"), dict) else {}
     parse_quality = _parse_quality_for_paper(paper)
+    section_info = _section_extraction_info(paper)
     text_layer_available = bool(str(paper.get("full_text", "")).strip())
-    initial_kg: dict[str, Any] = {}
-    kg_engine = getattr(app_state, "kg_engine", None)
-    kg_builder = getattr(app_state, "kg_builder", None)
-    if kg_engine is not None:
-        if not kg_engine.list_nodes_by_paper(paper_id):
-            saved_kg = storage.load_kg(paper_id)
-            if saved_kg:
-                kg_engine.from_dict(copy.deepcopy(saved_kg))
-        if kg_engine.list_nodes_by_paper(paper_id):
-            if kg_builder is not None:
-                initial_kg = kg_builder.get_revealed_subgraph(
-                    paper_id=paper_id,
-                    current_section="general",
-                )
-            else:
-                graph = kg_engine.get_subgraph(paper_id)
-                initial_kg = {
-                    "current_stage": "general",
-                    "node_count": graph.get("node_count", 0),
-                    "edge_count": graph.get("edge_count", 0),
-                    "cytoscape_elements": kg_engine.to_cytoscape(paper_id).get("elements", []),
-                }
     return _ok("get_paper_detail", {
         "paper": paper_detail,
         "paper_index": paper_index,
         "reading_map": reading_map,
         "reading_map_status": paper.get("reading_map_status", reading_map.get("status", "")),
+        "reading_map_phase": paper.get("reading_map_phase", ""),
+        "reading_map_progress": paper.get("reading_map_progress", 0),
+        "reading_map_error": paper.get("reading_map_error", reading_map.get("error", "")),
+        "reading_map_card_progress": card_progress,
         "text_layer_available": text_layer_available,
         "parse_quality": parse_quality,
         "parse_status": paper.get("parse_status", ""),
         "parse_error": paper.get("parse_error", ""),
+        "section_extraction_source": section_info["source"],
+        "section_extraction_status": section_info["status"],
+        "section_extraction_message": section_info["message"],
+        "outline_entries_count": section_info["outline_entries_count"],
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf" if upload_path else "",
         "has_pdf": upload_path is not None,
-        "initial_kg": initial_kg,
     })
 
 
@@ -820,6 +911,7 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
                 paper["year"] = inferred_year
         if (
             paper.get("parse_status") in (None, "", "done")
+            and paper.get("section_extraction_source") != "pdf_outline"
             and full_text
             and PDFParser.sections_need_repair(paper.get("sections"))
         ):
@@ -868,7 +960,6 @@ def _build_start_reading_context(
     session: Any,
     paper_data: dict[str, Any] | None,
     current_section: str,
-    revealed_kg: dict[str, Any],
 ) -> str:
     user_question = request.content or "请继续阅读并分析当前章节。"
     if not paper_data:
@@ -885,7 +976,6 @@ def _build_start_reading_context(
     current_text = _section_text_for_prompt(sections, current)
     selection_context = _selection_context_for_prompt(request, paper_data, current)
     section_index = _section_index_for_prompt(sections)
-    kg_summary = _kg_summary_for_prompt(revealed_kg)
     active_skills = ", ".join(session.active_skills) if session.active_skills else "auto"
     return (
         "[论文元信息]\n"
@@ -905,11 +995,9 @@ def _build_start_reading_context(
         "[当前章节正文]\n"
         f"标题: {current.get('title', current_section)}\n"
         f"{current_text[:9000]}\n\n"
-        "[已展开知识图谱摘要]\n"
-        f"{kg_summary}\n\n"
         "[用户问题]\n"
         f"{user_question}\n\n"
-        "请优先基于用户选区回答；如果选区不足，再使用同页附近文本、当前章节正文、论文元信息和已展开 KG。"
+        "请优先基于用户选区回答；如果选区不足，再使用同页附近文本、当前章节正文和论文元信息。"
         "如果输出某个 Skill 的结构化结果，请优先输出该 Skill 约定的 JSON。"
     )
 
@@ -1075,12 +1163,62 @@ def _empty_reading_map(status: str = "pending") -> dict[str, Any]:
     return {
         "version": READING_MAP_VERSION,
         "status": status,
+        "paper_type": "unknown",
+        "map_variant": "research",
+        "prerequisite_card": {"concepts": [], "baseline_papers": [], "reading_order": []},
+        "research_map": {},
+        "survey_map": {},
         "research_problem": {},
         "core_method": {},
         "method_steps": [],
         "experimental_support": [],
         "limitations_and_questions": [],
+        "section_guides": [],
     }
+
+
+def _failed_reading_map(message: str) -> dict[str, Any]:
+    reading_map = _empty_reading_map("failed")
+    reading_map["error"] = message
+    reading_map["llm_error"] = message
+    return reading_map
+
+
+def _llm_visible_base(fallback: dict[str, Any]) -> dict[str, Any]:
+    base = _empty_reading_map("pending")
+    paper_type = str(fallback.get("paper_type") or "unknown")
+    map_variant = str(fallback.get("map_variant") or ("survey" if paper_type == "survey" else "research"))
+    if paper_type in {"research", "survey", "theory", "system"}:
+        base["paper_type"] = paper_type
+    if map_variant in {"research", "survey"}:
+        base["map_variant"] = map_variant
+    return base
+
+
+def _reading_map_has_visible_content(reading_map: dict[str, Any]) -> bool:
+    survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
+    research = reading_map.get("research_map") if isinstance(reading_map.get("research_map"), dict) else {}
+    has_guides = bool(reading_map.get("section_guides"))
+    if reading_map.get("map_variant") == "survey":
+        survey_lists = [
+            "development_timeline",
+            "pain_points",
+            "taxonomy",
+            "technical_routes",
+            "representative_methods",
+            "datasets",
+            "evaluation_protocols",
+            "applications",
+            "open_challenges",
+        ]
+        field_overview = survey.get("field_overview") if isinstance(survey.get("field_overview"), dict) else {}
+        map_content = any(field_overview.values()) or any(survey.get(key) for key in survey_lists)
+        return map_content and has_guides
+    map_content = any(
+        reading_map.get(key)
+        for key in ("research_problem", "core_method", "method_steps", "experimental_support", "limitations_and_questions")
+    ) or any(research.get(key) for key in ("research_problem", "core_method", "method_steps", "experimental_support", "limitations_and_questions"))
+    return map_content and has_guides
 
 
 def _build_reading_map(paper: dict[str, Any]) -> dict[str, Any]:
@@ -1088,23 +1226,10 @@ def _build_reading_map(paper: dict[str, Any]) -> dict[str, Any]:
     if not sections:
         return _empty_reading_map("pending")
 
-    def stage(section: dict[str, Any]) -> str:
-        title = str(section.get("title") or "").lower()
-        if "abstract" in title or "摘要" in title:
-            return "abstract"
-        if any(token in title for token in ("intro", "background", "related work", "引言", "背景")):
-            return "introduction"
-        if any(token in title for token in ("method", "approach", "model", "framework", "algorithm", "prelim", "方法", "模型")):
-            return "method"
-        if any(token in title for token in ("experiment", "evaluation", "result", "analysis", "实验", "评估", "结果")):
-            return "experiment"
-        if any(token in title for token in ("discussion", "limitation", "conclusion", "future", "讨论", "局限", "结论")):
-            return "conclusion"
-        return "general"
-
+    paper_type = _infer_paper_type(paper, sections)
     by_stage: dict[str, list[dict[str, Any]]] = {}
     for section in sections:
-        by_stage.setdefault(stage(section), []).append(section)
+        by_stage.setdefault(_section_role(section, paper_type), []).append(section)
 
     title = str(paper.get("title") or "Core Method")
     abstract = str(paper.get("abstract") or "")
@@ -1115,8 +1240,6 @@ def _build_reading_map(paper: dict[str, Any]) -> dict[str, Any]:
 
     intro_text = _compact_section_text(intro_sections, limit=1600) or abstract
     method_text = _compact_section_text(method_sections, limit=1600)
-    experiment_text = _compact_section_text(experiment_sections, limit=1600)
-    conclusion_text = _compact_section_text(conclusion_sections, limit=1200)
 
     problem_sentence = _first_sentence(intro_text) or _first_sentence(abstract) or "Identify the paper's core research problem from the abstract and introduction."
     method_sentence = _first_sentence(method_text) or _first_sentence(abstract) or title
@@ -1158,25 +1281,41 @@ def _build_reading_map(paper: dict[str, Any]) -> dict[str, Any]:
             "source_sections": [_source_ref(section)],
         })
 
-    return {
-        "version": READING_MAP_VERSION,
-        "status": "done",
-        "research_problem": {
-            "title": "Research Problem",
-            "one_sentence": problem_sentence,
-            "why_it_matters": _second_sentence(intro_text) or "This explains why the paper's method is needed.",
-            "source_sections": [_source_ref(item) for item in intro_sections[:3]],
-        },
-        "core_method": {
-            "name": title,
-            "one_sentence": method_sentence,
-            "main_idea": _second_sentence(method_text) or "Read the method sections to understand the paper's central mechanism.",
-            "source_sections": [_source_ref(item) for item in method_sections[:3]],
-        },
+    research_problem = {
+        "title": "Research Problem",
+        "one_sentence": problem_sentence,
+        "why_it_matters": _second_sentence(intro_text) or "This explains why the paper's method is needed.",
+        "source_sections": [_source_ref(item) for item in intro_sections[:3]],
+    }
+    core_method = {
+        "name": title,
+        "one_sentence": method_sentence,
+        "main_idea": _second_sentence(method_text) or "Read the method sections to understand the paper's central mechanism.",
+        "source_sections": [_source_ref(item) for item in method_sections[:3]],
+    }
+    research_map = {
+        "research_problem": research_problem,
+        "core_method": core_method,
         "method_steps": method_steps,
         "experimental_support": experimental_support,
         "limitations_and_questions": limitations,
-        "section_guides": _build_heuristic_section_guides(sections),
+    }
+    survey_map = _build_heuristic_survey_map(paper, sections, by_stage)
+
+    return {
+        "version": READING_MAP_VERSION,
+        "status": "done",
+        "paper_type": paper_type,
+        "map_variant": "survey" if paper_type == "survey" else "research",
+        "prerequisite_card": _build_heuristic_prerequisite_card(paper, sections, paper_type),
+        "research_map": research_map,
+        "survey_map": survey_map if paper_type == "survey" else {},
+        "research_problem": research_problem,
+        "core_method": core_method,
+        "method_steps": method_steps,
+        "experimental_support": experimental_support,
+        "limitations_and_questions": limitations,
+        "section_guides": _build_heuristic_section_guides(sections, paper_type),
     }
 
 
@@ -1188,8 +1327,7 @@ def _build_llm_reading_map(
     skill_registry: Any | None,
 ) -> dict[str, Any]:
     if model is None:
-        fallback["status"] = "heuristic_done"
-        return fallback
+        return _failed_reading_map("LLM 模型未初始化，无法生成导读地图与智能索引。")
     prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
     try:
         response = model.chat(
@@ -1202,22 +1340,1375 @@ def _build_llm_reading_map(
                     ),
                 },
                 {"role": "user", "content": prompt},
-            ]
+            ],
         )
         content = response.choices[0].message.content or ""
         parsed = extract_json_object(content)
         if not parsed:
-            fallback["status"] = "heuristic_done"
-            fallback["llm_error"] = "No valid JSON object returned."
-            return fallback
-        merged = _normalize_reading_map(parsed, fallback)
+            return _failed_reading_map("LLM 未返回有效 JSON，导读地图与智能索引生成失败。")
+        merged = _normalize_reading_map(parsed, _llm_visible_base(fallback))
         merged["status"] = "llm_done"
+        if not _reading_map_has_visible_content(merged):
+            return _failed_reading_map("LLM 返回结果缺少可展示内容，导读地图与智能索引生成失败。")
         return merged
     except Exception as error:
         logger.warning("LLM reading map extraction failed: %s", error)
-        fallback["status"] = "heuristic_done"
-        fallback["llm_error"] = str(error)
-        return fallback
+        return _failed_reading_map(f"LLM 调用失败：{error}")
+
+
+def _generate_reading_map_for_paper(
+    *,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    model: Any | None,
+    skill_registry: Any | None,
+    storage: Any | None = None,
+    paper_id: str = "",
+    generation_id: str = "",
+) -> dict[str, Any]:
+    if fallback.get("paper_type") == "survey" or fallback.get("map_variant") == "survey":
+        return _build_survey_plan_card_reading_map(
+            paper=paper,
+            fallback=fallback,
+            model=model,
+            skill_registry=skill_registry,
+            storage=storage,
+            paper_id=paper_id or str(paper.get("paper_id") or ""),
+            generation_id=generation_id,
+        )
+    return _build_llm_reading_map(
+        paper=paper,
+        fallback=fallback,
+        model=model,
+        skill_registry=skill_registry,
+    )
+
+
+def _build_survey_plan_card_reading_map(
+    *,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    model: Any | None,
+    skill_registry: Any | None,
+    storage: Any | None,
+    paper_id: str,
+    generation_id: str,
+) -> dict[str, Any]:
+    if model is None:
+        return _failed_reading_map("LLM 模型未初始化，无法生成综述导读地图。")
+    manifest = _survey_section_manifest(paper)
+    if not manifest:
+        return _failed_reading_map("未找到可用于综述导读地图生成的章节正文。")
+
+    skill_instructions = _survey_skill_instructions(skill_registry)
+    skill_hash = hashlib.sha1(skill_instructions.encode("utf-8")).hexdigest() if skill_instructions else ""
+    artifacts = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
+    cached_results = artifacts.get("survey_card_results") if isinstance(artifacts.get("survey_card_results"), dict) else {}
+
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="planning_sections",
+        progress=5,
+        artifacts={
+            "survey_section_manifest": manifest,
+            "survey_card_progress": _survey_card_progress(0, 0, 0, "规划综述卡片"),
+            "survey_skill_hash": skill_hash,
+        },
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    try:
+        raw_plan = _plan_survey_cards(model, paper, manifest, skill_instructions)
+        plan = _normalize_survey_card_plan(raw_plan, manifest)
+    except Exception as error:
+        return _failed_reading_map(f"综述卡片规划失败：{error}")
+    tasks = plan.get("tasks", [])
+    if not tasks:
+        return _failed_reading_map("综述卡片规划结果为空，请重新生成。")
+
+    card_results = dict(cached_results) if isinstance(cached_results, dict) else {}
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="generating_cards",
+        progress=10,
+        artifacts={
+            "survey_section_manifest": manifest,
+            "survey_card_plan": plan,
+            "survey_card_results": card_results,
+            "survey_card_progress": _survey_card_progress(0, len(tasks), 0, ""),
+            "survey_skill_hash": skill_hash,
+        },
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    completed = 0
+    failed = 0
+    for task in tasks:
+        if not _generation_is_current(storage, paper_id, generation_id):
+            return _failed_reading_map("生成任务已被新一轮请求替换。")
+        task_id = str(task.get("task_id") or "")
+        current_title = str(task.get("title") or task_id)
+        section_text_hash = _survey_task_section_text_hash(task, paper)
+        cached = card_results.get(task_id) if isinstance(card_results, dict) else None
+        if (
+            isinstance(cached, dict)
+            and cached.get("status") == "ok"
+            and cached.get("section_text_hash") == section_text_hash
+            and cached.get("skill_hash", "") == skill_hash
+            and cached.get("task_hash") == task.get("task_hash")
+            and isinstance(cached.get("result"), dict)
+        ):
+            completed += 1
+        else:
+            try:
+                result = _generate_survey_card(model, paper, task, skill_instructions)
+                card_results[task_id] = {
+                    "status": "ok",
+                    "section_text_hash": section_text_hash,
+                    "skill_hash": skill_hash,
+                    "task_hash": task.get("task_hash"),
+                    "task": task,
+                    "result": result,
+                }
+                completed += 1
+            except Exception as error:
+                failed += 1
+                card_results[task_id] = {
+                    "status": "failed",
+                    "section_text_hash": section_text_hash,
+                    "skill_hash": skill_hash,
+                    "task_hash": task.get("task_hash"),
+                    "task": task,
+                    "error": str(error),
+                }
+
+        partial_map = _build_survey_reading_map_from_card_results(
+            paper=paper,
+            fallback=fallback,
+            plan=plan,
+            card_results=card_results,
+            status="llm_running",
+            partial=True,
+        )
+        if not _save_survey_partial_reading_map(
+            storage,
+            paper_id,
+            generation_id,
+            reading_map=partial_map,
+            phase="generating_cards",
+            progress=_survey_card_generation_progress(completed + failed, len(tasks)),
+            artifacts={
+                "survey_section_manifest": manifest,
+                "survey_card_plan": plan,
+                "survey_card_results": card_results,
+                "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, current_title),
+                "survey_skill_hash": skill_hash,
+            },
+        ):
+            return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    if not _save_reading_map_phase(storage, paper_id, generation_id, phase="finalizing_map", progress=95):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    final_map = _build_survey_reading_map_from_card_results(
+        paper=paper,
+        fallback=fallback,
+        plan=plan,
+        card_results=card_results,
+        status="llm_done",
+        partial=False,
+    )
+    if _survey_partial_has_core_content(final_map):
+        phase = "llm_done"
+        progress = 100
+        error = ""
+        final_map["status"] = "llm_done"
+        final_map["partial"] = False
+    else:
+        phase = "failed_partial"
+        progress = _survey_card_generation_progress(completed + failed, len(tasks))
+        error = "综述导读地图核心卡片不足，请重新生成。"
+        final_map["status"] = "failed_partial"
+        final_map["partial"] = True
+        final_map["error"] = error
+        final_map["llm_error"] = error
+    final_map["paper_type"] = "survey"
+    final_map["map_variant"] = "survey"
+    final_map["generation_artifacts_summary"] = {
+        "cards_total": len(tasks),
+        "cards_completed": sum(1 for item in card_results.values() if isinstance(item, dict) and item.get("status") == "ok"),
+        "cards_failed": sum(1 for item in card_results.values() if isinstance(item, dict) and item.get("status") == "failed"),
+        "cards_reused": sum(
+            1
+            for task in tasks
+            if isinstance(cached_results.get(task["task_id"]), dict)
+            and cached_results.get(task["task_id"], {}).get("status") == "ok"
+        ),
+        "survey_skill_hash": skill_hash,
+    }
+    _save_survey_partial_reading_map(
+        storage,
+        paper_id,
+        generation_id,
+        reading_map=final_map,
+        phase=phase,
+        progress=progress,
+        error=error,
+        artifacts={
+            "survey_section_manifest": manifest,
+            "survey_card_plan": plan,
+            "survey_card_results": card_results,
+            "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, ""),
+            "survey_skill_hash": skill_hash,
+        },
+    )
+    return final_map
+
+
+def _survey_section_manifest(paper: dict[str, Any]) -> list[dict[str, Any]]:
+    manifest = []
+    for index, section in enumerate(paper.get("sections", []) or [], start=1):
+        if _section_role(section, "survey") == "references":
+            continue
+        text = " ".join(str(section.get("content") or "").split())
+        if not text:
+            continue
+        manifest.append({
+            "section_index": index,
+            "section_id": str(section.get("section_id") or f"section-{index}"),
+            "title": str(section.get("title") or f"Section {index}"),
+            "level": section.get("level", 1),
+            "start_page": section.get("start_page"),
+            "end_page": section.get("end_page"),
+            "section_role_hint": _section_role(section, "survey"),
+            "text_length": len(text),
+            "summary_excerpt": _survey_section_excerpt(text),
+        })
+    return manifest
+
+
+def _survey_section_excerpt(text: str, limit: int = 900) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[: int(limit * 0.55)]
+    tail = text[-int(limit * 0.30):]
+    middle = _keyword_window(text, ("dataset", "benchmark", "method", "model", "challenge", "taxonomy", "evaluation"), int(limit * 0.25))
+    return " ... ".join(part for part in (head, middle, tail) if part)
+
+
+def _keyword_window(text: str, needles: tuple[str, ...], limit: int) -> str:
+    lower = text.lower()
+    hit = min((lower.find(needle) for needle in needles if lower.find(needle) >= 0), default=-1)
+    if hit < 0:
+        return ""
+    start = max(0, hit - limit // 2)
+    end = min(len(text), start + limit)
+    return text[start:end].strip()
+
+
+def _plan_survey_cards(
+    model: Any,
+    paper: dict[str, Any],
+    manifest: list[dict[str, Any]],
+    skill_instructions: str,
+) -> dict[str, Any]:
+    skill_block = f"Skill instructions:\n{skill_instructions}\n\n" if skill_instructions else ""
+    prompt = (
+        f"{skill_block}"
+        "You are planning a novice-oriented reading map for a survey paper. "
+        "Use the section manifest to decide which sections should be read to generate each card. "
+        "Do not ask for every section by default; choose the most relevant sections for each card. "
+        "Return JSON only. Use section_id for binding; section_index is only a helper.\n"
+        "Schema:\n"
+        "{\n"
+        '  "map_tasks": [{"task_id": "", "group_key": "field_overview|development_timeline|pain_points|taxonomy|technical_routes|representative_methods|datasets|evaluation_protocols|applications|open_challenges", "title": "", "goal": "", "priority": "high|medium|low", "section_ids": [], "section_indices": [], "output_hint": ""}],\n'
+        '  "section_guide_tasks": [{"task_id": "", "section_id": "", "section_index": null, "title": "", "goal": "", "priority": "high|medium|low", "card_types": [], "section_ids": [], "section_indices": []}]\n'
+        "}\n"
+        "Planning requirements: include high-value map tasks for field_overview, taxonomy or technical_routes, representative_methods, datasets when present, and open_challenges. "
+        "Create section_guide_tasks for important non-reference sections; each should target 2-4 cards. "
+        "Keep map_tasks <= 24 and section_guide_tasks <= 80. Write Chinese titles/goals.\n\n"
+        f"Paper title: {paper.get('title', '')}\n"
+        f"Abstract: {str(paper.get('abstract') or '')[:1600]}\n"
+        f"Section manifest:\n{json.dumps(manifest, ensure_ascii=False)}"
+    )
+    response = model.chat(messages=[
+        {"role": "system", "content": "Return only valid JSON for survey card planning."},
+        {"role": "user", "content": prompt},
+    ])
+    parsed = extract_json_object(response.choices[0].message.content or "")
+    if not parsed:
+        raise ValueError("No valid JSON while planning survey cards")
+    return parsed
+
+
+def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    section_by_id = {str(item.get("section_id")): item for item in manifest}
+    section_by_index = {int(item.get("section_index") or 0): item for item in manifest}
+    tasks: list[dict[str, Any]] = []
+
+    def valid_section_ids(raw_ids: Any, raw_indices: Any) -> list[str]:
+        ids = []
+        for value in raw_ids if isinstance(raw_ids, list) else []:
+            section_id = str(value)
+            if section_id in section_by_id and section_id not in ids:
+                ids.append(section_id)
+        for value in raw_indices if isinstance(raw_indices, list) else []:
+            try:
+                section = section_by_index.get(int(value))
+            except (TypeError, ValueError):
+                section = None
+            section_id = str(section.get("section_id")) if section else ""
+            if section_id and section_id not in ids:
+                ids.append(section_id)
+        return ids[:6]
+
+    for index, item in enumerate(plan.get("map_tasks") if isinstance(plan.get("map_tasks"), list) else [], start=1):
+        if not isinstance(item, dict):
+            continue
+        group_key = str(item.get("group_key") or "")
+        if group_key not in SURVEY_MAP_GROUP_KEYS:
+            continue
+        section_ids = valid_section_ids(item.get("section_ids"), item.get("section_indices"))
+        if not section_ids:
+            continue
+        task = {
+            "task_id": str(item.get("task_id") or f"map:{group_key}:{index}"),
+            "target": "survey_map",
+            "group_key": group_key,
+            "title": str(item.get("title") or reading_map_group_title(group_key)),
+            "goal": str(item.get("goal") or item.get("output_hint") or ""),
+            "priority": str(item.get("priority") or "medium"),
+            "section_ids": section_ids,
+            "section_indices": [section_by_id[section_id].get("section_index") for section_id in section_ids],
+            "output_hint": str(item.get("output_hint") or ""),
+        }
+        task["task_hash"] = _survey_task_hash(task)
+        tasks.append(task)
+
+    for index, item in enumerate(plan.get("section_guide_tasks") if isinstance(plan.get("section_guide_tasks"), list) else [], start=1):
+        if not isinstance(item, dict):
+            continue
+        primary_id = str(item.get("section_id") or "")
+        section_ids = valid_section_ids(item.get("section_ids") or [primary_id], item.get("section_indices") or [item.get("section_index")])
+        if not section_ids:
+            continue
+        primary_id = primary_id if primary_id in section_by_id else section_ids[0]
+        task = {
+            "task_id": str(item.get("task_id") or f"guide:{primary_id}:{index}"),
+            "target": "section_guide",
+            "group_key": "section_guides",
+            "section_id": primary_id,
+            "title": str(item.get("title") or section_by_id.get(primary_id, {}).get("title") or "章节导读"),
+            "goal": str(item.get("goal") or ""),
+            "priority": str(item.get("priority") or "medium"),
+            "card_types": [str(card_type) for card_type in item.get("card_types", []) if card_type],
+            "section_ids": section_ids,
+            "section_indices": [section_by_id[section_id].get("section_index") for section_id in section_ids],
+        }
+        task["task_hash"] = _survey_task_hash(task)
+        tasks.append(task)
+
+    return {
+        "version": SURVEY_CARD_PLAN_VERSION,
+        "map_tasks_count": sum(1 for task in tasks if task.get("target") == "survey_map"),
+        "section_guide_tasks_count": sum(1 for task in tasks if task.get("target") == "section_guide"),
+        "tasks": tasks[:120],
+    }
+
+
+def reading_map_group_title(group_key: str) -> str:
+    return {
+        "field_overview": "领域概览",
+        "development_timeline": "发展历程",
+        "pain_points": "难点痛点",
+        "taxonomy": "分类体系",
+        "technical_routes": "技术路线",
+        "representative_methods": "代表论文方法",
+        "datasets": "公开数据集",
+        "evaluation_protocols": "评测方式",
+        "applications": "应用场景",
+        "open_challenges": "开放问题",
+    }.get(group_key, "综述卡片")
+
+
+def _survey_task_hash(task: dict[str, Any]) -> str:
+    payload = {
+        key: task.get(key)
+        for key in ("target", "group_key", "section_id", "title", "goal", "section_ids", "card_types", "output_hint")
+    }
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _survey_task_sections(task: dict[str, Any], paper: dict[str, Any]) -> list[dict[str, Any]]:
+    section_ids = [str(item) for item in task.get("section_ids", []) if item]
+    by_id = {str(section.get("section_id") or ""): section for section in paper.get("sections", []) or []}
+    return [by_id[section_id] for section_id in section_ids if section_id in by_id]
+
+
+def _survey_task_section_text_hash(task: dict[str, Any], paper: dict[str, Any]) -> str:
+    sections = _survey_task_sections(task, paper)
+    payload = [
+        {
+            "section_id": section.get("section_id", ""),
+            "title": section.get("title", ""),
+            "text": " ".join(str(section.get("content") or "").split()),
+        }
+        for section in sections
+    ]
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _generate_survey_card(
+    model: Any,
+    paper: dict[str, Any],
+    task: dict[str, Any],
+    skill_instructions: str,
+) -> dict[str, Any]:
+    sections = _survey_task_sections(task, paper)
+    if not sections:
+        raise ValueError(f"No valid sections for {task.get('task_id')}")
+    context = _survey_task_context(sections, SURVEY_CARD_CONTEXT_LIMIT)
+    skill_block = f"Skill instructions:\n{skill_instructions}\n\n" if skill_instructions else ""
+    target = str(task.get("target") or "")
+    group_key = str(task.get("group_key") or "")
+    if target == "survey_map":
+        output_schema = (
+            '{"item": {"title-or-specific-field": "", "summary": "", "why_it_matters": "", '
+            '"evidence": "", "source_sections": []}}'
+        )
+    else:
+        output_schema = (
+            '{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", '
+            '"novice_summary": "", "cards": [{"card_type": "", "title": "", "content": {}, "source_sections": []}]}'
+        )
+    prompt = (
+        f"{skill_block}"
+        "Generate exactly one structured survey reading card task. Return JSON only. "
+        "Use only the provided section text. Do not invent paper titles, dataset names, URLs, years, or claims. "
+        "Every card/item must include source_sections and concise evidence. Avoid Item 1, Point 1, Front., Comput., or section-title-only content. "
+        "Write Chinese content for novice researchers.\n\n"
+        f"Task:\n{json.dumps(task, ensure_ascii=False)}\n"
+        f"Target group: {group_key}\n"
+        f"Output schema:\n{output_schema}\n\n"
+        f"Paper title: {paper.get('title', '')}\n"
+        f"Abstract: {str(paper.get('abstract') or '')[:1000]}\n"
+        f"Selected section text:\n{context}"
+    )
+    response = model.chat(messages=[
+        {"role": "system", "content": "Return only valid JSON for one survey card task."},
+        {"role": "user", "content": prompt},
+    ])
+    parsed = extract_json_object(response.choices[0].message.content or "")
+    if not parsed:
+        raise ValueError(f"No valid JSON for {task.get('task_id')}")
+    return _normalize_survey_card_result(parsed, task, sections)
+
+
+def _survey_task_context(sections: list[dict[str, Any]], limit: int) -> str:
+    remaining = limit
+    blocks = []
+    for section in sections:
+        if remaining <= 0:
+            break
+        compact = _compact_section_for_card(section, min(SURVEY_CARD_SECTION_TEXT_LIMIT, remaining))
+        remaining -= len(compact)
+        blocks.append(
+            "SECTION "
+            + json.dumps({
+                "section_id": section.get("section_id", ""),
+                "title": section.get("title", ""),
+                "page": section.get("start_page"),
+                "truncated": len(" ".join(str(section.get("content") or "").split())) > len(compact),
+            }, ensure_ascii=False)
+            + "\n"
+            + compact
+        )
+    return "\n\n".join(blocks)
+
+
+def _compact_section_for_card(section: dict[str, Any], limit: int) -> str:
+    text = " ".join(str(section.get("content") or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[: int(limit * 0.45)]
+    keyword = _keyword_window(
+        text,
+        ("dataset", "benchmark", "method", "model", "taxonomy", "challenge", "future", "evaluation", "paper", "propose"),
+        int(limit * 0.35),
+    )
+    tail = text[-int(limit * 0.20):]
+    return "\n...\n".join(part for part in (head, keyword, tail) if part)[:limit]
+
+
+def _normalize_survey_card_result(
+    parsed: dict[str, Any],
+    task: dict[str, Any],
+    sections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source_sections = [_source_ref(section) for section in sections]
+    target = str(task.get("target") or "")
+    if target == "survey_map":
+        item = parsed.get("item") if isinstance(parsed.get("item"), dict) else parsed
+        if isinstance(parsed.get("items"), list) and parsed["items"]:
+            item = parsed["items"][0] if isinstance(parsed["items"][0], dict) else item
+        item = dict(item) if isinstance(item, dict) else {}
+        if not item.get("source_sections"):
+            item["source_sections"] = source_sections
+        if not item.get("evidence"):
+            item["evidence"] = item.get("summary") or item.get("why_it_matters") or ""
+        _ensure_fact_sources(item, source_sections[0] if source_sections else {})
+        return {"target": "survey_map", "group_key": task.get("group_key"), "item": item}
+
+    cards = parsed.get("cards") if isinstance(parsed.get("cards"), list) else []
+    normalized_cards = []
+    for card in cards[:6]:
+        if not isinstance(card, dict):
+            continue
+        card = dict(card)
+        if not card.get("source_sections"):
+            card["source_sections"] = source_sections
+        if not card.get("card_type"):
+            card["card_type"] = (task.get("card_types") or ["reading_route"])[0]
+        normalized_cards.append(card)
+    if not normalized_cards:
+        raise ValueError(f"No cards for {task.get('task_id')}")
+    primary = sections[0] if sections else {}
+    return {
+        "target": "section_guide",
+        "section_id": str(task.get("section_id") or primary.get("section_id") or ""),
+        "title": parsed.get("title") or task.get("title") or primary.get("title", ""),
+        "section_role": parsed.get("section_role") or _section_role(primary, "survey"),
+        "read_priority": parsed.get("read_priority") or task.get("priority") or "medium",
+        "novice_summary": parsed.get("novice_summary") or "",
+        "cards": normalized_cards,
+        "source_sections": source_sections,
+    }
+
+
+def _build_survey_reading_map_from_card_results(
+    *,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    plan: dict[str, Any],
+    card_results: dict[str, Any],
+    status: str,
+    partial: bool,
+) -> dict[str, Any]:
+    base = _llm_visible_base(fallback)
+    survey_map = _empty_survey_map()
+    section_guides_by_id: dict[str, dict[str, Any]] = {}
+    for task in plan.get("tasks", []):
+        cached = card_results.get(task.get("task_id")) if isinstance(card_results, dict) else None
+        if not isinstance(cached, dict) or cached.get("status") != "ok" or not isinstance(cached.get("result"), dict):
+            continue
+        result = cached["result"]
+        if result.get("target") == "survey_map":
+            _insert_survey_map_item(survey_map, str(result.get("group_key") or task.get("group_key") or ""), result.get("item"))
+        elif result.get("target") == "section_guide":
+            section_id = str(result.get("section_id") or task.get("section_id") or "")
+            if not section_id:
+                continue
+            existing = section_guides_by_id.get(section_id)
+            if not existing:
+                section_guides_by_id[section_id] = {
+                    "section_id": section_id,
+                    "title": result.get("title") or task.get("title") or "",
+                    "section_role": result.get("section_role") or "general",
+                    "read_priority": result.get("read_priority") or task.get("priority") or "medium",
+                    "novice_summary": result.get("novice_summary") or "",
+                    "cards": [],
+                }
+            section_guides_by_id[section_id]["cards"].extend(result.get("cards") or [])
+
+    section_guides = _normalize_section_guides(list(section_guides_by_id.values()))
+    reading_map = {
+        "version": READING_MAP_VERSION,
+        "status": status,
+        "partial": partial,
+        "paper_type": "survey",
+        "map_variant": "survey",
+        "prerequisite_card": base.get("prerequisite_card", {}),
+        "research_map": base.get("research_map", {}),
+        "survey_map": survey_map,
+        "research_problem": base.get("research_problem", {}),
+        "core_method": base.get("core_method", {}),
+        "method_steps": base.get("method_steps", []),
+        "experimental_support": base.get("experimental_support", []),
+        "limitations_and_questions": base.get("limitations_and_questions", []),
+        "section_guides": section_guides,
+        "survey_card_plan_summary": {
+            "map_tasks_count": plan.get("map_tasks_count", 0),
+            "section_guide_tasks_count": plan.get("section_guide_tasks_count", 0),
+            "tasks_total": len(plan.get("tasks", [])),
+        },
+    }
+    _clean_survey_map_items(reading_map["survey_map"], paper.get("sections", []) or [])
+    return reading_map
+
+
+def _empty_survey_map() -> dict[str, Any]:
+    return {
+        "field_overview": {},
+        "development_timeline": [],
+        "pain_points": [],
+        "taxonomy": [],
+        "technical_routes": [],
+        "representative_methods": [],
+        "datasets": [],
+        "evaluation_protocols": [],
+        "applications": [],
+        "open_challenges": [],
+        "reading_strategy": [],
+    }
+
+
+def _insert_survey_map_item(survey_map: dict[str, Any], group_key: str, item: Any) -> None:
+    if group_key not in SURVEY_MAP_GROUP_KEYS or not isinstance(item, dict):
+        return
+    if group_key == "field_overview":
+        survey_map["field_overview"] = _dict_with_fallback(item, survey_map.get("field_overview", {}))
+        return
+    survey_map.setdefault(group_key, [])
+    survey_map[group_key].append(item)
+
+
+def _save_survey_partial_reading_map(
+    storage: Any | None,
+    paper_id: str,
+    generation_id: str,
+    *,
+    reading_map: dict[str, Any],
+    phase: str,
+    progress: int,
+    error: str = "",
+    artifacts: dict[str, Any] | None = None,
+) -> bool:
+    if storage is None or not paper_id:
+        return True
+    paper = _load_paper_data(storage, paper_id)
+    if not paper:
+        return False
+    if generation_id and paper.get("reading_map_generation_id") != generation_id:
+        return False
+    paper["reading_map"] = reading_map
+    paper["reading_map_status"] = reading_map.get("status", "llm_running")
+    paper["reading_map_phase"] = phase
+    paper["reading_map_progress"] = int(progress)
+    paper["reading_map_error"] = error
+    if artifacts:
+        existing = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
+        existing.update(artifacts)
+        paper["reading_map_artifacts"] = existing
+    storage.save_paper(paper_id, paper)
+    return True
+
+
+def _survey_card_progress(completed: int, total: int, failed: int, current_title: str) -> dict[str, Any]:
+    return {
+        "total": int(total),
+        "completed": int(completed),
+        "failed": int(failed),
+        "current_title": current_title,
+    }
+
+
+def _survey_card_generation_progress(done: int, total: int) -> int:
+    if total <= 0:
+        return 10
+    return min(94, max(10, int(10 + done / total * 84)))
+
+
+def _survey_partial_has_core_content(reading_map: dict[str, Any]) -> bool:
+    survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
+    if not survey:
+        return False
+    has_overview = bool(survey.get("field_overview"))
+    core_groups = sum(
+        1
+        for key in ("taxonomy", "technical_routes", "representative_methods", "datasets", "open_challenges")
+        if survey.get(key)
+    )
+    return has_overview and core_groups >= 2 and bool(reading_map.get("section_guides"))
+
+
+def _build_survey_fulltext_reading_map(
+    *,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    model: Any | None,
+    skill_registry: Any | None,
+    storage: Any | None,
+    paper_id: str,
+    generation_id: str,
+) -> dict[str, Any]:
+    if model is None:
+        return _failed_reading_map("LLM 模型未初始化，无法生成综述全文导读地图。")
+    chunks = _survey_text_chunks(paper, max_chars=SURVEY_CHUNK_MAX_CHARS)
+    if not chunks:
+        return _failed_reading_map("未找到可用于综述导读地图生成的章节正文。")
+    survey_skill_instructions = _survey_skill_instructions(skill_registry)
+    survey_skill_hash = hashlib.sha1(survey_skill_instructions.encode("utf-8")).hexdigest() if survey_skill_instructions else ""
+    artifacts = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
+    cached = artifacts.get("survey_fact_chunks") if isinstance(artifacts.get("survey_fact_chunks"), dict) else {}
+    facts_by_chunk: dict[str, dict[str, Any]] = {}
+    missing_chunks = []
+    for chunk in chunks:
+        cached_item = cached.get(chunk["chunk_id"]) if isinstance(cached, dict) else None
+        if (
+            isinstance(cached_item, dict)
+            and cached_item.get("status") == "ok"
+            and cached_item.get("text_hash") == chunk["text_hash"]
+            and cached_item.get("skill_hash", "") == survey_skill_hash
+            and isinstance(cached_item.get("facts"), dict)
+        ):
+            facts_by_chunk[chunk["chunk_id"]] = cached_item["facts"]
+        else:
+            missing_chunks.append(chunk)
+
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="extracting_sections",
+        progress=_phase_progress(len(facts_by_chunk), len(chunks)),
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    def extract_one(chunk: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        return chunk, _extract_survey_chunk_facts(model, paper, chunk, survey_skill_instructions)
+
+    new_cache = dict(cached) if isinstance(cached, dict) else {}
+    completed = len(facts_by_chunk)
+    try:
+        for batch in _batched(missing_chunks, SURVEY_CHUNK_BATCH_SIZE):
+            if not _generation_is_current(storage, paper_id, generation_id):
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+            executor = ThreadPoolExecutor(max_workers=min(SURVEY_CHUNK_MAX_WORKERS, len(batch)))
+            future_to_chunk = {executor.submit(extract_one, chunk): chunk for chunk in batch}
+            should_wait = True
+            try:
+                for future in as_completed(future_to_chunk, timeout=SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS):
+                    chunk, facts = future.result()
+                    facts_by_chunk[chunk["chunk_id"]] = facts
+                    new_cache[chunk["chunk_id"]] = {
+                        "status": "ok",
+                        "text_hash": chunk["text_hash"],
+                        "skill_hash": survey_skill_hash,
+                        "section_id": chunk["section_id"],
+                        "title": chunk["title"],
+                        "facts": facts,
+                    }
+                    completed += 1
+            except FutureTimeoutError as error:
+                should_wait = False
+                for future in future_to_chunk:
+                    future.cancel()
+                raise TimeoutError(
+                    f"survey chunk batch timed out after {SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS} seconds"
+                ) from error
+            except Exception:
+                should_wait = False
+                for future in future_to_chunk:
+                    future.cancel()
+                raise
+            finally:
+                executor.shutdown(wait=should_wait, cancel_futures=not should_wait)
+
+            if not _save_reading_map_phase(
+                storage,
+                paper_id,
+                generation_id,
+                phase="extracting_sections",
+                progress=_phase_progress(completed, len(chunks)),
+                artifacts={"survey_fact_chunks": new_cache},
+            ):
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+    except Exception as error:
+        return _failed_reading_map(f"综述章节事实抽取失败：{error}")
+
+    ordered_facts = [facts_by_chunk[chunk["chunk_id"]] for chunk in chunks if chunk["chunk_id"] in facts_by_chunk]
+    if not ordered_facts:
+        return _failed_reading_map("综述章节事实抽取结果为空。")
+
+    if not _save_reading_map_phase(storage, paper_id, generation_id, phase="merging_facts", progress=72):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+    try:
+        merged_facts = _merge_survey_facts(model, paper, ordered_facts, survey_skill_instructions)
+    except Exception as error:
+        return _failed_reading_map(f"综述事实聚合失败：{error}")
+    if not isinstance(merged_facts, dict) or not merged_facts:
+        return _failed_reading_map("综述事实聚合结果为空。")
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="merging_facts",
+        progress=86,
+        artifacts={"survey_fact_chunks": new_cache, "survey_merged_facts": merged_facts, "survey_skill_hash": survey_skill_hash},
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    if not _save_reading_map_phase(storage, paper_id, generation_id, phase="finalizing_map", progress=90):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+    try:
+        final_map = _build_survey_reading_map_from_merged_facts(paper, fallback, merged_facts)
+    except Exception as error:
+        return _failed_reading_map(f"综述导读地图组装失败：{error}")
+    final_map["status"] = "llm_done"
+    final_map["paper_type"] = "survey"
+    final_map["map_variant"] = "survey"
+    if not _validate_survey_reading_map(final_map):
+        logger.warning(
+            "Survey reading map validation warning for paper %s: generated map is sparse but will be returned",
+            paper_id,
+        )
+    final_map["generation_artifacts_summary"] = {
+        "chunks_total": len(chunks),
+        "chunks_reused": len(chunks) - len(missing_chunks),
+        "chunks_extracted": len(missing_chunks),
+        "survey_skill_hash": survey_skill_hash,
+    }
+    _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="llm_done",
+        progress=100,
+        artifacts={"survey_fact_chunks": new_cache, "survey_merged_facts": merged_facts, "survey_skill_hash": survey_skill_hash},
+    )
+    return final_map
+
+
+def _survey_text_chunks(paper: dict[str, Any], max_chars: int = 7000) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    for section in paper.get("sections", []) or []:
+        title = str(section.get("title") or "")
+        if _section_role(section, "survey") == "references":
+            continue
+        text = " ".join(str(section.get("content") or "").split())
+        if not text:
+            continue
+        start = 0
+        chunk_index = 1
+        while start < len(text):
+            end = min(len(text), start + max_chars)
+            if end < len(text):
+                boundary = text.rfind(". ", start + int(max_chars * 0.72), end)
+                if boundary > start:
+                    end = boundary + 1
+            chunk_text = text[start:end].strip()
+            if chunk_text:
+                section_id = str(section.get("section_id") or f"section-{len(chunks) + 1}")
+                chunk_id = f"{section_id}::survey_chunk:{chunk_index}"
+                chunks.append({
+                    "chunk_id": chunk_id,
+                    "section_id": section_id,
+                    "title": title,
+                    "level": section.get("level", 1),
+                    "start_page": section.get("start_page"),
+                    "end_page": section.get("end_page"),
+                    "chunk_index": chunk_index,
+                    "text": chunk_text,
+                    "text_hash": hashlib.sha1(chunk_text.encode("utf-8")).hexdigest(),
+                    "section_role_hint": _section_role(section, "survey"),
+                })
+            start = max(end, start + 1)
+            chunk_index += 1
+    return chunks
+
+
+def _phase_progress(done: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return min(70, max(5, int(done / total * 70)))
+
+
+def _batched(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    if size <= 0:
+        return [items]
+    return [items[index:index + size] for index in range(0, len(items), size)]
+
+
+def _generation_is_current(storage: Any | None, paper_id: str, generation_id: str) -> bool:
+    if storage is None or not paper_id or not generation_id:
+        return True
+    try:
+        paper = storage.load_paper(paper_id)
+    except Exception as error:
+        logger.warning("Failed to check reading map generation id for %s: %s", paper_id, error)
+        return False
+    return bool(paper and paper.get("reading_map_generation_id") == generation_id)
+
+
+def _save_reading_map_phase(
+    storage: Any | None,
+    paper_id: str,
+    generation_id: str,
+    *,
+    phase: str,
+    progress: int,
+    error: str = "",
+    artifacts: dict[str, Any] | None = None,
+) -> bool:
+    if storage is None or not paper_id:
+        return True
+    paper = _load_paper_data(storage, paper_id)
+    if not paper:
+        return False
+    if generation_id and paper.get("reading_map_generation_id") != generation_id:
+        return False
+    paper["reading_map_status"] = phase if phase in {"failed", "failed_partial", "llm_done"} else "llm_running"
+    paper["reading_map_phase"] = phase
+    paper["reading_map_progress"] = int(progress)
+    paper["reading_map_error"] = error
+    if artifacts:
+        existing = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
+        existing.update(artifacts)
+        paper["reading_map_artifacts"] = existing
+    storage.save_paper(paper_id, paper)
+    return True
+
+
+def _persist_failed_reading_map(
+    storage: Any | None,
+    paper_id: str,
+    message: str,
+    *,
+    generation_id: str = "",
+) -> None:
+    if storage is None or not paper_id:
+        return
+    paper = _load_paper_data(storage, paper_id)
+    if not paper:
+        return
+    if generation_id and paper.get("reading_map_generation_id") != generation_id:
+        return
+    failed = _failed_reading_map(message)
+    paper["reading_map"] = failed
+    paper["reading_map_status"] = "failed"
+    paper["reading_map_phase"] = "failed"
+    paper["reading_map_progress"] = int(paper.get("reading_map_progress") or 0)
+    paper["reading_map_error"] = message
+    storage.save_paper(paper_id, paper)
+
+
+def _extract_survey_chunk_facts(
+    model: Any,
+    paper: dict[str, Any],
+    chunk: dict[str, Any],
+    skill_instructions: str = "",
+) -> dict[str, Any]:
+    skill_block = f"Skill instructions for survey extraction:\n{skill_instructions}\n\n" if skill_instructions else ""
+    prompt = (
+        f"{skill_block}"
+        "You are extracting factual evidence from one chunk of a survey paper for novice-oriented field onboarding. "
+        "Return JSON only. Do not invent paper titles, dataset names, years, URLs, or claims not supported by this chunk. "
+        "Classify the section by content, not only by title. Extract explanatory field facts, not sentence fragments.\n"
+        "Schema:\n"
+        "{\n"
+        '  "section_role": "field_overview|timeline|taxonomy|technical_route|representative_methods|datasets|evaluation|applications|challenges|general",\n'
+        '  "field_overview": [{"field": "", "core_task": "", "why_now": "", "novice_takeaway": "", "evidence": "", "source_sections": []}],\n'
+        '  "development_timeline": [{"stage": "", "time_range": "", "key_change": "", "representative_works": [], "why_it_matters": "", "evidence": "", "source_sections": []}],\n'
+        '  "pain_points": [{"problem": "", "why_hard": "", "impact": "", "existing_attempts": [], "unresolved_part": "", "evidence": "", "source_sections": []}],\n'
+        '  "taxonomy": [{"category": "", "basis": "", "typical_methods": [], "solved_problems": "", "limitations": "", "evidence": "", "source_sections": []}],\n'
+        '  "technical_routes": [{"name": "", "core_mechanism": "", "typical_pipeline": [], "strengths": [], "weaknesses": [], "representative_method_ids": [], "evidence": "", "source_sections": []}],\n'
+        '  "representative_methods": [{"paper_title": "", "year": "", "method_name": "", "route": "", "method_summary": "", "specific_solution": "", "improves_on": "", "remaining_limits": "", "url": "", "evidence": "", "source_sections": []}],\n'
+        '  "datasets": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": [], "url": "", "evidence": "", "source_sections": []}],\n'
+        '  "evaluation_protocols": [{"protocol": "", "task": "", "metrics": [], "setting": "", "what_it_tests": "", "evidence": "", "source_sections": []}],\n'
+        '  "applications": [{"application": "", "scenario": "", "why_suitable": "", "typical_methods": [], "constraints": "", "evidence": "", "source_sections": []}],\n'
+        '  "open_challenges": [{"challenge": "", "why_it_matters": "", "current_bottleneck": "", "future_direction": "", "evidence": "", "source_sections": []}],\n'
+        '  "section_guide_candidates": [{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", "novice_summary": "", "cards": [{"card_type": "reading_route|field_timeline|taxonomy_node|route_comparison|paper_method_table|dataset_catalog|benchmark_protocol|challenge_card|application_landscape|future_direction", "title": "", "content": {"core_message": "", "why_it_matters": "", "key_points": [], "connections": [], "next_reading": ""}, "source_sections": []}]}]\n'
+        "}\n"
+        "Every non-empty item must include source_sections with section_id,title,page and an evidence string copied or tightly paraphrased from the chunk. "
+        "Limit each list field to at most 5 high-value items, section_guide_candidates to at most 4 items, and each evidence string to at most 160 Chinese characters. "
+        "Do not output generic titles such as Item 1 or Point 1. Do not output fragment-only values such as Front. or Comput. "
+        "Do not treat a section title as a representative method. Omit weak facts instead of padding lists. "
+        "Write Chinese content.\n\n"
+        f"Paper title: {paper.get('title', '')}\n"
+        f"Abstract: {str(paper.get('abstract') or '')[:1200]}\n"
+        f"Chunk metadata: {json.dumps({k: chunk.get(k) for k in ('chunk_id','section_id','title','start_page','end_page','section_role_hint')}, ensure_ascii=False)}\n"
+        f"Chunk text:\n{chunk.get('text', '')}"
+    )
+    response = model.chat(messages=[
+        {"role": "system", "content": "Return only valid JSON for survey fact extraction."},
+        {"role": "user", "content": prompt},
+    ])
+    parsed = extract_json_object(response.choices[0].message.content or "")
+    if not parsed:
+        raise ValueError(f"No valid JSON for {chunk.get('chunk_id')}")
+    source = _chunk_source_ref(chunk)
+    parsed["chunk_id"] = chunk.get("chunk_id", "")
+    parsed["section_id"] = chunk.get("section_id", "")
+    parsed["title"] = chunk.get("title", "")
+    parsed["source_sections"] = [source]
+    _ensure_fact_sources(parsed, source)
+    return parsed
+
+
+def _merge_survey_facts(
+    model: Any,
+    paper: dict[str, Any],
+    facts: list[dict[str, Any]],
+    skill_instructions: str = "",
+) -> dict[str, Any]:
+    compact = _compact_survey_facts_for_prompt(facts, limit=SURVEY_MERGE_PROMPT_LIMIT)
+    skill_block = f"Skill instructions for survey merging and display:\n{skill_instructions}\n\n" if skill_instructions else ""
+    prompt = (
+        f"{skill_block}"
+        "Merge extracted facts from a full survey paper. Return JSON only. "
+        "Deduplicate repeated routes, datasets, papers, and challenges while preserving source_sections and evidence. "
+        "Do not add facts that are not present in the extracted facts. Keep explanations concrete and novice-oriented.\n"
+        "Schema keys: field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, "
+        "datasets, evaluation_protocols, applications, open_challenges, reading_strategy, section_guides_seed.\n"
+        "Required item shapes:\n"
+        "- field_overview: one object with field, core_task, why_now, novice_takeaway, source_sections, evidence.\n"
+        "- development_timeline: stage, time_range, key_change, representative_works, why_it_matters, source_sections, evidence.\n"
+        "- taxonomy: category, basis, typical_methods, solved_problems, limitations, source_sections, evidence.\n"
+        "- technical_routes: name, core_mechanism, typical_pipeline, strengths, weaknesses, representative_method_ids, source_sections, evidence.\n"
+        "- representative_methods: paper_title, year, method_name, route, method_summary, specific_solution, improves_on, remaining_limits, url, source_sections, evidence.\n"
+        "- datasets: name, task, content, structure, scale, metrics, url, source_sections, evidence.\n"
+        "- section_guides_seed: one item per important section with 2-4 cards. Each card content should include core_message, why_it_matters, key_points, connections, next_reading.\n"
+        "For representative_methods, keep concrete paper title/year/method when available; otherwise omit that item. "
+        "For datasets, keep concrete dataset or benchmark names when available; otherwise omit that item. "
+        "Do not output Item 1, Point 1, Front., Comput., or isolated sentence fragments. Do not replace specific facts with generic summaries. "
+        "Keep no more than 12 items per list except representative_methods up to 24 and section_guides_seed up to 80 compact items. "
+        "Keep evidence concise, at most 160 Chinese characters. Write Chinese.\n\n"
+        f"Paper: {paper.get('title', '')}\n"
+        f"Extracted facts:\n{compact}"
+    )
+    response = model.chat(messages=[
+        {"role": "system", "content": "Return only valid JSON for survey fact merging."},
+        {"role": "user", "content": prompt},
+    ])
+    parsed = extract_json_object(response.choices[0].message.content or "")
+    if not parsed:
+        raise ValueError("No valid JSON while merging survey facts")
+    return parsed
+
+
+def _build_survey_reading_map_from_merged_facts(
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    merged_facts: dict[str, Any],
+) -> dict[str, Any]:
+    base = _llm_visible_base(fallback)
+    survey_map = _normalize_survey_map(merged_facts, {})
+    survey_map = _repair_sparse_survey_map(survey_map, paper, base)
+    section_guides = _build_survey_section_guides_from_facts(paper, merged_facts, base)
+    parsed = {
+        "version": READING_MAP_VERSION,
+        "status": "llm_done",
+        "paper_type": "survey",
+        "map_variant": "survey",
+        "prerequisite_card": base.get("prerequisite_card", {}),
+        "research_map": base.get("research_map", {}),
+        "survey_map": survey_map,
+        "research_problem": base.get("research_problem", {}),
+        "core_method": base.get("core_method", {}),
+        "method_steps": base.get("method_steps", []),
+        "experimental_support": base.get("experimental_support", []),
+        "limitations_and_questions": base.get("limitations_and_questions", []),
+        "section_guides": section_guides,
+    }
+    normalized = _normalize_reading_map(parsed, base)
+    normalized["survey_map"] = survey_map
+    normalized["section_guides"] = section_guides
+    return normalized
+
+
+def _repair_sparse_survey_map(
+    survey_map: dict[str, Any],
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    repaired = dict(survey_map)
+    sections = [
+        section for section in (paper.get("sections", []) or [])
+        if _section_role(section, "survey") != "references"
+    ]
+    if not repaired.get("field_overview"):
+        overview_source = next((section for section in sections if _section_role(section, "survey") in {"abstract", "introduction"}), sections[0] if sections else {})
+        repaired["field_overview"] = {
+            "field": paper.get("title", ""),
+            "core_task": _first_sentence(str(overview_source.get("content") or "")) or str(paper.get("abstract") or "")[:240],
+            "why_now": _second_sentence(str(overview_source.get("content") or "")),
+            "novice_takeaway": "先用分类体系建立领域坐标，再沿技术路线、数据集和开放问题继续精读。",
+            "source_sections": [_source_ref(overview_source)] if overview_source else [],
+            "fallback_generated": True,
+        }
+
+    if not repaired.get("taxonomy") and repaired.get("technical_routes"):
+        repaired["taxonomy"] = [
+            {
+                "category": item.get("name") or item.get("route") or item.get("title") or f"技术类别 {index}",
+                "summary": item.get("core_idea") or item.get("summary") or item.get("evidence", ""),
+                "source_sections": item.get("source_sections", []),
+            }
+            for index, item in enumerate(repaired.get("technical_routes", [])[:8], start=1)
+            if isinstance(item, dict)
+        ]
+    if not repaired.get("technical_routes") and repaired.get("taxonomy"):
+        repaired["technical_routes"] = [
+            {
+                "name": item.get("category") or item.get("name") or item.get("title") or f"技术路线 {index}",
+                "core_idea": item.get("summary") or item.get("evidence", ""),
+                "source_sections": item.get("source_sections", []),
+            }
+            for index, item in enumerate(repaired.get("taxonomy", [])[:8], start=1)
+            if isinstance(item, dict)
+        ]
+    if not repaired.get("open_challenges") and repaired.get("pain_points"):
+        repaired["open_challenges"] = [
+            {
+                "challenge": item.get("problem") or item.get("summary") or item.get("title") or f"开放问题 {index}",
+                "why_it_matters": item.get("summary") or item.get("evidence", ""),
+                "source_sections": item.get("source_sections", []),
+            }
+            for index, item in enumerate(repaired.get("pain_points", [])[:8], start=1)
+            if isinstance(item, dict)
+        ]
+    if not repaired.get("reading_strategy"):
+        repaired["reading_strategy"] = [{
+            "title": "综述阅读路线",
+            "summary": "先读领域概览和分类体系，再按技术路线追踪代表方法，最后查看数据集、评测协议和开放问题。",
+            "fallback_generated": True,
+        }]
+    _clean_survey_map_items(repaired, sections)
+    return repaired
+
+
+def _build_survey_section_guides_from_facts(
+    paper: dict[str, Any],
+    merged_facts: dict[str, Any],
+    fallback: dict[str, Any],
+) -> list[dict[str, Any]]:
+    seeds = merged_facts.get("section_guides_seed")
+    seeds_by_section: dict[str, dict[str, Any]] = {}
+    if isinstance(seeds, list):
+        for seed in seeds:
+            if isinstance(seed, dict) and seed.get("section_id"):
+                seeds_by_section[str(seed.get("section_id"))] = seed
+
+    fallback_guides = {
+        str(guide.get("section_id")): guide
+        for guide in (fallback.get("section_guides") or [])
+        if isinstance(guide, dict) and guide.get("section_id")
+    }
+    guides = []
+    for section in (paper.get("sections", []) or [])[:120]:
+        if _section_role(section, "survey") == "references":
+            continue
+        section_id = str(section.get("section_id") or "")
+        text = " ".join(str(section.get("content") or "").split())
+        seed = seeds_by_section.get(section_id) or {}
+        seed_has_cards = isinstance(seed.get("cards"), list) and bool(seed.get("cards"))
+        fallback_guide = fallback_guides.get(section_id) or {}
+        guide = _dict_with_fallback(seed, fallback_guide)
+        if not seed_has_cards:
+            guide.pop("cards", None)
+        guide["section_id"] = section_id
+        guide["title"] = guide.get("title") or section.get("title", "")
+        guide["section_role"] = guide.get("section_role") or _section_role(section, "survey")
+        guide["read_priority"] = guide.get("read_priority") or (
+            "high" if guide["section_role"] in {"introduction", "taxonomy", "technical_route", "dataset", "challenge"} else "medium"
+        )
+        guide["novice_summary"] = guide.get("novice_summary") or guide.get("summary") or _first_sentence(text)
+        if not isinstance(guide.get("cards"), list) or not guide.get("cards"):
+            guide["cards"] = _guide_cards_for_section(guide, section, text, "survey")
+            guide["fallback_generated"] = True
+        guides.append(guide)
+    return _normalize_section_guides(guides)
+
+
+def _compact_survey_facts_for_prompt(facts: list[dict[str, Any]], limit: int = 90000) -> str:
+    compact_items = []
+    for item in facts:
+        compact_items.append({
+            key: item.get(key)
+            for key in (
+                "chunk_id",
+                "section_id",
+                "title",
+                "section_role",
+                "field_overview",
+                "development_timeline",
+                "pain_points",
+                "taxonomy",
+                "technical_routes",
+                "representative_methods",
+                "datasets",
+                "evaluation_protocols",
+                "applications",
+                "open_challenges",
+                "section_guide_candidates",
+                "source_sections",
+            )
+            if item.get(key)
+        })
+    text = json.dumps(compact_items, ensure_ascii=False)
+    return text[:limit]
+
+
+def _chunk_source_ref(chunk: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "section_id": chunk.get("section_id", ""),
+        "title": chunk.get("title", ""),
+        "page": chunk.get("start_page"),
+    }
+
+
+def _ensure_fact_sources(value: Any, source: dict[str, Any]) -> None:
+    if isinstance(value, dict):
+        is_source_ref = (
+            set(value.keys()).issubset({"section_id", "title", "page", "start_page", "end_page"})
+            and bool(value.get("section_id") or value.get("page"))
+        )
+        if (
+            not is_source_ref
+            and any(key in value for key in ("summary", "name", "title", "category", "route", "problem", "challenge", "paper_title", "method_name"))
+        ):
+            if not value.get("source_sections"):
+                value["source_sections"] = [dict(source)]
+        for key, item in value.items():
+            if key == "source_sections":
+                continue
+            _ensure_fact_sources(item, source)
+    elif isinstance(value, list):
+        for item in value:
+            _ensure_fact_sources(item, source)
+
+
+def _validate_survey_reading_map(reading_map: dict[str, Any]) -> bool:
+    if reading_map.get("map_variant") != "survey":
+        return False
+    survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
+    content_keys = (
+        "field_overview",
+        "development_timeline",
+        "pain_points",
+        "taxonomy",
+        "technical_routes",
+        "representative_methods",
+        "datasets",
+        "evaluation_protocols",
+        "applications",
+        "open_challenges",
+    )
+    visible_content_count = sum(1 for key in content_keys if survey.get(key))
+    if visible_content_count < 3:
+        return False
+    if not reading_map.get("section_guides"):
+        return False
+    method_titles = [
+        str(item.get("paper_title") or item.get("method_name") or "")
+        for item in survey.get("representative_methods", [])
+        if isinstance(item, dict)
+    ]
+    if method_titles and all(_looks_like_section_title(title) for title in method_titles):
+        return False
+    dataset_names = [
+        str(item.get("name") or "")
+        for item in survey.get("datasets", [])
+        if isinstance(item, dict)
+    ]
+    if dataset_names and all(name.lower() in {"dataset", "benchmark", "datasets", "benchmarks", "数据集", "基准"} for name in dataset_names):
+        return False
+    return _survey_items_have_sources(survey)
+
+
+def _looks_like_section_title(value: str) -> bool:
+    return bool(re.match(r"^\s*(\d+(\.\d+)*|[ivx]+)\s+|^(abstract|introduction|conclusion|references)\b", value.lower()))
+
+
+def _looks_like_fragment(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if len(text) <= 8 and re.fullmatch(r"[A-Za-z]+\.", text):
+        return True
+    if text.lower() in {"item 1", "item 2", "point 1", "point 2", "front.", "comput.", "method", "model"}:
+        return True
+    return False
+
+
+def _clean_survey_map_items(survey_map: dict[str, Any], sections: list[dict[str, Any]]) -> None:
+    section_titles = {
+        str(section.get("title") or "").strip().lower()
+        for section in sections
+        if str(section.get("title") or "").strip()
+    }
+
+    def is_section_title(text: Any) -> bool:
+        normalized = str(text or "").strip().lower()
+        return bool(normalized and (normalized in section_titles or _looks_like_section_title(normalized)))
+
+    cleaned_methods = []
+    for item in survey_map.get("representative_methods", []) or []:
+        if not isinstance(item, dict):
+            continue
+        paper_title = item.get("paper_title")
+        method_name = item.get("method_name") or item.get("name") or item.get("title")
+        has_concrete_title = bool(paper_title) and not _looks_like_fragment(paper_title) and not is_section_title(paper_title)
+        has_concrete_method = bool(method_name) and not _looks_like_fragment(method_name) and not is_section_title(method_name)
+        has_detail = any(item.get(key) for key in ("method_summary", "specific_solution", "improves_on", "year", "url"))
+        if (has_concrete_title or has_concrete_method) and has_detail:
+            cleaned_methods.append(item)
+    survey_map["representative_methods"] = cleaned_methods
+
+    generic_dataset_names = {"dataset", "datasets", "benchmark", "benchmarks", "corpus", "data", "数据集", "基准", "公开数据集"}
+    cleaned_datasets = []
+    for item in survey_map.get("datasets", []) or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("dataset") or item.get("title") or "").strip()
+        if _looks_like_fragment(name) or name.lower() in generic_dataset_names or is_section_title(name):
+            continue
+        if any(item.get(key) for key in ("task", "content", "structure", "scale", "metrics", "url")):
+            cleaned_datasets.append(item)
+    survey_map["datasets"] = cleaned_datasets
+
+
+def _survey_items_have_sources(survey: dict[str, Any]) -> bool:
+    checked = 0
+    with_source = 0
+    for key in ("taxonomy", "technical_routes", "representative_methods", "datasets", "open_challenges"):
+        for item in survey.get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            checked += 1
+            if item.get("source_sections"):
+                with_source += 1
+    if checked == 0:
+        return True
+    return with_source / checked >= 0.35
+
+
+def _reading_map_skill_instructions(skill_registry: Any | None) -> str:
+    if skill_registry is None:
+        return ""
+    try:
+        return str(skill_registry.get_instructions(READING_MAP_SKILL_ID) or "")
+    except Exception as error:
+        logger.debug("Unable to load %s instructions: %s", READING_MAP_SKILL_ID, error)
+        return ""
+
+
+def _survey_skill_instructions(skill_registry: Any | None) -> str:
+    instructions = _reading_map_skill_instructions(skill_registry)
+    if not instructions:
+        return ""
+    match = re.search(
+        r"<!--\s*survey_map_skill:start\s*-->(.*?)<!--\s*survey_map_skill:end\s*-->",
+        instructions,
+        re.S,
+    )
+    selected = match.group(1).strip() if match else instructions
+    return selected[:8000]
 
 
 def _build_reading_map_prompt(
@@ -1225,15 +2716,10 @@ def _build_reading_map_prompt(
     fallback: dict[str, Any],
     skill_registry: Any | None,
 ) -> str:
-    skill_instructions = ""
-    if skill_registry is not None:
-        try:
-            skill_instructions = skill_registry.get_instructions(READING_MAP_SKILL_ID)
-        except Exception as error:
-            logger.debug("Unable to load %s instructions: %s", READING_MAP_SKILL_ID, error)
+    skill_instructions = _reading_map_skill_instructions(skill_registry)
 
     sections_payload = []
-    for section in (paper.get("sections", []) or [])[:28]:
+    for section in (paper.get("sections", []) or [])[:80]:
         text = " ".join(str(section.get("content") or "").split())
         sections_payload.append({
             "section_id": section.get("section_id", ""),
@@ -1241,69 +2727,144 @@ def _build_reading_map_prompt(
             "level": section.get("level", 1),
             "start_page": section.get("start_page"),
             "end_page": section.get("end_page"),
-            "text": text[:1400],
+            "section_role_hint": _section_role(section, fallback.get("paper_type", "unknown")),
+            "text": text[:900],
         })
 
     prompt_payload = {
         "paper": {
             "title": paper.get("title", ""),
             "abstract": str(paper.get("abstract") or "")[:1800],
+            "paper_type_hint": fallback.get("paper_type", "unknown"),
         },
         "sections": sections_payload,
         "heuristic_fallback": fallback,
     }
     return (
         f"{skill_instructions}\n\n"
-        "Build a deep novice-oriented reading_map and smart_index for this paper.\n"
-        "The output must be JSON only. Use this schema exactly:\n"
+        "Build a deep novice-oriented reading_map and smart_index for this paper. "
+        "First decide paper_type: research, survey, theory, or system. "
+        "Use survey when the paper primarily summarizes a field, taxonomy, datasets, benchmarks, challenges, or trends.\n"
+        "The output must be JSON only. Use this schema exactly, keeping legacy research fields for compatibility:\n"
         "{\n"
+        '  "paper_type": "research|survey|theory|system",\n'
+        '  "map_variant": "research|survey",\n'
+        '  "prerequisite_card": {"concepts": [{"name": "", "why_needed": "", "learn_first": [], "difficulty": "easy|medium|hard"}], "baseline_papers": [{"title": "", "url": "", "relationship": "direct_baseline|strongest_compared_baseline|foundational_work|survey_anchor|dataset_or_benchmark_paper", "why_read": ""}], "reading_order": []},\n'
+        '  "research_map": {"research_problem": {}, "core_method": {}, "method_steps": [], "experimental_support": [], "limitations_and_questions": []},\n'
+        '  "survey_map": {"field_overview": {"field": "", "core_task": "", "why_now": "", "novice_takeaway": "", "source_sections": []}, "development_timeline": [], "pain_points": [], "taxonomy": [], "technical_routes": [], "representative_methods": [], "datasets": [], "evaluation_protocols": [], "applications": [], "open_challenges": [], "reading_strategy": []},\n'
         '  "research_problem": {"title": "", "one_sentence": "", "why_it_matters": "", "novice_takeaway": "", "source_sections": []},\n'
         '  "core_method": {"name": "", "one_sentence": "", "main_idea": "", "technical_route": "", "source_sections": []},\n'
         '  "method_steps": [{"name": "", "goal": "", "input": "", "operation": "", "output": "", "why_needed": "", "source_sections": []}],\n'
         '  "experimental_support": [{"claim": "", "evidence": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "protocol": "", "figures_or_tables": [], "source_sections": []}],\n'
         '  "limitations_and_questions": [{"limitation": "", "why_it_matters": "", "novice_question": "", "source_sections": []}],\n'
-        '  "section_guides": [{"section_id": "", "title": "", "main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "experiment_protocol": "", "novice_focus": "", "source_page": null}]\n'
+        '  "section_guides": [{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", "novice_summary": "", "cards": [{"card_type": "abstract_takeaway|intro_insight|problem_formulation|method_architecture|algorithm_steps|innovation_detail|experiment_dataset|experiment_design|result_interpretation|limitation_reflection|field_timeline|taxonomy_node|route_comparison|paper_method_table|dataset_catalog|benchmark_protocol|challenge_card|application_landscape|future_direction|reading_route", "title": "", "content": {}, "source_sections": []}], "main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "experiment_protocol": "", "novice_focus": "", "source_page": null}]\n'
         "}\n"
         "Rules: keep each field compact but substantive; do not copy long paragraphs; "
-        "only fill experiment fields for experiment/evaluation/result sections; "
-        "for non-method sections, technical_route and implementation_plan may be empty; "
+        "for survey papers, prioritize development_timeline, pain_points, taxonomy, technical_routes, representative_methods with concrete paper titles and methods, datasets, evaluation_protocols, applications, and open_challenges; "
+        "for research papers, prioritize problem, insight, method structure, experiments, datasets, baselines, metrics, limitations; "
+        "section_guides must cover every input section except references when possible, and each guide should choose 2-5 cards suited to that section; "
         "source_sections entries should be objects with section_id, title, page when possible; "
+        "paper links may be empty if unavailable; do not invent URLs; "
         "write Chinese content for readers.\n\n"
         f"INPUT:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
     )
 
 
 def _normalize_reading_map(parsed: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    paper_type = str(parsed.get("paper_type") or fallback.get("paper_type") or "research")
+    if paper_type not in {"research", "survey", "theory", "system"}:
+        paper_type = "research"
+    map_variant = str(parsed.get("map_variant") or fallback.get("map_variant") or ("survey" if paper_type == "survey" else "research"))
+    if map_variant not in {"research", "survey"}:
+        map_variant = "survey" if paper_type == "survey" else "research"
+    research_map = parsed.get("research_map") if isinstance(parsed.get("research_map"), dict) else fallback.get("research_map", {})
+    survey_map = parsed.get("survey_map") if isinstance(parsed.get("survey_map"), dict) else fallback.get("survey_map", {})
+    research_problem = parsed.get("research_problem") or research_map.get("research_problem") or fallback.get("research_problem", {})
+    core_method = parsed.get("core_method") or research_map.get("core_method") or fallback.get("core_method", {})
     normalized = {
         "version": READING_MAP_VERSION,
         "status": "llm_done",
-        "research_problem": parsed.get("research_problem") or fallback.get("research_problem", {}),
-        "core_method": parsed.get("core_method") or fallback.get("core_method", {}),
-        "method_steps": _list_or_fallback(parsed.get("method_steps"), fallback.get("method_steps", []), 5),
-        "experimental_support": _list_or_fallback(parsed.get("experimental_support"), fallback.get("experimental_support", []), 5),
-        "limitations_and_questions": _list_or_fallback(parsed.get("limitations_and_questions"), fallback.get("limitations_and_questions", []), 5),
-        "section_guides": _list_or_fallback(parsed.get("section_guides"), fallback.get("section_guides", []), 40),
+        "paper_type": paper_type,
+        "map_variant": map_variant,
+        "prerequisite_card": parsed.get("prerequisite_card") or fallback.get("prerequisite_card", {}),
+        "research_map": research_map,
+        "survey_map": _normalize_survey_map(survey_map, fallback.get("survey_map", {})),
+        "research_problem": research_problem,
+        "core_method": core_method,
+        "method_steps": _list_or_fallback(parsed.get("method_steps") or research_map.get("method_steps"), fallback.get("method_steps", []), 12),
+        "experimental_support": _list_or_fallback(parsed.get("experimental_support") or research_map.get("experimental_support"), fallback.get("experimental_support", []), 12),
+        "limitations_and_questions": _list_or_fallback(parsed.get("limitations_and_questions") or research_map.get("limitations_and_questions"), fallback.get("limitations_and_questions", []), 12),
+        "section_guides": _normalize_section_guides(
+            _list_or_fallback(parsed.get("section_guides"), fallback.get("section_guides", []), 120)
+        ),
     }
     return normalized
 
 
 def _list_or_fallback(value: Any, fallback: Any, limit: int) -> list[Any]:
-    items = value if isinstance(value, list) else fallback
+    items = value if isinstance(value, list) and value else fallback
     return list(items or [])[:limit]
 
 
-def _build_heuristic_section_guides(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _dict_with_fallback(value: Any, fallback: Any) -> dict[str, Any]:
+    merged = dict(fallback) if isinstance(fallback, dict) else {}
+    if not isinstance(value, dict):
+        return merged
+    for key, item in value.items():
+        if item in (None, "", [], {}):
+            continue
+        merged[key] = item
+    return merged
+
+
+def _normalize_survey_map(value: Any, fallback: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    fallback_source = fallback if isinstance(fallback, dict) else {}
+    normalized = {
+        "field_overview": _dict_with_fallback(source.get("field_overview"), fallback_source.get("field_overview", {})),
+        "development_timeline": _list_or_fallback(source.get("development_timeline"), fallback_source.get("development_timeline", []), 20),
+        "pain_points": _list_or_fallback(source.get("pain_points"), fallback_source.get("pain_points", []), 20),
+        "taxonomy": _list_or_fallback(source.get("taxonomy"), fallback_source.get("taxonomy", []), 24),
+        "technical_routes": _list_or_fallback(source.get("technical_routes"), fallback_source.get("technical_routes", []), 24),
+        "representative_methods": _list_or_fallback(source.get("representative_methods"), fallback_source.get("representative_methods", []), 40),
+        "datasets": _list_or_fallback(source.get("datasets"), fallback_source.get("datasets", []), 30),
+        "evaluation_protocols": _list_or_fallback(source.get("evaluation_protocols"), fallback_source.get("evaluation_protocols", []), 20),
+        "applications": _list_or_fallback(source.get("applications"), fallback_source.get("applications", []), 20),
+        "open_challenges": _list_or_fallback(source.get("open_challenges"), fallback_source.get("open_challenges", []), 24),
+        "reading_strategy": _list_or_fallback(source.get("reading_strategy"), fallback_source.get("reading_strategy", []), 12),
+    }
+    return normalized
+
+
+def _normalize_section_guides(guides: list[Any]) -> list[dict[str, Any]]:
+    normalized = []
+    for guide in guides:
+        if not isinstance(guide, dict):
+            continue
+        cards = guide.get("cards")
+        if not isinstance(cards, list) or not cards:
+            cards = _legacy_guide_cards(guide)
+        guide = dict(guide)
+        guide["cards"] = [card for card in cards if isinstance(card, dict)][:6]
+        normalized.append(guide)
+    return normalized
+
+
+def _build_heuristic_section_guides(sections: list[dict[str, Any]], paper_type: str = "research") -> list[dict[str, Any]]:
     guides = []
-    for section in sections[:40]:
+    for section in sections[:120]:
         title = str(section.get("title") or "")
         content = str(section.get("content") or "")
         text = " ".join(content.split())
-        lower_title = title.lower()
-        is_experiment = any(token in lower_title for token in ("experiment", "evaluation", "result", "analysis", "实验", "评估", "结果"))
-        is_method = any(token in lower_title for token in ("method", "approach", "model", "framework", "algorithm", "prelim", "方法", "模型"))
+        role = _section_role(section, paper_type)
+        is_experiment = role in {"experiment", "dataset", "evaluation"}
+        is_method = role in {"method", "technical_route", "taxonomy"}
         guide = {
             "section_id": section.get("section_id", ""),
             "title": title,
+            "section_role": role,
+            "read_priority": "high" if role in {"abstract", "introduction", "method", "technical_route", "taxonomy", "dataset", "challenge"} else "medium",
+            "novice_summary": _first_sentence(text) or "这一节是论文主线中的一个阅读锚点。",
             "main_content": _first_sentence(text) or "This section anchors one part of the paper.",
             "core_idea": _second_sentence(text) or "Read it as a compact guide to the section's role in the paper.",
             "technical_route": _third_sentence(text) if is_method else "",
@@ -1316,8 +2877,479 @@ def _build_heuristic_section_guides(sections: list[dict[str, Any]]) -> list[dict
             "novice_focus": "Focus on why this section is needed and how it supports the paper's main claim.",
             "source_page": section.get("start_page"),
         }
+        guide["cards"] = _guide_cards_for_section(guide, section, text, paper_type)
         guides.append(guide)
     return guides
+
+
+def _infer_paper_type(paper: dict[str, Any], sections: list[dict[str, Any]]) -> str:
+    title = str(paper.get("title") or "").lower()
+    abstract = str(paper.get("abstract") or "").lower()
+    section_titles = " ".join(str(section.get("title") or "") for section in sections).lower()
+    combined = f"{title}\n{abstract[:2400]}\n{section_titles}"
+    survey_tokens = (
+        "survey",
+        "review",
+        "overview",
+        "tutorial",
+        "taxonomy",
+        "landscape",
+        "roadmap",
+        "综述",
+        "调研",
+        "回顾",
+        "分类",
+        "全景",
+    )
+    survey_section_tokens = (
+        "taxonomy",
+        "challenge",
+        "future direction",
+        "open problem",
+        "dataset",
+        "benchmark",
+        "application",
+        "evaluation protocol",
+        "分类",
+        "挑战",
+        "未来方向",
+        "开放问题",
+        "数据集",
+        "基准",
+        "应用",
+    )
+    if any(token in title for token in survey_tokens):
+        return "survey"
+    score = sum(1 for token in survey_tokens if token in combined)
+    score += sum(1 for token in survey_section_tokens if token in section_titles)
+    has_method_experiment = bool(re.search(r"\b(method|approach|experiment|evaluation|results?)\b|方法|实验|结果", section_titles))
+    if score >= 3 and (len(sections) >= 8 or not has_method_experiment):
+        return "survey"
+    if any(token in title for token in ("system", "benchmark", "dataset", "平台", "系统", "基准", "数据集")):
+        return "system"
+    if any(token in title for token in ("theory", "theoretical", "analysis", "定理", "理论", "分析")) and not has_method_experiment:
+        return "theory"
+    return "research"
+
+
+def _section_role(section: dict[str, Any], paper_type: str = "research") -> str:
+    title = str(section.get("title") or "").lower()
+    if "abstract" in title or "摘要" in title:
+        return "abstract"
+    if "reference" in title or "bibliography" in title or "参考文献" in title:
+        return "references"
+    if any(token in title for token in ("intro", "background", "引言", "背景")):
+        return "introduction"
+    if any(token in title for token in ("related work", "prior work", "literature", "相关工作")):
+        return "related_work"
+    if paper_type == "survey":
+        if any(token in title for token in ("preliminar", "overview", "contents", "scope")):
+            return "introduction"
+        if any(token in title for token in ("form", "function", "carries", "why agents need", "type", "types", "component")):
+            return "taxonomy"
+        if any(token in title for token in ("dynamic", "operate", "evolve", "formation", "evolution", "retrieval", "updating", "forgetting", "consolidation", "distillation")):
+            return "technical_route"
+        if any(token in title for token in ("resource", "framework", "benchmark", "dataset", "corpus", "open-source", "open source")):
+            return "dataset"
+        if any(token in title for token in ("position", "frontier", "challenge", "limitation", "open problem", "future", "discussion")):
+            return "challenge"
+    if any(token in title for token in ("taxonomy", "categor", "classification", "分类", "体系")):
+        return "taxonomy"
+    if any(token in title for token in ("dataset", "benchmark", "corpus", "数据集", "基准")):
+        return "dataset"
+    if any(token in title for token in ("evaluation", "metric", "protocol", "评测", "评价", "指标")):
+        return "evaluation"
+    if any(token in title for token in ("application", "case stud", "应用", "案例")):
+        return "application"
+    if any(token in title for token in ("challenge", "limitation", "open problem", "future", "discussion", "挑战", "局限", "开放问题", "未来", "讨论")):
+        return "challenge" if paper_type == "survey" else "conclusion"
+    if any(token in title for token in ("method", "approach", "model", "framework", "algorithm", "architecture", "方法", "模型", "算法", "框架")):
+        return "technical_route" if paper_type == "survey" else "method"
+    if any(token in title for token in ("experiment", "result", "analysis", "实验", "结果")):
+        return "experiment"
+    if any(token in title for token in ("conclusion", "结论", "总结")):
+        return "conclusion"
+    return "general"
+
+
+def _build_heuristic_prerequisite_card(
+    paper: dict[str, Any],
+    sections: list[dict[str, Any]],
+    paper_type: str,
+) -> dict[str, Any]:
+    combined = " ".join(
+        [
+            str(paper.get("title") or ""),
+            str(paper.get("abstract") or ""),
+            " ".join(str(section.get("title") or "") for section in sections[:30]),
+        ]
+    )
+    concept_needles = (
+        "Transformer",
+        "attention",
+        "LLM",
+        "RAG",
+        "reinforcement learning",
+        "diffusion",
+        "graph neural network",
+        "benchmark",
+        "dataset",
+        "pretraining",
+        "fine-tuning",
+    )
+    concepts = []
+    for term in concept_needles:
+        if term.lower() in combined.lower():
+            concepts.append({
+                "name": term,
+                "why_needed": f"论文多处围绕 {term} 展开，先理解它有助于读懂后续章节。",
+                "learn_first": [],
+                "difficulty": "medium",
+            })
+    if not concepts:
+        concepts.append({
+            "name": "论文所在方向的基本任务定义",
+            "why_needed": "先弄清输入、输出、评价目标，后续方法或综述分类才有坐标。",
+            "learn_first": ["任务目标", "常用评价指标", "代表性 baseline"],
+            "difficulty": "medium",
+        })
+    reading_order = (
+        ["先读领域概览和分类体系", "再读技术路线与代表论文", "最后看数据集、评测协议和开放问题"]
+        if paper_type == "survey"
+        else ["先读摘要和引言", "再读方法结构", "最后用实验表格验证 claim"]
+    )
+    return {
+        "concepts": concepts[:6],
+        "baseline_papers": [],
+        "reading_order": reading_order,
+    }
+
+
+def _build_heuristic_survey_map_legacy(
+    paper: dict[str, Any],
+    sections: list[dict[str, Any]],
+    by_stage: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    title = str(paper.get("title") or "Survey")
+    abstract = str(paper.get("abstract") or "")
+    overview_sections = by_stage.get("abstract", []) + by_stage.get("introduction", [])
+    taxonomy_sections = by_stage.get("taxonomy", []) + by_stage.get("technical_route", [])
+    dataset_sections = by_stage.get("dataset", []) + by_stage.get("evaluation", [])
+    challenge_sections = by_stage.get("challenge", []) + by_stage.get("conclusion", [])
+    application_sections = by_stage.get("application", [])
+    field_text = _compact_section_text(overview_sections, 1800) or abstract
+
+    def section_items(source_sections: list[dict[str, Any]], key: str, label: str, limit: int = 10) -> list[dict[str, Any]]:
+        items = []
+        for index, section in enumerate(source_sections[:limit], start=1):
+            text = " ".join(str(section.get("content") or "").split())
+            title_value = str(section.get("title") or f"{label} {index}")
+            items.append({
+                key: title_value,
+                "summary": _first_sentence(text) or f"阅读 {title_value}，理解综述在这里整理的{label}。",
+                "source_sections": [_source_ref(section)],
+            })
+        return items
+
+    technical_routes = []
+    for index, section in enumerate(taxonomy_sections[:16], start=1):
+        text = " ".join(str(section.get("content") or "").split())
+        route_id = f"route_{index}"
+        technical_routes.append({
+            "route_id": route_id,
+            "name": str(section.get("title") or f"技术路线 {index}"),
+            "core_idea": _first_sentence(text) or "该路线需要通过 LLM 深化抽取。",
+            "typical_pipeline": _second_sentence(text),
+            "strengths": [],
+            "weaknesses": [],
+            "representative_method_ids": [],
+            "source_sections": [_source_ref(section)],
+        })
+
+    datasets = []
+    for section in dataset_sections[:20]:
+        text = " ".join(str(section.get("content") or "").split())
+        names = _find_terms(text, ("dataset", "benchmark", "corpus", "imagenet", "cifar", "glue", "hotpot", "wiki", "数据集", "基准"))
+        datasets.append({
+            "name": str(section.get("title") or "Dataset section"),
+            "task": "",
+            "content": _first_sentence(text),
+            "structure": "",
+            "scale": "",
+            "metrics": _find_terms(text, ("accuracy", "f1", "precision", "recall", "bleu", "rouge", "pass@", "指标")),
+            "mentioned_terms": names,
+            "url": "",
+            "source_sections": [_source_ref(section)],
+        })
+
+    return {
+        "field_overview": {
+            "field": title,
+            "core_task": _first_sentence(field_text) or "这篇综述试图整理一个研究方向的核心任务和技术谱系。",
+            "why_now": _second_sentence(field_text),
+            "novice_takeaway": "先把综述的分类体系当作阅读地图，再进入每条技术路线下的代表论文。",
+            "source_sections": [_source_ref(section) for section in overview_sections[:3]],
+        },
+        "development_timeline": section_items(by_stage.get("related_work", []) + overview_sections, "stage", "发展阶段", 8),
+        "pain_points": section_items(challenge_sections, "problem", "领域痛点", 12),
+        "taxonomy": section_items(taxonomy_sections, "category", "分类体系", 16),
+        "technical_routes": technical_routes,
+        "representative_methods": [],
+        "datasets": datasets,
+        "evaluation_protocols": section_items(by_stage.get("evaluation", []), "protocol", "评测方式", 12),
+        "applications": section_items(application_sections, "application", "应用场景", 12),
+        "open_challenges": section_items(challenge_sections, "challenge", "开放问题", 16),
+        "reading_strategy": ["先读摘要和引言确认综述范围", "沿 taxonomy/technical route 章节建立分类框架", "把数据集、评测指标和开放问题作为后续精读入口"],
+    }
+
+
+def _build_heuristic_survey_map(
+    paper: dict[str, Any],
+    sections: list[dict[str, Any]],
+    by_stage: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    title = str(paper.get("title") or "Survey")
+    abstract = str(paper.get("abstract") or "")
+    overview_sections = by_stage.get("abstract", []) + by_stage.get("introduction", [])
+    if not overview_sections:
+        overview_sections = [section for section in sections[:4] if _section_role(section, "survey") != "references"]
+
+    taxonomy_sections = by_stage.get("taxonomy", [])
+    route_sections = by_stage.get("technical_route", [])
+    dataset_sections = by_stage.get("dataset", []) + by_stage.get("evaluation", [])
+    challenge_sections = by_stage.get("challenge", []) + by_stage.get("conclusion", [])
+    if not challenge_sections:
+        challenge_sections = [section for section in sections[-4:] if _section_role(section, "survey") != "references"]
+    application_sections = by_stage.get("application", [])
+    field_text = _compact_section_text(overview_sections, 1800) or abstract
+
+    def section_items(source_sections: list[dict[str, Any]], key: str, label: str, limit: int = 10) -> list[dict[str, Any]]:
+        items = []
+        for index, section in enumerate(source_sections[:limit], start=1):
+            text = " ".join(str(section.get("content") or "").split())
+            title_value = str(section.get("title") or f"{label} {index}")
+            items.append({
+                key: title_value,
+                "summary": _first_sentence(text) or f"Read {title_value} to understand this survey dimension.",
+                "source_sections": [_source_ref(section)],
+            })
+        return items
+
+    technical_routes = []
+    for index, section in enumerate((route_sections or taxonomy_sections)[:16], start=1):
+        text = " ".join(str(section.get("content") or "").split())
+        route_id = f"route_{index}"
+        technical_routes.append({
+            "route_id": route_id,
+            "name": str(section.get("title") or f"Technical route {index}"),
+            "core_idea": _first_sentence(text) or "Use this section to identify the route's core mechanism.",
+            "typical_pipeline": _second_sentence(text),
+            "strengths": [],
+            "weaknesses": [],
+            "representative_method_ids": [],
+            "source_sections": [_source_ref(section)],
+        })
+
+    representative_methods = []
+    method_source_sections = (route_sections + taxonomy_sections + dataset_sections)[:20]
+    for index, section in enumerate(method_source_sections, start=1):
+        text = " ".join(str(section.get("content") or "").split())
+        section_title = str(section.get("title") or f"Representative method group {index}")
+        representative_methods.append({
+            "method_name": section_title,
+            "paper_title": "",
+            "year": "",
+            "route": section_title,
+            "method_summary": _first_sentence(text) or "This source section groups representative methods discussed by the survey.",
+            "specific_solution": _second_sentence(text) or "Ask the Agent to expand this card into concrete cited papers and methods.",
+            "url": "",
+            "source_sections": [_source_ref(section)],
+        })
+
+    datasets = []
+    for section in dataset_sections[:20]:
+        text = " ".join(str(section.get("content") or "").split())
+        datasets.append({
+            "name": str(section.get("title") or "Dataset section"),
+            "task": "",
+            "content": _first_sentence(text),
+            "structure": "",
+            "scale": "",
+            "metrics": _find_terms(text, ("accuracy", "f1", "precision", "recall", "bleu", "rouge", "pass@", "metric", "指标")),
+            "mentioned_terms": _find_terms(text, ("dataset", "benchmark", "corpus", "imagenet", "cifar", "glue", "hotpot", "wiki", "数据集", "基准")),
+            "url": "",
+            "source_sections": [_source_ref(section)],
+        })
+
+    timeline_sections = by_stage.get("related_work", []) + overview_sections + taxonomy_sections[:4] + route_sections[:4]
+    evaluation_sections = by_stage.get("evaluation", []) or dataset_sections
+
+    return {
+        "field_overview": {
+            "field": title,
+            "core_task": _first_sentence(field_text) or "This survey organizes the core task, taxonomy, methods, resources, and open problems of a research field.",
+            "why_now": _second_sentence(field_text),
+            "novice_takeaway": "Read the taxonomy first, then follow each technical route to its datasets, representative methods, and open problems.",
+            "source_sections": [_source_ref(section) for section in overview_sections[:3]],
+        },
+        "development_timeline": section_items(timeline_sections, "stage", "Development stage", 12),
+        "pain_points": section_items(challenge_sections, "problem", "Pain point", 12),
+        "taxonomy": section_items(taxonomy_sections or route_sections, "category", "Taxonomy category", 16),
+        "technical_routes": technical_routes,
+        "representative_methods": representative_methods,
+        "datasets": datasets,
+        "evaluation_protocols": section_items(evaluation_sections, "protocol", "Evaluation protocol", 12),
+        "applications": section_items(application_sections, "application", "Application", 12),
+        "open_challenges": section_items(challenge_sections, "challenge", "Open challenge", 16),
+        "reading_strategy": [
+            "Start with the overview and taxonomy to fix the survey scope.",
+            "Follow the technical-route cards to connect mechanisms with representative methods.",
+            "Use datasets, evaluation protocols, and open challenges as anchors for deep reading.",
+        ],
+    }
+
+
+def _legacy_guide_cards(guide: dict[str, Any]) -> list[dict[str, Any]]:
+    source = {
+        "section_id": guide.get("section_id", ""),
+        "title": guide.get("title", ""),
+        "page": guide.get("source_page"),
+    }
+    cards = []
+    if guide.get("main_content") or guide.get("novice_summary"):
+        cards.append({
+            "card_type": "reading_route",
+            "title": "本节怎么读",
+            "content": {
+                "summary": guide.get("novice_summary") or guide.get("main_content", ""),
+                "focus": guide.get("novice_focus", ""),
+            },
+            "source_sections": [source],
+        })
+    if guide.get("technical_route") or guide.get("implementation_plan"):
+        cards.append({
+            "card_type": "method_architecture",
+            "title": "技术路线",
+            "content": {
+                "technical_route": guide.get("technical_route", ""),
+                "implementation_plan": guide.get("implementation_plan", ""),
+            },
+            "source_sections": [source],
+        })
+    if guide.get("datasets") or guide.get("baselines") or guide.get("metrics"):
+        cards.append({
+            "card_type": "experiment_dataset",
+            "title": "实验与数据",
+            "content": {
+                "datasets": guide.get("datasets", []),
+                "baselines": guide.get("baselines", []),
+                "metrics": guide.get("metrics", []),
+                "dataset_format": guide.get("dataset_format", ""),
+                "experiment_protocol": guide.get("experiment_protocol", ""),
+            },
+            "source_sections": [source],
+        })
+    return cards
+
+
+def _guide_cards_for_section(
+    guide: dict[str, Any],
+    section: dict[str, Any],
+    text: str,
+    paper_type: str,
+) -> list[dict[str, Any]]:
+    source = [_source_ref(section)]
+    role = guide.get("section_role", "general")
+    summary = guide.get("novice_summary") or _first_sentence(text)
+    cards = [{
+        "card_type": "reading_route",
+        "title": "基础阅读提示",
+        "fallback_generated": True,
+        "content": {
+            "summary": summary,
+            "focus": guide.get("novice_focus", ""),
+            "read_priority": guide.get("read_priority", "medium"),
+            "quality_note": "低信息兜底：本节未获得 LLM 结构化卡片，建议重新生成以获取正式分析。",
+        },
+        "source_sections": source,
+    }]
+    if paper_type == "survey":
+        survey_card_by_role = {
+            "taxonomy": "taxonomy_node",
+            "technical_route": "route_comparison",
+            "dataset": "dataset_catalog",
+            "evaluation": "benchmark_protocol",
+            "application": "application_landscape",
+            "challenge": "challenge_card",
+            "related_work": "field_timeline",
+            "introduction": "field_timeline",
+        }
+        card_type = survey_card_by_role.get(role)
+        if card_type:
+            cards.append({
+                "card_type": card_type,
+                "title": f"基础{_card_title_for_type(card_type)}",
+                "fallback_generated": True,
+                "content": {
+                    "main_point": summary,
+                    "details": _second_sentence(text),
+                    "terms": _find_terms(text, ("dataset", "benchmark", "method", "model", "challenge", "数据集", "基准", "方法", "模型", "挑战")),
+                    "quality_note": "低信息兜底：本节未获得 LLM 结构化卡片，建议重新生成以获取正式分析。",
+                },
+                "source_sections": source,
+            })
+    else:
+        research_card_by_role = {
+            "abstract": "abstract_takeaway",
+            "introduction": "intro_insight",
+            "method": "method_architecture",
+            "experiment": "experiment_design",
+            "dataset": "experiment_dataset",
+            "evaluation": "experiment_design",
+            "conclusion": "limitation_reflection",
+        }
+        card_type = research_card_by_role.get(role)
+        if card_type:
+            cards.append({
+                "card_type": card_type,
+                "title": _card_title_for_type(card_type),
+                "fallback_generated": True,
+                "content": {
+                    "main_point": summary,
+                    "details": _second_sentence(text),
+                    "datasets": guide.get("datasets", []),
+                    "baselines": guide.get("baselines", []),
+                    "metrics": guide.get("metrics", []),
+                },
+                "source_sections": source,
+            })
+    return cards
+
+
+def _card_title_for_type(card_type: str) -> str:
+    labels = {
+        "abstract_takeaway": "摘要速读",
+        "intro_insight": "引言洞察",
+        "problem_formulation": "问题定义",
+        "method_architecture": "方法结构",
+        "algorithm_steps": "算法步骤",
+        "innovation_detail": "改进细节",
+        "experiment_dataset": "数据集信息",
+        "experiment_design": "实验设计",
+        "result_interpretation": "结果解读",
+        "limitation_reflection": "局限反思",
+        "field_timeline": "发展脉络",
+        "taxonomy_node": "分类体系",
+        "route_comparison": "技术路线",
+        "paper_method_table": "代表论文方法",
+        "dataset_catalog": "数据集目录",
+        "benchmark_protocol": "评测协议",
+        "challenge_card": "难点痛点",
+        "application_landscape": "应用场景",
+        "future_direction": "未来方向",
+        "reading_route": "阅读路线",
+    }
+    return labels.get(card_type, "阅读卡片")
 
 
 def _compact_section_text(sections: list[dict[str, Any]], limit: int = 1600) -> str:
@@ -1411,31 +3443,29 @@ def _parse_quality_for_paper(paper: dict[str, Any]) -> str:
     return "good"
 
 
+def _section_extraction_info(paper: dict[str, Any]) -> dict[str, Any]:
+    source = str(paper.get("section_extraction_source") or "")
+    status = str(paper.get("section_extraction_status") or "")
+    message = str(paper.get("section_extraction_message") or "")
+    outline_entries_count = int(paper.get("outline_entries_count") or 0)
+    if not source and paper.get("parse_status") == "done":
+        source = "heuristic"
+        status = "legacy_heuristic"
+        message = "该论文解析记录缺少 PDF 内置目录来源标记，按旧版启发式章节识别结果展示；索引可能不等于论文真实目录。"
+    return {
+        "source": source,
+        "status": status,
+        "message": message,
+        "outline_entries_count": outline_entries_count,
+    }
+
+
 def _section_index_for_prompt(sections: list[dict[str, Any]]) -> str:
     lines = []
-    for section in sections[:30]:
+    for section in sections[:120]:
         indent = "  " * max(int(section.get("level", 1)) - 1, 0)
         lines.append(f"{indent}- {section.get('section_id', '')}: {section.get('title', '')}")
     return "\n".join(lines) or "(无章节索引)"
-
-
-def _kg_summary_for_prompt(revealed_kg: dict[str, Any]) -> str:
-    nodes = revealed_kg.get("nodes", []) or []
-    edges = revealed_kg.get("edges", []) or []
-    node_lines = [
-        f"- [{node.get('node_type', '')}] {node.get('label', '')}"
-        for node in nodes[:20]
-    ]
-    edge_lines = [
-        f"- {edge.get('source', '')} --{edge.get('edge_type', '')}--> {edge.get('target', '')}"
-        for edge in edges[:20]
-    ]
-    return (
-        f"阶段: {revealed_kg.get('current_stage', '')}\n"
-        f"节点数: {len(nodes)}, 边数: {len(edges)}\n"
-        f"节点:\n{chr(10).join(node_lines) or '(无)'}\n"
-        f"关系:\n{chr(10).join(edge_lines) or '(无)'}"
-    )
 
 
 def _author_names(authors: list[Any]) -> list[str]:
@@ -1538,6 +3568,7 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         item["image_url"] = asset_url
         layout_elements.append(item)
 
+    section_info = _section_extraction_info(paper)
     return {
         "paper_id": paper.get("paper_id", ""),
         "source": paper.get("source", ""),
@@ -1562,11 +3593,23 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "layout_elements": layout_elements,
         "references": paper.get("references", []),
         "full_text": paper.get("full_text", ""),
+        "section_extraction_source": section_info["source"],
+        "section_extraction_status": section_info["status"],
+        "section_extraction_message": section_info["message"],
+        "outline_entries_count": section_info["outline_entries_count"],
         "parse_status": paper.get("parse_status", ""),
         "parse_error": paper.get("parse_error", ""),
         "page_count": paper.get("page_count", 0),
         "reading_map": paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending")),
         "reading_map_status": paper.get("reading_map_status", ""),
+        "reading_map_phase": paper.get("reading_map_phase", ""),
+        "reading_map_progress": paper.get("reading_map_progress", 0),
+        "reading_map_error": paper.get("reading_map_error", ""),
+        "reading_map_card_progress": (
+            paper.get("reading_map_artifacts", {}).get("survey_card_progress", {})
+            if isinstance(paper.get("reading_map_artifacts"), dict)
+            else {}
+        ),
         "stored_at": paper.get("stored_at", ""),
     }
 

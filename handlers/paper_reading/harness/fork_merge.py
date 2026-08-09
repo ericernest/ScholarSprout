@@ -6,7 +6,7 @@ docx 定义的 Fork/Merge 流程:
     │   ├── 加载 Math Verifier Skill
     │   ├── 专注推导 → 展开多层推导
     │   ├── 用户理解完毕
-    │   └── Merge → 返回主流程，KG中新增公式推导子图
+    │   └── Merge → 返回主流程，保留关键推导结论
     ├── Fork: 用户想了解Baseline的更多细节
     │   ├── 加载 Domain Expert Skill
     │   └── Merge → 返回主流程
@@ -20,8 +20,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from handlers.paper_reading.harness.session import ReadingSession, SessionManager
-from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
-
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +29,7 @@ class MergeResult:
 
     parent_session_id: str = ""
     fork_session_id: str = ""
-    kg_updates: list[dict[str, Any]] = field(default_factory=list)
+    insight_updates: list[dict[str, Any]] = field(default_factory=list)
     key_findings: list[str] = field(default_factory=list)
     merged_skills: list[str] = field(default_factory=list)
     success: bool = True
@@ -50,10 +48,10 @@ class ForkMergeManager:
     def __init__(
         self,
         session_manager: SessionManager,
-        kg_engine: KnowledgeGraphEngine | None = None,
+        context_engine: Any | None = None,
     ) -> None:
         self._session_manager = session_manager
-        self._kg_engine = kg_engine
+        self._context_engine = context_engine
 
     def create_fork(
         self,

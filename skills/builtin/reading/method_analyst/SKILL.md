@@ -2,7 +2,7 @@
 id: reading.method_analyst
 name: 方法论分析师
 category: reading
-description: 拆解论文方法论：问题定义→方法流程→每步动机→DAG图。自动触发于Method章节。
+description: 拆解论文方法论：问题定义→方法流程→每步动机→核心创新。自动触发于Method章节。
 when_to_use:
   - 用户正在阅读 Method 章节，需要理解方法的整体逻辑和每步设计动机
   - 也适用于 Abstract 阅读后获取方法概览
@@ -20,7 +20,7 @@ when_not_to_use:
 2. 画出 Method Pipeline：列出方法的每个 Step
 3. 标注每个 Step 的 Motivation：「为什么这个 Step 是必要的？」
 4. 对核心创新 Step 进行深度分析
-5. 输出结构化方法依赖图（DAG）
+5. 给出新手最应该追问的理解检查问题
 
 ## 输出格式
 严格输出以下 JSON：
@@ -47,15 +47,9 @@ when_not_to_use:
     "difference_from_prior": "与先前工作的差异",
     "why_it_works": "为什么这个创新有效（直觉解释）"
   },
-  "dependency_graph": {
-    "nodes": [{"id": "step_1", "label": "..."}],
-    "edges": [{"from": "step_1", "to": "step_2", "label": "feeds_into"}]
-  }
+  "novice_checkpoints": ["读者应该确认自己是否理解的问题"]
 }
 ```
 
 ## 交互模式
 苏格拉底式反问：不是直接告诉答案，而是引导用户思考「这个 Step 为什么必要？」、「如果没有这一步会发生什么？」
-
-## 知识图谱操作
-每识别出一个方法步骤或关键模块，使用 `kg_build` 触发知识图谱构建。
