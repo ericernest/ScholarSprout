@@ -7,7 +7,9 @@
 - 日常聊天：`gateway/message_flow.py` 在 handler 前后分别保存用户消息和可见的助手回复。
 - 领域入门：同步 handler 保存完整分块结果；异步 job 在提交、阶段推进和完成/失败时更新同一个 artifact。
 - 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。
-- 默认数据目录为 `~/.novicesynapse/`，可通过 `NOVICESYNAPSE_DATA_DIR` 修改。领域入门 job 默认也使用同一个 `research.sqlite3`；只有显式配置 `DOMAIN_ONBOARDING_JOB_DB` 时才使用独立文件。
+- 默认数据目录为 `~/.novicesynapse/`，可在 `/settings` 配置向导或 `~/.novicesynapse/config.json` 的 `storage.data_dir` 修改。`NOVICESYNAPSE_DATA_DIR` 仍作为部署环境的最高优先级覆盖项。领域入门 job 默认也使用同一个 `research.sqlite3`；只有显式配置 `DOMAIN_ONBOARDING_JOB_DB` 时才使用独立文件。
+
+数据目录修改后需要重启服务。新目录承接重启后的新读写，不会自动搬迁旧目录的数据；这样可以避免一次普通配置修改暗中移动或覆盖用户文件。
 
 ## 字段策略：关系字段 + 分块 JSON
 

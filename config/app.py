@@ -36,10 +36,15 @@ def run_config_flow() -> None:
         "请输入 model_name",
         default=config.client.model_name or "qwen-chat",
     ).strip()
+    data_dir = typer.prompt(
+        "请输入数据目录",
+        default=config.storage.data_dir,
+    ).strip()
 
     config.client.base_url = base_url or None
     config.client.api_key = api_key
     config.client.model_name = model_name
+    config.storage.data_dir = data_dir or "~/.novicesynapse"
 
     try:
         save_config(config)

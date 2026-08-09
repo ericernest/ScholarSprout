@@ -17,7 +17,8 @@ from agents.agent import create_agent
 from bus.message_bus import MessageBus
 from channels.base import ChannelMessage
 from channels.web import WebChannel
-from config.manager import load_config
+from config.manager import is_setup_complete, load_config, resolve_data_dir
+from config.web import router as config_router
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
 from handlers.domain_onboarding.pipeline import create_default_pipeline
@@ -34,7 +35,7 @@ from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
 from gateway.message_flow import process_channel_input, process_channel_stream
-from models.client import OpenAIClient
+from models.client import OpenAIClient, SetupRequiredModel
 from handlers.paper_reading.harness.session import SessionManager
 from storage import LocalResearchStore, PaperReadingStorage
 from handlers.paper_reading.harness.fork_merge import ForkMergeManager
@@ -52,6 +53,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="NoviceSynapse Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(config_router)
 
 
 # 返回最小健康检查结果。
@@ -63,7 +65,10 @@ def health() -> dict[str, str]:
 @app.get("/ready")
 def readiness(request: Request) -> dict[str, object]:
     components = {
-        "model": getattr(request.app.state, "model", None) is not None,
+        "model": (
+            getattr(request.app.state, "model", None) is not None
+            and getattr(request.app.state, "setup_complete", True)
+        ),
         "domain_onboarding_pipeline": (
             getattr(request.app.state, "domain_onboarding_pipeline", None) is not None
         ),
@@ -98,6 +103,12 @@ def home_page() -> FileResponse:
 @app.get("/app")
 def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
+
+
+# 返回首次运行与后续修改共用的配置向导。
+@app.get("/settings")
+def settings_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "settings" / "index.html")
 
 
 # 返回嵌入应用层级的论文精读工作台。
@@ -436,14 +447,13 @@ def close_domain_onboarding_resources() -> None:
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
-    model = OpenAIClient(config.client)
+    setup_complete = is_setup_complete(config)
+    model = OpenAIClient(config.client) if setup_complete else SetupRequiredModel(config.client)
     chat_agent = create_agent(model, "chat")
     domain_onboarding_agent = create_agent(model, "domain_onboarding")
     paper_reading_agent = create_agent(model, "paper_reading")
 
-    data_root = Path(
-        os.getenv("NOVICESYNAPSE_DATA_DIR", "~/.novicesynapse")
-    ).expanduser()
+    data_root = resolve_data_dir(config)
     research_storage = LocalResearchStore(data_root / "research.sqlite3")
     research_storage.initialize()
     paper_storage = PaperReadingStorage(
@@ -467,6 +477,7 @@ def start_gateway_server(host: str, port: int) -> None:
     input_channel.start()
 
     app.state.model = model
+    app.state.setup_complete = setup_complete
     app.state.chat_agent = chat_agent
     app.state.domain_onboarding_agent = domain_onboarding_agent
     app.state.paper_reading_agent = paper_reading_agent

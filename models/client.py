@@ -10,6 +10,25 @@ from openai import OpenAI
 from config.schema import OpenAIClientConfig
 
 
+class SetupRequiredModel:
+    """Keep the web service available until first-run model setup is complete."""
+
+    def __init__(self, config: OpenAIClientConfig) -> None:
+        self.config = config
+
+    def _raise(self) -> None:
+        raise RuntimeError("模型尚未配置，请先打开 /settings 完成配置并重启服务。")
+
+    def chat(self, **_: Any) -> Any:
+        self._raise()
+
+    def chat_stream(self, **_: Any) -> Any:
+        self._raise()
+
+    def embed(self, *_: Any, **__: Any) -> Any:
+        self._raise()
+
+
 # 只负责根据连接配置声明 OpenAI SDK client。
 class OpenAIClient:
     # 初始化 OpenAI SDK client。

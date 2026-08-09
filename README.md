@@ -48,7 +48,13 @@ pip install -e .
 
 ## 配置模型
 
-首次运行或修改模型时执行：
+启动 gateway 后，推荐打开网页配置向导：
+
+```text
+http://127.0.0.1:8000/settings
+```
+
+首次运行即使尚未填写 API Key，也可以先启动 gateway 并打开这个页面。也可以继续使用命令行配置：
 
 ```bash
 novicesynapse config
@@ -72,6 +78,9 @@ novicesynapse config
     "max_retries": 2,
     "input_cost_per_million_tokens": null,
     "output_cost_per_million_tokens": null
+  },
+  "storage": {
+    "data_dir": "~/.novicesynapse"
   }
 }
 ```
@@ -79,6 +88,8 @@ novicesynapse config
 注意：配置文件中的 `api_key` 只填写 key 本身，不需要加 `Bearer ` 前缀；OpenAI SDK 会自动生成 `Authorization: Bearer <api_key>` 请求头。
 
 也可以使用其它兼容 OpenAI SDK 的模型服务，只要提供 `base_url`、`api_key` 和可用的 `model_name`。
+
+会话、论文结构化数据、上传的 PDF 和图片默认写入 `storage.data_dir`。也可以用 `NOVICESYNAPSE_DATA_DIR` 环境变量覆盖该配置；修改目录后需重启服务，旧目录数据不会自动迁移。
 
 如需估算领域入门重试产生的额外货币成本，可以按模型计价填写每百万输入、输出 token 单价。未配置单价时仍会记录实际 token，但 `estimated_cost` 返回 `null`。
 
@@ -173,6 +184,8 @@ http://127.0.0.1:8000/
 ```text
 http://127.0.0.1:8000/app
 ```
+
+首页和聊天页均提供“配置”入口，首次配置及后续修改使用同一页面。
 
 聊天页默认模式是“日常聊天”。点击输入框旁边的 `+` 可以选择：
 
