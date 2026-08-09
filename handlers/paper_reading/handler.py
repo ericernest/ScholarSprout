@@ -38,6 +38,7 @@ SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS = 180
 SURVEY_MERGE_PROMPT_LIMIT = 60000
 SURVEY_CARD_SECTION_TEXT_LIMIT = 12000
 SURVEY_CARD_CONTEXT_LIMIT = 26000
+SURVEY_INTRO_CONTEXT_LIMIT = 18000
 SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
 SURVEY_MAP_GROUP_KEYS = (
     "field_overview",
@@ -1422,6 +1423,7 @@ def _build_survey_plan_card_reading_map(
     try:
         raw_plan = _plan_survey_cards(model, paper, manifest, skill_instructions)
         plan = _normalize_survey_card_plan(raw_plan, manifest)
+        plan = _ensure_survey_prerequisite_task(plan, manifest)
     except Exception as error:
         return _failed_reading_map(f"综述卡片规划失败：{error}")
     tasks = plan.get("tasks", [])
@@ -1586,6 +1588,10 @@ def _survey_section_manifest(paper: dict[str, Any]) -> list[dict[str, Any]]:
             "end_page": section.get("end_page"),
             "section_role_hint": _section_role(section, "survey"),
             "text_length": len(text),
+            "signal_terms": _survey_signal_terms(text),
+            "citation_count_hint": _citation_count_hint(text),
+            "named_entities_hint": _named_entities_hint(text),
+            "table_figure_refs": _table_figure_refs(text),
             "summary_excerpt": _survey_section_excerpt(text),
         })
     return manifest
@@ -1597,8 +1603,36 @@ def _survey_section_excerpt(text: str, limit: int = 900) -> str:
         return text
     head = text[: int(limit * 0.55)]
     tail = text[-int(limit * 0.30):]
-    middle = _keyword_window(text, ("dataset", "benchmark", "method", "model", "challenge", "taxonomy", "evaluation"), int(limit * 0.25))
-    return " ... ".join(part for part in (head, middle, tail) if part)
+    windows = _keyword_windows(
+        text,
+        (
+            "et al.",
+            "citation",
+            "propose",
+            "approach",
+            "framework",
+            "algorithm",
+            "baseline",
+            "compare",
+            "comparison",
+            "sota",
+            "table",
+            "figure",
+            "dataset",
+            "benchmark",
+            "metric",
+            "evaluation",
+            "taxonomy",
+            "challenge",
+            "future",
+            "agent",
+            "memory",
+            "rag",
+        ),
+        int(limit * 0.55),
+        max_windows=3,
+    )
+    return " ... ".join(part for part in (head, *windows, tail) if part)[:limit]
 
 
 def _keyword_window(text: str, needles: tuple[str, ...], limit: int) -> str:
@@ -1609,6 +1643,109 @@ def _keyword_window(text: str, needles: tuple[str, ...], limit: int) -> str:
     start = max(0, hit - limit // 2)
     end = min(len(text), start + limit)
     return text[start:end].strip()
+
+
+def _keyword_windows(text: str, needles: tuple[str, ...], limit: int, *, max_windows: int = 3) -> list[str]:
+    text = str(text or "")
+    if not text or limit <= 0:
+        return []
+    lower = text.lower()
+    hits: list[int] = []
+    for needle in needles:
+        start = 0
+        lowered_needle = needle.lower()
+        while lowered_needle:
+            hit = lower.find(lowered_needle, start)
+            if hit < 0:
+                break
+            if all(abs(hit - existing) > max(180, limit // max(1, max_windows)) for existing in hits):
+                hits.append(hit)
+            start = hit + max(1, len(lowered_needle))
+            if len(hits) >= max_windows * 3:
+                break
+    if not hits:
+        return []
+    window_limit = max(180, limit // max_windows)
+    windows = []
+    for hit in sorted(hits)[:max_windows]:
+        start = max(0, hit - window_limit // 2)
+        end = min(len(text), start + window_limit)
+        windows.append(text[start:end].strip())
+    return windows
+
+
+def _survey_signal_terms(text: str) -> list[str]:
+    terms = (
+        "et al.",
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+        "table",
+        "figure",
+        "benchmark",
+        "dataset",
+        "baseline",
+        "compare",
+        "comparison",
+        "sota",
+        "state-of-the-art",
+        "framework",
+        "algorithm",
+        "approach",
+        "method",
+        "taxonomy",
+        "evaluation",
+        "metric",
+        "challenge",
+        "limitation",
+        "future",
+    )
+    lowered = str(text or "").lower()
+    hits = [term for term in terms if term in lowered]
+    years = sorted(set(re.findall(r"\b20\d{2}\b", str(text or ""))))[:8]
+    return list(dict.fromkeys([*hits, *years]))[:20]
+
+
+def _citation_count_hint(text: str) -> int:
+    raw = str(text or "")
+    bracket_citations = len(re.findall(r"\[(?:\d+\s*,?\s*){1,6}\]", raw))
+    author_year = len(re.findall(r"\b[A-Z][A-Za-z-]+ et al\.\s*,?\s*(?:19|20)\d{2}\b", raw))
+    years = len(re.findall(r"\b(?:19|20)\d{2}\b", raw))
+    return min(999, bracket_citations + author_year + years)
+
+
+def _named_entities_hint(text: str, limit: int = 14) -> list[str]:
+    raw = " ".join(str(text or "").split())
+    candidates = re.findall(
+        r"\b(?:[A-Z][A-Za-z0-9+-]{2,}|[A-Z]{2,})(?:[-\s](?:[A-Z][A-Za-z0-9+-]{2,}|[A-Z]{2,})){0,5}\b",
+        raw,
+    )
+    stop = {"The", "This", "That", "Section", "Figure", "Table", "References", "Abstract", "Introduction"}
+    entities: list[str] = []
+    for candidate in candidates:
+        cleaned = candidate.strip(" ,.;:()[]")
+        if not cleaned or cleaned in stop or cleaned.lower() in {"agent", "agents", "model", "models", "memory"}:
+            continue
+        if cleaned not in entities:
+            entities.append(cleaned)
+        if len(entities) >= limit:
+            break
+    return entities
+
+
+def _table_figure_refs(text: str, limit: int = 12) -> list[str]:
+    refs = re.findall(r"\b(?:Table|Figure|Fig\.)\s*\d+[A-Za-z]?\b", str(text or ""), flags=re.IGNORECASE)
+    unique: list[str] = []
+    for ref in refs:
+        normalized = " ".join(ref.split())
+        if normalized not in unique:
+            unique.append(normalized)
+        if len(unique) >= limit:
+            break
+    return unique
 
 
 def _plan_survey_cards(
@@ -1624,12 +1761,20 @@ def _plan_survey_cards(
         "Use the section manifest to decide which sections should be read to generate each card. "
         "Do not ask for every section by default; choose the most relevant sections for each card. "
         "Return JSON only. Use section_id for binding; section_index is only a helper.\n"
+        "Actively search for every core group instead of treating them as optional. "
+        "field_overview is required. taxonomy and technical_routes should each have 1-3 tasks when evidence exists. "
+        "If the manifest exposes citation_count_hint, years, et al., Table/Figure, benchmark, baseline, comparison, framework, algorithm, or named_entities_hint, "
+        "you must plan representative_methods: either 3-8 specific method tasks or one aggregate method task that can return items[]. "
+        "Plan datasets, evaluation_protocols, and open_challenges whenever the manifest has evidence; if a core group is omitted, include a concise omission reason.\n"
         "Schema:\n"
         "{\n"
-        '  "map_tasks": [{"task_id": "", "group_key": "field_overview|development_timeline|pain_points|taxonomy|technical_routes|representative_methods|datasets|evaluation_protocols|applications|open_challenges", "title": "", "goal": "", "priority": "high|medium|low", "section_ids": [], "section_indices": [], "output_hint": ""}],\n'
-        '  "section_guide_tasks": [{"task_id": "", "section_id": "", "section_index": null, "title": "", "goal": "", "priority": "high|medium|low", "card_types": [], "section_ids": [], "section_indices": []}]\n'
+        '  "map_tasks": [{"task_id": "", "group_key": "field_overview|development_timeline|pain_points|taxonomy|technical_routes|representative_methods|datasets|evaluation_protocols|applications|open_challenges", "title": "", "goal": "", "priority": "high|medium|low", "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": [], "output_hint": ""}],\n'
+        '  "section_guide_tasks": [{"task_id": "", "section_id": "", "section_index": null, "title": "", "goal": "", "priority": "high|medium|low", "card_types": [], "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": []}],\n'
+        '  "omissions": [{"group_key": "", "reason": ""}]\n'
         "}\n"
-        "Planning requirements: include high-value map tasks for field_overview, taxonomy or technical_routes, representative_methods, datasets when present, and open_challenges. "
+        "Planning requirements: include high-value map tasks for field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges when evidence exists. "
+        "For representative_methods, prioritize sections with citation/year/method/table/benchmark/comparison signals and set expected_output_fields to paper_title, year, method_name, route, problem_addressed, core_mechanism, specific_solution, improves_on, limitations, evidence, source_sections. "
+        "For datasets, set expected_output_fields to name, task, content, structure, scale, metrics, used_by_methods, evidence, source_sections. "
         "Create section_guide_tasks for important non-reference sections; each should target 2-4 cards. "
         "Keep map_tasks <= 24 and section_guide_tasks <= 80. Write Chinese titles/goals.\n\n"
         f"Paper title: {paper.get('title', '')}\n"
@@ -1685,6 +1830,8 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
             "priority": str(item.get("priority") or "medium"),
             "section_ids": section_ids,
             "section_indices": [section_by_id[section_id].get("section_index") for section_id in section_ids],
+            "evidence_reason": str(item.get("evidence_reason") or ""),
+            "expected_output_fields": [str(field) for field in item.get("expected_output_fields", []) if field],
             "output_hint": str(item.get("output_hint") or ""),
         }
         task["task_hash"] = _survey_task_hash(task)
@@ -1709,6 +1856,8 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
             "card_types": [str(card_type) for card_type in item.get("card_types", []) if card_type],
             "section_ids": section_ids,
             "section_indices": [section_by_id[section_id].get("section_index") for section_id in section_ids],
+            "evidence_reason": str(item.get("evidence_reason") or ""),
+            "expected_output_fields": [str(field) for field in item.get("expected_output_fields", []) if field],
         }
         task["task_hash"] = _survey_task_hash(task)
         tasks.append(task)
@@ -1718,6 +1867,41 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
         "map_tasks_count": sum(1 for task in tasks if task.get("target") == "survey_map"),
         "section_guide_tasks_count": sum(1 for task in tasks if task.get("target") == "section_guide"),
         "tasks": tasks[:120],
+    }
+
+
+def _ensure_survey_prerequisite_task(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    tasks = list(plan.get("tasks") if isinstance(plan.get("tasks"), list) else [])
+    if any(task.get("target") == "prerequisite_card" for task in tasks if isinstance(task, dict)):
+        return plan
+    intro_items = [
+        item for item in manifest
+        if str(item.get("section_role_hint") or "").lower() in {"abstract", "introduction", "background", "overview", "preliminaries"}
+        or re.search(r"\b(abstract|introduction|background|overview|preliminar)", str(item.get("title") or ""), flags=re.IGNORECASE)
+    ]
+    if not intro_items and manifest:
+        intro_items = manifest[:2]
+    section_ids = [str(item.get("section_id")) for item in intro_items[:4] if item.get("section_id")]
+    if not section_ids:
+        return plan
+    task = {
+        "task_id": "intro:prerequisite_card",
+        "target": "prerequisite_card",
+        "group_key": "prerequisite_card",
+        "title": "前置知识",
+        "goal": "从论文开篇提取新手阅读本综述前需要理解的概念、领域问题、阅读顺序、锚点论文和易混点。",
+        "priority": "high",
+        "section_ids": section_ids,
+        "section_indices": [item.get("section_index") for item in intro_items[:4]],
+        "card_types": ["prerequisite_concepts", "field_questions", "reading_route", "anchor_works"],
+        "evidence_reason": "Intro-like sections define the field entry, author framing, questions, roadmap, and novice prerequisites.",
+        "expected_output_fields": ["concepts", "field_questions", "reading_order", "anchor_works", "common_confusions"],
+    }
+    task["task_hash"] = _survey_task_hash(task)
+    return {
+        **plan,
+        "prerequisite_tasks_count": 1,
+        "tasks": [task, *tasks],
     }
 
 
@@ -1739,7 +1923,18 @@ def reading_map_group_title(group_key: str) -> str:
 def _survey_task_hash(task: dict[str, Any]) -> str:
     payload = {
         key: task.get(key)
-        for key in ("target", "group_key", "section_id", "title", "goal", "section_ids", "card_types", "output_hint")
+        for key in (
+            "target",
+            "group_key",
+            "section_id",
+            "title",
+            "goal",
+            "section_ids",
+            "card_types",
+            "output_hint",
+            "evidence_reason",
+            "expected_output_fields",
+        )
     }
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -1752,6 +1947,7 @@ def _survey_task_sections(task: dict[str, Any], paper: dict[str, Any]) -> list[d
 
 def _survey_task_section_text_hash(task: dict[str, Any], paper: dict[str, Any]) -> str:
     sections = _survey_task_sections(task, paper)
+    intro_sections = _survey_intro_sections(paper)
     payload = [
         {
             "section_id": section.get("section_id", ""),
@@ -1760,7 +1956,132 @@ def _survey_task_section_text_hash(task: dict[str, Any], paper: dict[str, Any]) 
         }
         for section in sections
     ]
+    if task.get("target") != "prerequisite_card":
+        payload.append({
+            "section_id": "__intro_context__",
+            "title": "Intro context",
+            "text": " ".join(" ".join(str(section.get("content") or "").split()) for section in intro_sections),
+        })
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _survey_intro_sections(paper: dict[str, Any]) -> list[dict[str, Any]]:
+    sections = [section for section in paper.get("sections", []) or [] if isinstance(section, dict)]
+    intro_like = []
+    for section in sections:
+        role = _section_role(section, "survey")
+        title = str(section.get("title") or "")
+        if role in {"abstract", "introduction", "background"} or re.search(
+            r"\b(abstract|introduction|background|overview|preliminar)", title, flags=re.IGNORECASE
+        ):
+            intro_like.append(section)
+    if intro_like:
+        return intro_like[:4]
+    return [section for section in sections if _section_role(section, "survey") != "references"][:2]
+
+
+def _survey_intro_context(paper: dict[str, Any], limit: int = SURVEY_INTRO_CONTEXT_LIMIT) -> str:
+    remaining = limit
+    blocks = []
+    for section in _survey_intro_sections(paper):
+        if remaining <= 0:
+            break
+        compact = _compact_intro_section(section, min(SURVEY_CARD_SECTION_TEXT_LIMIT, remaining))
+        remaining -= len(compact)
+        blocks.append(
+            "INTRO_SECTION "
+            + json.dumps({
+                "section_id": section.get("section_id", ""),
+                "title": section.get("title", ""),
+                "page": section.get("start_page"),
+                "truncated": len(" ".join(str(section.get("content") or "").split())) > len(compact),
+            }, ensure_ascii=False)
+            + "\n"
+            + compact
+        )
+    return "\n\n".join(blocks)
+
+
+def _compact_intro_section(section: dict[str, Any], limit: int) -> str:
+    text = " ".join(str(section.get("content") or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[: int(limit * 0.55)]
+    windows = _keyword_windows(
+        text,
+        (
+            "motivation",
+            "challenge",
+            "question",
+            "insight",
+            "roadmap",
+            "contribution",
+            "taxonomy",
+            "survey",
+            "overview",
+            "development",
+            "future",
+            "open problem",
+            "baseline",
+            "benchmark",
+        ),
+        int(limit * 0.30),
+        max_windows=2,
+    )
+    tail = text[-int(limit * 0.15):]
+    return "\n...\n".join(part for part in (head, *windows, tail) if part)[:limit]
+
+
+def _survey_card_output_schema(task: dict[str, Any]) -> str:
+    target = str(task.get("target") or "")
+    group_key = str(task.get("group_key") or "")
+    if target == "prerequisite_card":
+        schema = {
+            "prerequisite_card": {
+                "concepts": [{"name": "", "why_needed": "", "learn_first": [], "difficulty": "easy|medium|hard", "evidence": "", "source_sections": []}],
+                "field_questions": [{"question": "", "why_it_matters": "", "intro_evidence": "", "source_sections": []}],
+                "reading_order": [{"step": "", "read": "", "why": "", "source_sections": []}],
+                "anchor_works": [{"title": "", "year": "", "relationship": "", "why_read": "", "url": "", "evidence": "", "source_sections": []}],
+                "common_confusions": [{"pair": "", "difference": "", "why_confusing": "", "evidence": "", "source_sections": []}],
+            }
+        }
+    elif target == "section_guide":
+        schema = {
+            "section_id": "",
+            "title": "",
+            "section_role": "",
+            "read_priority": "high|medium|low",
+            "novice_summary": "",
+            "cards": [{
+                "card_type": "reading_route|field_timeline|taxonomy_node|route_comparison|paper_method_table|dataset_catalog|benchmark_protocol|challenge_card|application_landscape|future_direction",
+                "title": "",
+                "content": {
+                    "core_message": "",
+                    "why_it_matters": "",
+                    "key_points": [],
+                    "connections": "",
+                    "next_reading": "",
+                },
+                "source_sections": [],
+            }],
+        }
+    elif group_key == "representative_methods":
+        schema = {"items": [{"paper_title": "", "year": "", "method_name": "", "route": "", "problem_addressed": "", "core_mechanism": "", "specific_solution": "", "improves_on": "", "limitations": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "datasets":
+        schema = {"items": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": "", "used_by_methods": [], "evidence": "", "source_sections": []}]}
+    elif group_key == "technical_routes":
+        schema = {"items": [{"route_name": "", "core_mechanism": "", "typical_flow": "", "strengths": "", "limitations": "", "representative_methods": [], "evidence": "", "source_sections": []}]}
+    elif group_key == "taxonomy":
+        schema = {"items": [{"category": "", "basis": "", "typical_methods": [], "problem_fit": "", "limitations": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "open_challenges":
+        schema = {"items": [{"challenge": "", "why_hard": "", "impact": "", "existing_attempts": "", "possible_directions": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "development_timeline":
+        schema = {"items": [{"stage": "", "time_range": "", "key_change": "", "representative_work": "", "why_important": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "field_overview":
+        schema = {"item": {"title": "", "field_scope": "", "core_tasks": [], "why_now": "", "novice_takeaway": "", "common_misunderstanding": "", "evidence": "", "source_sections": []}}
+    else:
+        schema = {"items": [{"title": "", "summary": "", "why_it_matters": "", "specific_points": [], "limitations": "", "evidence": "", "source_sections": []}]}
+    return json.dumps(schema, ensure_ascii=False, indent=2)
 
 
 def _generate_survey_card(
@@ -1772,32 +2093,29 @@ def _generate_survey_card(
     sections = _survey_task_sections(task, paper)
     if not sections:
         raise ValueError(f"No valid sections for {task.get('task_id')}")
-    context = _survey_task_context(sections, SURVEY_CARD_CONTEXT_LIMIT)
+    selected_context = _survey_task_context(sections, SURVEY_CARD_CONTEXT_LIMIT, task)
+    intro_context = selected_context if task.get("target") == "prerequisite_card" else _survey_intro_context(paper)
     skill_block = f"Skill instructions:\n{skill_instructions}\n\n" if skill_instructions else ""
     target = str(task.get("target") or "")
     group_key = str(task.get("group_key") or "")
-    if target == "survey_map":
-        output_schema = (
-            '{"item": {"title-or-specific-field": "", "summary": "", "why_it_matters": "", '
-            '"evidence": "", "source_sections": []}}'
-        )
-    else:
-        output_schema = (
-            '{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", '
-            '"novice_summary": "", "cards": [{"card_type": "", "title": "", "content": {}, "source_sections": []}]}'
-        )
+    output_schema = _survey_card_output_schema(task)
     prompt = (
         f"{skill_block}"
         "Generate exactly one structured survey reading card task. Return JSON only. "
-        "Use only the provided section text. Do not invent paper titles, dataset names, URLs, years, or claims. "
-        "Every card/item must include source_sections and concise evidence. Avoid Item 1, Point 1, Front., Comput., or section-title-only content. "
+        "Use Intro context for field framing, novice prerequisites, research questions, and author roadmap. "
+        "Use Selected section text as the primary evidence for the requested card. "
+        "Do not invent paper titles, dataset names, URLs, years, or claims. "
+        "Every card/item must include source_sections and concise evidence. Each formal item should contain at least 4-6 useful fields; "
+        "if evidence is insufficient, return insufficient_evidence: true with a short reason. "
+        "Avoid Item 1, Point 1, Front., Comput., only one-sentence summaries, or section-title-only content. "
         "Write Chinese content for novice researchers.\n\n"
         f"Task:\n{json.dumps(task, ensure_ascii=False)}\n"
         f"Target group: {group_key}\n"
         f"Output schema:\n{output_schema}\n\n"
         f"Paper title: {paper.get('title', '')}\n"
         f"Abstract: {str(paper.get('abstract') or '')[:1000]}\n"
-        f"Selected section text:\n{context}"
+        f"Intro context:\n{intro_context}\n\n"
+        f"Selected section text:\n{selected_context}"
     )
     response = model.chat(messages=[
         {"role": "system", "content": "Return only valid JSON for one survey card task."},
@@ -1809,13 +2127,13 @@ def _generate_survey_card(
     return _normalize_survey_card_result(parsed, task, sections)
 
 
-def _survey_task_context(sections: list[dict[str, Any]], limit: int) -> str:
+def _survey_task_context(sections: list[dict[str, Any]], limit: int, task: dict[str, Any] | None = None) -> str:
     remaining = limit
     blocks = []
     for section in sections:
         if remaining <= 0:
             break
-        compact = _compact_section_for_card(section, min(SURVEY_CARD_SECTION_TEXT_LIMIT, remaining))
+        compact = _compact_section_for_card(section, min(SURVEY_CARD_SECTION_TEXT_LIMIT, remaining), task or {})
         remaining -= len(compact)
         blocks.append(
             "SECTION "
@@ -1831,18 +2149,44 @@ def _survey_task_context(sections: list[dict[str, Any]], limit: int) -> str:
     return "\n\n".join(blocks)
 
 
-def _compact_section_for_card(section: dict[str, Any], limit: int) -> str:
+def _compact_section_for_card(section: dict[str, Any], limit: int, task: dict[str, Any] | None = None) -> str:
     text = " ".join(str(section.get("content") or "").split())
     if len(text) <= limit:
         return text
+    group_key = str((task or {}).get("group_key") or "")
+    if group_key == "representative_methods":
+        needles = (
+            "et al.",
+            "propose",
+            "proposed",
+            "approach",
+            "method",
+            "algorithm",
+            "framework",
+            "baseline",
+            "compare",
+            "comparison",
+            "sota",
+            "table",
+            "figure",
+            "benchmark",
+            "state-of-the-art",
+        )
+    elif group_key == "datasets":
+        needles = ("dataset", "benchmark", "corpus", "task", "metric", "evaluation", "table", "leaderboard", "annotation")
+    elif group_key == "evaluation_protocols":
+        needles = ("evaluation", "metric", "benchmark", "protocol", "baseline", "compare", "table", "setting", "split")
+    elif group_key == "open_challenges":
+        needles = ("challenge", "limitation", "future", "open problem", "unsolved", "bottleneck", "difficult", "risk")
+    elif group_key in {"taxonomy", "technical_routes"}:
+        needles = ("taxonomy", "categor", "route", "paradigm", "framework", "method", "approach", "mechanism", "architecture")
+    else:
+        needles = ("dataset", "benchmark", "method", "model", "taxonomy", "challenge", "future", "evaluation", "paper", "propose")
     head = text[: int(limit * 0.45)]
-    keyword = _keyword_window(
-        text,
-        ("dataset", "benchmark", "method", "model", "taxonomy", "challenge", "future", "evaluation", "paper", "propose"),
-        int(limit * 0.35),
-    )
+    windows = _keyword_windows(text, needles, int(limit * 0.35), max_windows=3)
+    year_window = _keyword_windows(text, tuple(sorted(set(re.findall(r"\b20\d{2}\b", text)))[:8]), int(limit * 0.20), max_windows=1)
     tail = text[-int(limit * 0.20):]
-    return "\n...\n".join(part for part in (head, keyword, tail) if part)[:limit]
+    return "\n...\n".join(part for part in (head, *windows, *year_window, tail) if part)[:limit]
 
 
 def _normalize_survey_card_result(
@@ -1852,17 +2196,37 @@ def _normalize_survey_card_result(
 ) -> dict[str, Any]:
     source_sections = [_source_ref(section) for section in sections]
     target = str(task.get("target") or "")
+    if target == "prerequisite_card":
+        card = parsed.get("prerequisite_card") if isinstance(parsed.get("prerequisite_card"), dict) else parsed
+        card = dict(card) if isinstance(card, dict) else {}
+        _ensure_fact_sources(card, source_sections[0] if source_sections else {})
+        for key in ("concepts", "field_questions", "reading_order", "anchor_works", "common_confusions"):
+            if key not in card or not isinstance(card.get(key), list):
+                card[key] = []
+        return {"target": "prerequisite_card", "prerequisite_card": card, "source_sections": source_sections}
+
     if target == "survey_map":
-        item = parsed.get("item") if isinstance(parsed.get("item"), dict) else parsed
+        raw_items: list[Any]
         if isinstance(parsed.get("items"), list) and parsed["items"]:
-            item = parsed["items"][0] if isinstance(parsed["items"][0], dict) else item
-        item = dict(item) if isinstance(item, dict) else {}
-        if not item.get("source_sections"):
-            item["source_sections"] = source_sections
-        if not item.get("evidence"):
-            item["evidence"] = item.get("summary") or item.get("why_it_matters") or ""
-        _ensure_fact_sources(item, source_sections[0] if source_sections else {})
-        return {"target": "survey_map", "group_key": task.get("group_key"), "item": item}
+            raw_items = parsed["items"]
+        elif isinstance(parsed.get("item"), dict):
+            raw_items = [parsed["item"]]
+        else:
+            raw_items = [parsed]
+        normalized_items = []
+        for raw_item in raw_items[:12]:
+            item = dict(raw_item) if isinstance(raw_item, dict) else {}
+            if not item:
+                continue
+            if not item.get("source_sections"):
+                item["source_sections"] = source_sections
+            if not item.get("evidence"):
+                item["evidence"] = item.get("summary") or item.get("why_it_matters") or item.get("core_mechanism") or ""
+            _ensure_fact_sources(item, source_sections[0] if source_sections else {})
+            normalized_items.append(item)
+        if not normalized_items:
+            raise ValueError(f"No survey map items for {task.get('task_id')}")
+        return {"target": "survey_map", "group_key": task.get("group_key"), "items": normalized_items}
 
     cards = parsed.get("cards") if isinstance(parsed.get("cards"), list) else []
     normalized_cards = []
@@ -1901,14 +2265,22 @@ def _build_survey_reading_map_from_card_results(
 ) -> dict[str, Any]:
     base = _llm_visible_base(fallback)
     survey_map = _empty_survey_map()
+    prerequisite_card: dict[str, Any] = {}
     section_guides_by_id: dict[str, dict[str, Any]] = {}
     for task in plan.get("tasks", []):
         cached = card_results.get(task.get("task_id")) if isinstance(card_results, dict) else None
         if not isinstance(cached, dict) or cached.get("status") != "ok" or not isinstance(cached.get("result"), dict):
             continue
         result = cached["result"]
-        if result.get("target") == "survey_map":
-            _insert_survey_map_item(survey_map, str(result.get("group_key") or task.get("group_key") or ""), result.get("item"))
+        if result.get("target") == "prerequisite_card":
+            raw_card = result.get("prerequisite_card")
+            if isinstance(raw_card, dict):
+                prerequisite_card = raw_card
+        elif result.get("target") == "survey_map":
+            group_key = str(result.get("group_key") or task.get("group_key") or "")
+            items = result.get("items") if isinstance(result.get("items"), list) else [result.get("item")]
+            for item in items:
+                _insert_survey_map_item(survey_map, group_key, item)
         elif result.get("target") == "section_guide":
             section_id = str(result.get("section_id") or task.get("section_id") or "")
             if not section_id:
@@ -1932,7 +2304,7 @@ def _build_survey_reading_map_from_card_results(
         "partial": partial,
         "paper_type": "survey",
         "map_variant": "survey",
-        "prerequisite_card": base.get("prerequisite_card", {}),
+        "prerequisite_card": prerequisite_card,
         "research_map": base.get("research_map", {}),
         "survey_map": survey_map,
         "research_problem": base.get("research_problem", {}),
@@ -1970,11 +2342,32 @@ def _empty_survey_map() -> dict[str, Any]:
 def _insert_survey_map_item(survey_map: dict[str, Any], group_key: str, item: Any) -> None:
     if group_key not in SURVEY_MAP_GROUP_KEYS or not isinstance(item, dict):
         return
+    if _is_low_quality_survey_item(group_key, item):
+        return
     if group_key == "field_overview":
         survey_map["field_overview"] = _dict_with_fallback(item, survey_map.get("field_overview", {}))
         return
     survey_map.setdefault(group_key, [])
     survey_map[group_key].append(item)
+
+
+def _is_low_quality_survey_item(group_key: str, item: dict[str, Any]) -> bool:
+    if item.get("insufficient_evidence") is True:
+        return True
+    meaningful = {
+        key: value
+        for key, value in item.items()
+        if key not in {"source_sections", "url", "link"} and value not in ("", None, [], {})
+    }
+    if len(meaningful) < 3:
+        return True
+    evidence = str(item.get("evidence") or item.get("intro_evidence") or "").strip()
+    if group_key != "field_overview" and not evidence and not item.get("source_sections"):
+        return True
+    text_values = [str(value).strip() for value in meaningful.values() if isinstance(value, str)]
+    if len(text_values) <= 2 and all(len(value) < 36 for value in text_values):
+        return True
+    return False
 
 
 def _save_survey_partial_reading_map(
@@ -2655,7 +3048,17 @@ def _clean_survey_map_items(survey_map: dict[str, Any], sections: list[dict[str,
         method_name = item.get("method_name") or item.get("name") or item.get("title")
         has_concrete_title = bool(paper_title) and not _looks_like_fragment(paper_title) and not is_section_title(paper_title)
         has_concrete_method = bool(method_name) and not _looks_like_fragment(method_name) and not is_section_title(method_name)
-        has_detail = any(item.get(key) for key in ("method_summary", "specific_solution", "improves_on", "year", "url"))
+        has_detail = any(item.get(key) for key in (
+            "method_summary",
+            "core_mechanism",
+            "specific_solution",
+            "problem_addressed",
+            "improves_on",
+            "limitations",
+            "evidence",
+            "year",
+            "url",
+        ))
         if (has_concrete_title or has_concrete_method) and has_detail:
             cleaned_methods.append(item)
     survey_map["representative_methods"] = cleaned_methods
@@ -2668,7 +3071,7 @@ def _clean_survey_map_items(survey_map: dict[str, Any], sections: list[dict[str,
         name = str(item.get("name") or item.get("dataset") or item.get("title") or "").strip()
         if _looks_like_fragment(name) or name.lower() in generic_dataset_names or is_section_title(name):
             continue
-        if any(item.get(key) for key in ("task", "content", "structure", "scale", "metrics", "url")):
+        if any(item.get(key) for key in ("task", "content", "structure", "scale", "metrics", "used_by_methods", "evidence", "url")):
             cleaned_datasets.append(item)
     survey_map["datasets"] = cleaned_datasets
 
