@@ -1,7 +1,7 @@
 """Functional verification for the paper_reading module.
 
-This script exercises the real local PDF parser, KG construction, core handler
-actions, skill loading, KG QA, and skill post-processing without calling an
+This script exercises the real local PDF parser, core handler actions, skill
+loading, fork flow, and skill post-processing without calling an
 external LLM. It is intended as a repeatable handoff/smoke test.
 """
 
@@ -41,15 +41,10 @@ from handlers.paper_reading.handler import handle_paper_reading_message
 from handlers.paper_reading.harness.fork_merge import ForkMergeManager
 from handlers.paper_reading.harness.session import SessionManager
 from handlers.paper_reading.harness.storage import PaperReadingStorage
-from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
-from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
-from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 from runtime.agent_runner import AgentRunResult, TokenUsage
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
-from tools.builtin.kg_build_tool import set_kg_builder
-from tools.builtin.kg_query_tool import set_kg_engine
 from tools.registry import create_builtin_tool_registry
 
 
@@ -96,13 +91,8 @@ def main() -> None:
 
     base_dir = Path(tempfile.mkdtemp(prefix="paper-reading-verify-"))
     storage = PaperReadingStorage(base_dir=base_dir)
-    kg_engine = KnowledgeGraphEngine()
-    kg_builder = ProgressiveKGBuilder(kg_engine)
-    kg_query_engine = KGQueryEngine(kg_engine, model=None)
     session_manager = SessionManager(storage=storage)
-    fork_manager = ForkMergeManager(session_manager, kg_engine)
-    set_kg_engine(kg_engine)
-    set_kg_builder(kg_builder)
+    fork_manager = ForkMergeManager(session_manager)
 
     class DummyAgent:
         pass
@@ -121,9 +111,6 @@ def main() -> None:
     app_state = SimpleNamespace(
         paper_pipeline=pipeline,
         paper_storage=storage,
-        kg_engine=kg_engine,
-        kg_builder=kg_builder,
-        kg_query_engine=kg_query_engine,
         session_manager=session_manager,
         fork_manager=fork_manager,
         paper_reading_agent=DummyAgent(),
@@ -148,13 +135,12 @@ def main() -> None:
 
         pdf_b64 = base64.b64encode(pdf_path.read_bytes()).decode("ascii")
         upload = handle_paper_reading_message(_message({"action": "upload_paper", "pdf_data": pdf_b64}), app_state)
-        print("upload_status", upload.get("status"), "kg_build", upload.get("data", {}).get("kg_build"))
+        print("upload_status", upload.get("status"), "reading_map_status", upload.get("data", {}).get("reading_map_status"))
         assert upload["status"] == "ok"
         paper_id = upload["data"]["paper_id"]
         sections = upload["data"]["sections"]
         assert storage.get_upload_path(paper_id).exists()
         assert upload["data"]["sections_count"] >= 1
-        assert upload["data"].get("kg_build", {}).get("new_nodes", 0) >= 2
     else:
         paper_id = "verify-paper"
         sections = [
@@ -169,8 +155,8 @@ def main() -> None:
                 "section_id": "sec:method",
                 "title": "3 Method",
                 "level": 1,
-                "content": "The method uses a parser, a knowledge graph builder, and skill-specific analysis.",
-                "paragraphs": ["The method uses a parser, a knowledge graph builder, and skill-specific analysis."],
+                "content": "The method uses a parser, a reading map builder, and skill-specific analysis.",
+                "paragraphs": ["The method uses a parser, a reading map builder, and skill-specific analysis."],
             },
         ]
         storage.save_paper(
@@ -187,9 +173,6 @@ def main() -> None:
             },
         )
         storage.save_upload(paper_id, pdf_path.read_bytes())
-        kg_result = kg_builder.build_full_paper(paper_id, storage.load_paper(paper_id) or {})
-        print("synthetic_kg_build", len(kg_result.new_nodes), len(kg_result.new_edges))
-        assert len(kg_result.new_nodes) >= 2
 
     detail = handle_paper_reading_message(_message({"action": "get_paper_detail", "paper_id": paper_id}), app_state)
     print(
@@ -224,7 +207,7 @@ def main() -> None:
     )
     assert start["status"] == "ok"
     assert start["data"]["context"]["paper_loaded"] is True
-    assert start["data"]["revealed_kg"]["node_count"] >= 1
+    assert "revealed_kg" not in start["data"]
     assert len(start.get("skill_outputs", [])) >= 1
     session_id = start["data"]["session_id"]
 
@@ -247,26 +230,6 @@ def main() -> None:
     )
     print("fork_status", fork.get("status"), fork.get("data", {}).get("fork_session_id"))
     assert fork["status"] == "ok"
-
-    kgq = handle_paper_reading_message(
-        _message({
-            "action": "kg_query",
-            "paper_id": paper_id,
-            "kg_question": "what problem does the method solve?",
-            "kg_query_type": "search",
-        }),
-        app_state,
-    )
-    print(
-        "kgq_status",
-        kgq.get("status"),
-        "answer_len",
-        len(kgq.get("data", {}).get("answer", "")),
-        "elements",
-        len(kgq.get("data", {}).get("cytoscape_elements", [])),
-    )
-    assert kgq["status"] == "ok"
-    assert "answer" in kgq["data"]
 
     pause = handle_paper_reading_message(_message({"action": "pause_reading", "session_id": session_id}), app_state)
     resume = handle_paper_reading_message(_message({"action": "resume_reading", "session_id": session_id}), app_state)

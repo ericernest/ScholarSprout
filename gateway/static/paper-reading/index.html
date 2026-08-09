@@ -32,8 +32,8 @@
         <div class="intake-hero">
           <p class="eyebrow">Deep Paper Reading</p>
           <h1>把一篇论文，拆成可理解的知识网络。</h1>
-          <p>上传本地 PDF、粘贴论文链接，或先搜索再导入。系统会解析章节、构建知识图谱，并让不同 AI 专家协同分析。</p>
-          <div class="capability-row"><span>PDF 结构化解析</span><span>8 个阅读 Skill</span><span>动态知识图谱</span><span>Fork 深入探索</span></div>
+          <p>上传本地 PDF、粘贴论文链接，或先搜索再导入。系统会解析章节、生成阅读地图，并让不同 AI 专家协同分析。</p>
+          <div class="capability-row"><span>PDF 结构化解析</span><span>8 个阅读 Skill</span><span>智能索引卡片</span><span>Fork 深入探索</span></div>
         </div>
 
         <div class="intake-grid">
@@ -103,7 +103,7 @@
               <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
               <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
             </section>
-            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
+            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><p id="outline-source-warning" class="outline-source-warning" hidden></p><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
           </aside>
 
           <article class="workspace-panel reader-panel">
@@ -135,7 +135,7 @@
             <div id="copilot-tabs" class="copilot-tabs" role="tablist" aria-label="分析选项卡"></div>
             <div id="copilot-feeds" class="copilot-feeds">
               <div id="analysis-feed" class="analysis-feed copilot-feed is-active" data-feed-id="main" aria-live="polite">
-                <article class="welcome-card"><span class="assistant-avatar">N</span><div><strong>准备开始精读</strong><p>点击章节或直接提问。我会结合当前正文、阅读进度和已展开知识图谱回答。</p></div></article>
+                <article class="welcome-card"><span class="assistant-avatar">N</span><div><strong>准备开始精读</strong><p>点击章节或直接提问。我会结合当前正文、阅读进度和智能索引回答。</p></div></article>
               </div>
             </div>
             <form id="reading-chat-form" class="reading-composer">
@@ -145,24 +145,18 @@
           </aside>
         </div>
 
-        <section class="workspace-panel kg-panel">
-          <header class="kg-header">
-            <div><p class="panel-label">Knowledge Graph</p><h2>论文知识图谱</h2><p id="kg-stage-copy" class="muted-copy">完整图谱会在论文解析完成后直接展示。</p></div>
-            <form id="kg-query-form" class="kg-query-form">
-              <select id="kg-query-type"><option value="search">智能检索</option><option value="path">关系路径</option><option value="neighbors">节点邻域</option><option value="subgraph">相关子图</option></select>
-              <input id="kg-question-input" type="text" placeholder="向知识图谱提问…" required /><button class="accent-button" type="submit">问 KG</button>
-            </form>
+        <section class="workspace-panel reading-map-panel">
+          <header class="reading-map-header">
+            <div><p class="panel-label">Reading Map</p><h2>论文阅读地图</h2><p id="reading-map-status-copy" class="muted-copy">解析完成后会生成适配论文类型的导读地图。</p></div>
+            <button id="regenerate-reading-map-button" class="mini-button is-accent" type="button">重新生成</button>
           </header>
-          <div id="kg-path-fields" class="kg-path-fields" hidden><input id="kg-source-input" type="text" placeholder="起点标签" /><span>→</span><input id="kg-target-input" type="text" placeholder="终点标签" /></div>
-          <div class="kg-layout">
-            <div class="graph-shell">
-              <div class="graph-toolbar"><div id="kg-legend" class="kg-legend"></div><div class="kg-toolbar-actions"><select id="kg-layout-select" title="图谱布局方式"><option value="force">力导向布局</option><option value="circle">环形布局</option><option value="grid">网格布局</option><option value="grouped">分类布局</option></select><button id="reset-kg-button" class="mini-button" type="button">恢复已展开图谱</button></div></div>
-              <svg id="kg-graph" viewBox="0 0 900 360" role="img" aria-label="论文知识图谱"></svg>
-              <div id="kg-empty" class="graph-empty">开始阅读后，这里会出现论文中的问题、方法、模块与证据关系。</div>
+          <div class="reading-map-layout">
+            <div class="reading-map-shell">
+              <div id="reading-map-grid" class="reading-map-grid"></div>
+              <div id="reading-map-empty" class="reading-map-empty">阅读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧 Agent 分析。</div>
             </div>
-            <aside class="kg-inspector">
-              <div id="kg-node-detail" class="kg-node-detail"><p class="panel-label">Node inspector</p><h3>选择一个节点</h3><p class="muted-copy">点击图中的节点查看证据、属性并跳转到对应章节。</p></div>
-              <div id="kg-answer" class="kg-answer" hidden></div><div id="kg-reasoning" class="kg-reasoning"></div>
+            <aside class="reading-map-detail">
+              <div id="reading-map-detail"><p class="panel-label">Guide</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧 Agent 解释这一段。</p></div>
             </aside>
           </div>
         </section>

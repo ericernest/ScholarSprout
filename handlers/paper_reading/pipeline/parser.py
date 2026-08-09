@@ -99,8 +99,11 @@ class PDFParser:
             for page in doc
         ]
         full_text = "\n\n".join(text for text in page_texts if text)
-        sections = self.extract_sections(full_text)
-        self._assign_section_pages(sections, page_texts)
+        sections, section_meta = self._sections_from_outline_or_heuristic(
+            doc=doc,
+            page_texts=page_texts,
+            full_text=full_text,
+        )
         self._assign_figure_sections(figures, sections)
         tables, table_elements = self._extract_tables(doc, sections)
         layout_elements = self._extract_layout_elements(
@@ -124,8 +127,117 @@ class PDFParser:
             layout_elements=layout_elements,
             references=self.extract_references(full_text),
             full_text=full_text,
+            section_extraction_source=section_meta["source"],
+            section_extraction_status=section_meta["status"],
+            section_extraction_message=section_meta["message"],
+            outline_entries_count=section_meta["outline_entries_count"],
             parse_status="done",
         )
+
+    def _sections_from_outline_or_heuristic(
+        self,
+        *,
+        doc: fitz.Document,
+        page_texts: list[str],
+        full_text: str,
+    ) -> tuple[list[PaperSection], dict[str, Any]]:
+        outline_sections = self._sections_from_pdf_outline(doc, page_texts)
+        if outline_sections:
+            return outline_sections, {
+                "source": "pdf_outline",
+                "status": "outline_used",
+                "message": "已使用 PDF 内置 outline/bookmark 作为论文真实目录。",
+                "outline_entries_count": len(outline_sections),
+            }
+
+        sections = self.extract_sections(full_text)
+        self._assign_section_pages(sections, page_texts)
+        return sections, {
+            "source": "heuristic",
+            "status": "outline_missing_fallback_heuristic",
+            "message": "未找到 PDF 内置 outline/bookmark，已回退到启发式章节识别；目录可能不等于论文真实目录。",
+            "outline_entries_count": 0,
+        }
+
+    def _sections_from_pdf_outline(
+        self,
+        doc: fitz.Document,
+        page_texts: list[str],
+    ) -> list[PaperSection]:
+        try:
+            toc = doc.get_toc(simple=True)
+        except Exception as error:
+            logger.debug("Unable to read PDF outline: %s", error)
+            return []
+        entries: list[tuple[int, str, int]] = []
+        seen: set[tuple[int, str, int]] = set()
+        for raw_level, raw_title, raw_page in toc or []:
+            title = self._clean_outline_title(raw_title)
+            if not title:
+                continue
+            try:
+                level = max(1, min(int(raw_level or 1), 6))
+                page = int(raw_page or 1)
+            except (TypeError, ValueError):
+                continue
+            if page < 1 or page > len(page_texts):
+                continue
+            key = (level, title.lower(), page)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append((level, title, page))
+        if not entries:
+            return []
+
+        sections: list[PaperSection] = []
+        used_ids: set[str] = set()
+        for index, (level, title, start_page) in enumerate(entries):
+            next_page = entries[index + 1][2] if index + 1 < len(entries) else len(page_texts) + 1
+            end_page = start_page if next_page <= start_page else min(len(page_texts), next_page - 1)
+            section_id = self._outline_section_id(title, index + 1, used_ids)
+            paragraphs = self._lines_to_paragraphs(
+                "\n\n".join(page_texts[start_page - 1:end_page]).splitlines()
+            )
+            sections.append(PaperSection(
+                section_id=section_id,
+                title=title,
+                level=level,
+                content="\n\n".join(paragraphs),
+                paragraphs=paragraphs,
+                start_page=start_page,
+                end_page=max(start_page, end_page),
+            ))
+        return sections
+
+    @staticmethod
+    def _clean_outline_title(value: Any) -> str:
+        title = re.sub(r"[\r\n\t]+", " ", str(value or ""))
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+
+    @staticmethod
+    def _outline_section_id(title: str, index: int, used_ids: set[str]) -> str:
+        normalized = title.strip()
+        lower = normalized.lower()
+        if lower in {"abstract", "摘要"}:
+            base = "sec:abstract"
+        elif lower in {"references", "bibliography", "参考文献"}:
+            base = "sec:references"
+        else:
+            match = re.match(r"^\s*(\d+(?:\.\d+)*)\.?\s+", normalized)
+            if match:
+                base = f"sec:{match.group(1)}"
+            else:
+                slug = re.sub(r"[^a-z0-9一-鿿]+", "-", lower).strip("-")
+                base = f"sec:outline:{index}:{slug[:32]}" if slug else f"sec:outline:{index}"
+        candidate = base
+        suffix = 2
+        while candidate in used_ids:
+            candidate = f"{base}:{suffix}"
+            suffix += 1
+        used_ids.add(candidate)
+        return candidate
 
     @staticmethod
     def extract_year(
