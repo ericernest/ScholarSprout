@@ -111,6 +111,148 @@ when_not_to_use:
 
 这部分是综述论文 `survey_map` 和 `section_guides` 的权威规范。综述论文生成时必须优先遵循这里，而不是只复述章节第一句话。
 
+### planner 选节规范
+
+第一阶段只看到 section manifest、页码、短摘要和线索字段时，要主动寻找能支撑核心卡片的章节，而不是等待标题完全匹配。
+
+必须稳定规划：
+
+- `field_overview`：至少 1 张，优先选 abstract、introduction、background、overview。
+- `taxonomy`：有分类、类型、维度、form/function/dynamics/paradigm 等线索时规划 1-3 张。
+- `technical_routes`：有 approach、framework、algorithm、mechanism、architecture、route、pipeline 等线索时规划 1-3 张。
+- `representative_methods`：只要 manifest 中出现 citation、`et al.`、年份、具体系统/方法名、baseline、comparison、Table/Figure、benchmark、framework、algorithm，就必须规划。可以规划 3-8 个具体方法任务，或规划一个聚合型任务并允许第二阶段返回 `items[]`。
+- `datasets`：有 dataset、benchmark、corpus、leaderboard、metric、evaluation table 等证据时必须规划，不要因为章节标题不是 Resources/Datasets 就省略。
+- `evaluation_protocols`：有 metric、protocol、baseline、split、setting、human evaluation、automatic evaluation 等证据时必须规划。
+- `open_challenges`：有 limitation、future、challenge、open problem、outlook、frontier、risk 等证据时必须规划。
+
+每个任务必须说明 `evidence_reason`：为什么这些 section 可能支撑该卡片；同时给出 `expected_output_fields`，让第二阶段按字段生成。找不到核心 group 时才允许省略，并写 omission reason。
+
+### Intro 全局上下文规范
+
+第二阶段生成任何综述卡片时，都会额外收到完整或压缩后的 intro-like sections。Intro 只用于建立全局理解，不替代被选 section 的证据。
+
+Intro 应重点用于：
+
+- 抽取领域入口：研究对象、典型任务、输入输出、关键术语。
+- 抽取发展路线：作者如何描述领域从早期方法走到当前问题。
+- 抽取核心问题：论文开篇提出的 challenge、motivation、insight、research question。
+- 抽取作者组织视角：综述按什么维度组织领域，为什么这样组织。
+- 抽取新手前置知识：读后文前必须先懂的概念、路线、易混点和锚点论文。
+
+不要把 intro 的泛化说法当作代表方法或数据集；代表方法和数据集必须以具体被选 section 中的证据为准。
+
+### 综述前置知识卡片规范
+
+综述论文的智能索引顶部必须优先生成 `prerequisite_card`，只从 intro-like sections 中抽取。结构应包含：
+
+```json
+{
+  "concepts": [
+    {
+      "name": "概念名",
+      "why_needed": "为什么读这篇综述前必须懂",
+      "learn_first": ["更基础的小概念"],
+      "difficulty": "easy|medium|hard",
+      "evidence": "intro 中的依据",
+      "source_sections": []
+    }
+  ],
+  "field_questions": [
+    {
+      "question": "领域核心问题",
+      "why_it_matters": "为什么它驱动这篇综述",
+      "intro_evidence": "依据",
+      "source_sections": []
+    }
+  ],
+  "reading_order": [
+    {
+      "step": "第几步",
+      "read": "先读什么",
+      "why": "为什么这样读",
+      "source_sections": []
+    }
+  ],
+  "anchor_works": [
+    {
+      "title": "论文或系统名，不确定则留空",
+      "year": "年份，不确定则留空",
+      "relationship": "foundational_work|survey_anchor|baseline|benchmark|method_family",
+      "why_read": "为什么适合作为锚点",
+      "url": "输入中没有就留空",
+      "evidence": "依据",
+      "source_sections": []
+    }
+  ],
+  "common_confusions": [
+    {
+      "pair": "容易混淆的两个概念",
+      "difference": "区别",
+      "why_confusing": "为什么新手会混",
+      "evidence": "依据",
+      "source_sections": []
+    }
+  ]
+}
+```
+
+禁止泛泛罗列概念；禁止编造论文链接；没有明确 anchor work 时 `anchor_works` 可以为空。
+
+### 卡片内容深度规范
+
+每张正式卡片不能只是摘要，必须尽量包含：
+
+- 是什么：对象、路线、方法、数据集或问题的明确名称。
+- 解决什么：它面向的任务、痛点或局限。
+- 具体机制/方案：关键步骤、模块、流程、数据结构或评测设置。
+- 关系：和其它路线、章节、baseline、数据集或挑战的联系。
+- 局限：适用边界、残留问题或公平比较注意事项。
+- 证据：来自哪些 section、页码或原文线索。
+
+如果证据不足，返回 `insufficient_evidence: true` 和原因，不要生成空泛卡。
+
+### 代表方法强 schema
+
+`representative_methods` 可以返回 `items[]`。每个 item 尽量包含：
+
+```json
+{
+  "paper_title": "具体论文标题；原文没有就留空",
+  "year": "年份；原文没有就留空",
+  "method_name": "方法：使用了什么模型等等/系统/框架名",
+  "route": "所属技术路线",
+  "problem_addressed": "解决的问题",
+  "core_mechanism": "核心机制",
+  "specific_solution": "具体方案或模块",
+  "improves_on": "相对什么 baseline/路线改进",
+  "limitations": "局限",
+  "evidence": "具体证据",
+  "source_sections": []
+}
+```
+
+没有论文标题时，可以展示“方法/系统/路线级代表方案”，但必须有 `method_name/core_mechanism/specific_solution/evidence`，不能把章节标题当方法。
+
+### 数据集强 schema
+
+`datasets` 可以返回 `items[]`。每个 item 尽量包含：
+
+```json
+{
+  "name": "数据集或 benchmark 名称",
+  "task": "任务",
+  "content": "数据内容",
+  "structure": "数据结构或标注形式",
+  "scale": "规模；原文没有就留空",
+  "metrics": "评测指标",
+  "used_by_methods": ["哪些方法/路线使用"],
+  "evidence": "具体证据",
+  "source_sections": []
+}
+```
+
+没有具体名称时不要作为正式公开数据集卡片。
+
 ### 综述 chunk 事实抽取规范
 
 处理单个正文 chunk 时，目标是抽取“可用于领域入门的结构化事实”，不是摘要。每个非空条目都必须回答“它帮助新手理解什么”。
