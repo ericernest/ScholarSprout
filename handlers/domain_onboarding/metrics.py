@@ -58,6 +58,8 @@ class DomainOnboardingRequestTrace:
     ranking_strategy: str = "global"
     ranking_path_candidate_counts: dict[str, int] = field(default_factory=dict)
     ranking_selected_path_counts: dict[str, int] = field(default_factory=dict)
+    ranking_role_candidate_counts: dict[str, int] = field(default_factory=dict)
+    ranking_selected_role_counts: dict[str, int] = field(default_factory=dict)
     low_relevance_filtered_count: int = 0
     evidence_claim_count: int = 0
     unsupported_claim_count: int = 0

@@ -218,12 +218,30 @@ class DevelopmentStageResearchPlan(OnboardingModel):
         return self
 
 
+class PaperSearchQuery(OnboardingModel):
+    query_id: str = ""
+    query: str = Field(min_length=1)
+    role_hint: PaperRole
+    path_id: str = ""
+    priority: int = Field(default=3, ge=1, le=10)
+
+    @model_validator(mode="after")
+    def normalize_query(self) -> "PaperSearchQuery":
+        self.query = self.query.strip()
+        self.path_id = self.path_id.strip()
+        self.query_id = self.query_id.strip() or stable_id(
+            "query", f"{self.role_hint}:{self.path_id}:{self.query}"
+        )
+        return self
+
+
 class DomainResearchPlan(OnboardingModel):
     normalized_domain: str = Field(min_length=1)
     translated_domain: str = ""
     expanded_terms: list[str] = Field(default_factory=list)
     perspectives: list[ResearchPerspective] = Field(min_length=3)
     search_queries: list[str] = Field(min_length=1)
+    paper_queries: list[PaperSearchQuery] = Field(default_factory=list)
     expected_subdirections: list[str] = Field(min_length=3)
     development_stage_plans: list[DevelopmentStageResearchPlan] = Field(
         default_factory=list
@@ -251,6 +269,15 @@ class DomainResearchPlan(OnboardingModel):
                 )
             )
         self.search_queries = list(dict.fromkeys(q.strip() for q in self.search_queries if q.strip()))
+        seen_queries: set[str] = set()
+        normalized_paper_queries: list[PaperSearchQuery] = []
+        for query in self.paper_queries:
+            key = query.query.casefold()
+            if key in seen_queries:
+                continue
+            seen_queries.add(key)
+            normalized_paper_queries.append(query)
+        self.paper_queries = normalized_paper_queries
         self.expected_subdirections = list(
             dict.fromkeys(s.strip() for s in self.expected_subdirections if s.strip())
         )
@@ -284,6 +311,8 @@ class PaperCandidate(OnboardingModel):
     citation_count: int | None = Field(default=None, ge=0)
     source: str
     matched_queries: list[str] = Field(default_factory=list)
+    matched_role_hints: list[PaperRole] = Field(default_factory=list)
+    matched_path_hints: list[str] = Field(default_factory=list)
     doi: str | None = None
     arxiv_id: str | None = None
     publication_types: list[str] = Field(default_factory=list)
@@ -330,6 +359,20 @@ class PaperCandidate(OnboardingModel):
     @field_validator("publication_types", mode="before")
     @classmethod
     def normalize_publication_types(cls, value: object) -> list[str]:
+        values = value if isinstance(value, list) else ([value] if value else [])
+        return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+
+    @field_validator("matched_queries", "matched_path_hints", mode="before")
+    @classmethod
+    def normalize_string_lists(cls, value: object) -> list[str]:
+        values = value if isinstance(value, list) else ([value] if value else [])
+        return list(
+            dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+        )
+
+    @field_validator("matched_role_hints", mode="before")
+    @classmethod
+    def normalize_role_hints(cls, value: object) -> list[str]:
         values = value if isinstance(value, list) else ([value] if value else [])
         return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
 
@@ -1042,6 +1085,8 @@ class RankingStats(OnboardingModel):
     ranking_strategy: str = "global"
     per_path_candidate_counts: dict[str, int] = Field(default_factory=dict)
     selected_path_counts: dict[str, int] = Field(default_factory=dict)
+    per_role_candidate_counts: dict[PaperRole, int] = Field(default_factory=dict)
+    selected_role_counts: dict[PaperRole, int] = Field(default_factory=dict)
 
 
 class RankingResult(OnboardingModel):

@@ -504,17 +504,15 @@ class CompositePaperRetriever:
         }
 
     def search(self, queries: list[str], *, limit_per_query: int) -> RetrievalResult:
-        source_queries = (
-            queries[: self.max_queries_per_source]
-            if self.max_queries_per_source is not None
-            else queries
-        )
         source_batches: dict[int, list[PaperCandidate]] = {}
+        source_queries_by_index: dict[int, list[str]] = {}
         combined_stats = RetrievalStats()
         workers = min(self.max_workers, len(self.retrievers))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="paper-retrieval") as executor:
             futures: dict[int, Any] = {}
             for index, retriever in enumerate(self.retrievers):
+                source_queries = self._queries_for_source(queries, index)
+                source_queries_by_index[index] = source_queries
                 source_name = self._source_name(retriever)
                 circuit = self._circuits[source_name]
                 if not circuit.allow_request():
@@ -561,7 +559,11 @@ class CompositePaperRetriever:
 
                 self._circuits[source_name].record_failure()
                 error_stats = error.stats if isinstance(error, PaperRetrievalError) else RetrievalStats()
-                stale = self._stale_results(retriever, source_queries, limit_per_query)
+                stale = self._stale_results(
+                    retriever,
+                    source_queries_by_index[index],
+                    limit_per_query,
+                )
                 source_batches[index] = stale
                 provider = self._provider_stats(
                     source_name,
@@ -587,6 +589,15 @@ class CompositePaperRetriever:
                 stats=combined_stats,
             )
         return RetrievalResult(papers=results, stats=combined_stats)
+
+    def _queries_for_source(self, queries: list[str], source_index: int) -> list[str]:
+        """Rotate capped query windows so role buckets are covered across providers."""
+        if self.max_queries_per_source is None or len(queries) <= self.max_queries_per_source:
+            return list(queries)
+        limit = self.max_queries_per_source
+        offset = (source_index * limit) % len(queries)
+        rotated = [*queries[offset:], *queries[:offset]]
+        return rotated[:limit]
 
     @staticmethod
     def _source_name(retriever: PaperRetriever) -> str:
