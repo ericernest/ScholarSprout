@@ -37,6 +37,14 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("你可以随时进入工作台查看进度", script)
         self.assertNotIn('initialMode === "paper_reading"', script)
 
+    def test_domain_workspace_restore_is_scoped_to_its_conversation(self) -> None:
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        restore = script.split("function restoreDomainOnboardingCard()", 1)[1].split(
+            "function loadDomainWorkspace()", 1
+        )[0]
+
+        self.assertIn("saved.request?.session_id !== sessionId", restore)
+
     def test_workspace_consumes_snapshot_sse_and_paper_import(self) -> None:
         html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(
             encoding="utf-8"
