@@ -39,7 +39,7 @@ const state = {
   pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
-  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "source",
+  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "normal", paperNoteEditor: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -628,6 +628,12 @@ function showIntake() {
 
 function bindPaperNote() {
   const input = $("paper-note-input");
+  state.paperNoteEditor = new window.PaperMarkdownEditor({
+    source: input,
+    normal: $("paper-note-normal"),
+    onChange: markPaperNoteChanged,
+    onModeChange: syncPaperNoteModeButtons,
+  });
   $("paper-note-button").addEventListener("click", togglePaperNoteDrawer);
   $("paper-note-close-button").addEventListener("click", closePaperNoteDrawer);
   $("paper-note-drag-handle").addEventListener("click", closePaperNoteDrawer);
@@ -636,21 +642,16 @@ function bindPaperNote() {
     const button = event.target.closest("[data-paper-note-mode]");
     if (button) setPaperNoteMode(button.dataset.paperNoteMode);
   });
+  $("paper-note-toolbar").addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-markdown-action]")) event.preventDefault();
+  });
   $("paper-note-toolbar").addEventListener("click", (event) => {
     const button = event.target.closest("[data-markdown-action]");
     if (button) applyMarkdownAction(button.dataset.markdownAction);
   });
-  input.addEventListener("input", () => {
-    state.paperNoteDirty = true;
-    updatePaperNoteCount();
-    setPaperNoteStatus("等待保存…");
-    if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
-    state.paperNoteSaveTimer = window.setTimeout(() => savePaperNote({ quiet: true }), 700);
-  });
-  input.addEventListener("blur", () => {
+  [input, $("paper-note-normal")].forEach((editor) => editor.addEventListener("blur", () => {
     if (state.paperNoteDirty) void savePaperNote({ quiet: true });
-  });
-  input.addEventListener("keydown", handlePaperNoteShortcut);
+  }));
   window.addEventListener("resize", syncPaperNoteDrawerBounds);
   if (typeof ResizeObserver === "function") {
     const observer = new ResizeObserver(syncPaperNoteDrawerBounds);
@@ -676,12 +677,11 @@ async function loadPaperNote() {
   try {
     const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`);
     if (paperId !== state.paperId) return;
-    $("paper-note-input").value = note.content_markdown || "";
+    state.paperNoteEditor.setMarkdown(note.content_markdown || "");
     $("paper-note-title").textContent = `${state.paper?.title || note.paper_title || "论文"} · 笔记`;
     state.paperNoteLoadedFor = paperId;
     state.paperNoteDirty = false;
     updatePaperNoteCount();
-    renderPaperNotePreview();
     setPaperNoteStatus(note.updated_at ? "已保存" : "空白笔记");
   } catch (error) {
     setPaperNoteStatus("读取失败", true);
@@ -694,7 +694,7 @@ async function savePaperNote({ quiet = false } = {}) {
   if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
   state.paperNoteSaveTimer = null;
   const paperId = state.paperId;
-  const content = $("paper-note-input").value;
+  const content = state.paperNoteEditor.getMarkdown();
   setPaperNoteStatus("正在保存…");
   try {
     const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`, {
@@ -702,7 +702,7 @@ async function savePaperNote({ quiet = false } = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content_markdown: content }),
     });
-    if (paperId !== state.paperId || content !== $("paper-note-input").value) return;
+    if (paperId !== state.paperId || content !== state.paperNoteEditor.getMarkdown()) return;
     state.paperNoteDirty = false;
     const savedAt = note.updated_at ? new Date(note.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     setPaperNoteStatus(savedAt ? `已保存 ${savedAt}` : "已保存");
@@ -723,9 +723,7 @@ async function openPaperNoteDrawer() {
   drawer.classList.add("is-open");
   drawer.setAttribute("aria-hidden", "false");
   $("paper-note-button").classList.add("is-active");
-  window.setTimeout(() => {
-    if (state.paperNoteMode === "source") $("paper-note-input").focus();
-  }, 180);
+  window.setTimeout(() => state.paperNoteEditor.focus(), 180);
 }
 
 function closePaperNoteDrawer() {
@@ -742,7 +740,7 @@ function togglePaperNoteDrawer() {
 }
 
 function updatePaperNoteCount() {
-  const content = $("paper-note-input").value;
+  const content = state.paperNoteEditor?.getMarkdown() || "";
   const characters = Array.from(content).length;
   const lines = content ? content.split(/\r?\n/).length : 0;
   $("paper-note-count").textContent = `${characters} 字 · ${lines} 行`;
@@ -755,69 +753,26 @@ function setPaperNoteStatus(message, isError = false) {
 }
 
 function setPaperNoteMode(mode) {
-  if (!['source', 'preview'].includes(mode)) return;
+  state.paperNoteEditor?.setMode(mode);
+}
+
+function syncPaperNoteModeButtons(mode) {
   state.paperNoteMode = mode;
-  const sourceMode = mode === "source";
-  $("paper-note-input").hidden = !sourceMode;
-  $("paper-note-preview").hidden = sourceMode;
-  $("paper-note-toolbar").hidden = !sourceMode;
-  $("paper-note-shortcuts").hidden = !sourceMode;
   $("paper-note-mode").querySelectorAll("[data-paper-note-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.paperNoteMode === mode);
   });
-  if (sourceMode) $("paper-note-input").focus();
-  else renderPaperNotePreview();
 }
 
-function renderPaperNotePreview() {
-  const preview = $("paper-note-preview");
-  preview.replaceChildren(renderMarkdown($("paper-note-input").value || "_这篇论文还没有笔记。_"));
-}
-
-function handlePaperNoteShortcut(event) {
-  if (!(event.ctrlKey || event.metaKey)) return;
-  const key = event.key.toLowerCase();
-  let action = "";
-  if (key === "b") action = "bold";
-  else if (key === "i") action = "italic";
-  else if (key === "k") action = "link";
-  else if (event.altKey && key === "1") action = "heading";
-  else if (event.shiftKey && event.code === "Digit8") action = "bullet";
-  else if (event.shiftKey && event.code === "Digit7") action = "ordered";
-  if (!action) return;
-  event.preventDefault();
-  applyMarkdownAction(action);
+function markPaperNoteChanged() {
+  state.paperNoteDirty = true;
+  updatePaperNoteCount();
+  setPaperNoteStatus("等待保存…");
+  if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
+  state.paperNoteSaveTimer = window.setTimeout(() => savePaperNote({ quiet: true }), 700);
 }
 
 function applyMarkdownAction(action) {
-  setPaperNoteMode("source");
-  const input = $("paper-note-input");
-  const start = input.selectionStart;
-  const end = input.selectionEnd;
-  const selected = input.value.slice(start, end);
-  const inline = {
-    bold: ["**", "**", "加粗文字"],
-    italic: ["*", "*", "斜体文字"],
-    code: ["`", "`", "代码"],
-    link: ["[", "](https://)", "链接文字"],
-  }[action];
-  if (inline) {
-    const content = selected || inline[2];
-    input.setRangeText(`${inline[0]}${content}${inline[1]}`, start, end, "end");
-    input.setSelectionRange(start + inline[0].length, start + inline[0].length + content.length);
-  } else {
-    const lineStart = input.value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-    const nextLine = input.value.indexOf("\n", end);
-    const lineEnd = nextLine === -1 ? input.value.length : nextLine;
-    const block = input.value.slice(lineStart, lineEnd);
-    const prefixes = { heading: "# ", quote: "> ", bullet: "- ", ordered: "1. ", task: "- [ ] " };
-    const prefix = prefixes[action];
-    if (!prefix) return;
-    const formatted = block.split("\n").map((line, index) => action === "ordered" ? `${index + 1}. ${line}` : `${prefix}${line}`).join("\n");
-    input.setRangeText(formatted, lineStart, lineEnd, "select");
-  }
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.focus();
+  state.paperNoteEditor?.apply(action);
 }
 
 function syncPaperNoteDrawerBounds() {
@@ -3119,7 +3074,7 @@ function saveBeforeUnload() {
     fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/note`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content_markdown: $("paper-note-input").value }),
+      body: JSON.stringify({ content_markdown: state.paperNoteEditor?.getMarkdown() || "" }),
       keepalive: true,
     }).catch(() => {});
   }

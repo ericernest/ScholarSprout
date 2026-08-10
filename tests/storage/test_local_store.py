@@ -130,6 +130,31 @@ class LocalResearchStoreTests(unittest.TestCase):
             self.assertEqual(parent_count, 0)
             self.assertEqual(child_count, 1)
 
+    def test_paper_document_stores_author_names_instead_of_dict_strings(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            store = LocalResearchStore(database)
+            store.initialize()
+            store.save_paper_document(
+                "paper-authors",
+                {
+                    "title": "Clean Paper Metadata",
+                    "authors": [
+                        {"name": "Alice Example", "affiliation": "Example Lab"},
+                        "{'name': 'Bob Example', 'affiliation': 'Another Lab'}",
+                    ],
+                    "abstract": "A useful abstract.",
+                },
+            )
+
+            with closing(sqlite3.connect(database)) as connection:
+                authors_json = connection.execute(
+                    "SELECT authors_json FROM papers WHERE paper_id = ?",
+                    ("paper-authors",),
+                ).fetchone()[0]
+
+            self.assertEqual(json.loads(authors_json), ["Alice Example", "Bob Example"])
+
 
 if __name__ == "__main__":
     unittest.main()

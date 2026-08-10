@@ -42,6 +42,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertTrue((FRONTEND / "index.html").is_file())
         self.assertTrue((FRONTEND / "styles.css").is_file())
         self.assertTrue((FRONTEND / "app.js").is_file())
+        self.assertTrue((FRONTEND / "note-editor.js").is_file())
+        self.assertIn("static/vendor/katex/*", patterns)
+        self.assertIn("static/vendor/katex/fonts/*", patterns)
+        self.assertTrue((STATIC / "vendor" / "katex" / "katex.min.js").is_file())
+        self.assertTrue((STATIC / "vendor" / "katex" / "katex.min.css").is_file())
 
     def test_all_backend_actions_have_frontend_calls(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -84,7 +89,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "paper-note-save-button",
             "paper-note-toolbar",
             "paper-note-mode",
-            "paper-note-preview",
+            "paper-note-normal",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
@@ -94,6 +99,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
     def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        editor = (FRONTEND / "note-editor.js").read_text(encoding="utf-8")
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("function loadPaperNote", javascript)
@@ -101,13 +108,25 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("content_markdown", javascript)
         self.assertIn(".paper-note-drawer.is-open", styles)
         self.assertIn("function applyMarkdownAction", javascript)
-        self.assertIn("function handlePaperNoteShortcut", javascript)
+        self.assertIn("new window.PaperMarkdownEditor", javascript)
+        self.assertIn("class PaperMarkdownEditor", editor)
+        self.assertIn("handleShortcut(event)", editor)
+        self.assertIn('contenteditable="true"', html)
+        self.assertIn('data-paper-note-mode="normal"', html)
+        self.assertIn('data-paper-note-mode="source"', html)
+        self.assertIn("正常模式", html)
+        self.assertIn("源码模式", html)
+        self.assertNotIn("预览模式", html)
+        self.assertIn('data-markdown-action="table"', html)
+        self.assertIn('data-markdown-action="inline_math"', html)
+        self.assertIn('data-markdown-action="block_math"', html)
+        self.assertIn("window.katex.render", editor)
+        self.assertIn("if (/^[0-6]$/.test(event.key)", editor)
         self.assertIn("function syncPaperNoteDrawerBounds", javascript)
         self.assertIn("--paper-note-left", styles)
-        self.assertIn('data-paper-note-mode="source"', (FRONTEND / "index.html").read_text(encoding="utf-8"))
         self.assertNotIn(
             "使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。",
-            (FRONTEND / "index.html").read_text(encoding="utf-8"),
+            html,
         )
 
     def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:

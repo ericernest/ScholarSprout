@@ -191,6 +191,47 @@ class PDFParserTests(unittest.TestCase):
             ["Guibin Zhang", "Muxin Fu", "Guancheng Wan", "Shuicheng Yan"],
         )
 
+    def test_title_stops_before_single_author_with_affiliation_marker(self) -> None:
+        astra = """ASTRA: Automated Synthesis of Agentic Systems through
+Reinforcement Arenas
+Beike Language and Intelligence1
+Abstract
+This paper presents ASTRA.
+"""
+        recreate = """ReCreate: Reasoning and Creating Domain Agents Driven by Experience
+Zhezheng Hao1‡
+Hong Wang2
+Abstract
+This paper presents ReCreate.
+"""
+
+        self.assertEqual(
+            self.parser.extract_title(astra),
+            "ASTRA: Automated Synthesis of Agentic Systems through Reinforcement Arenas",
+        )
+        self.assertEqual(
+            self.parser.extract_title(recreate),
+            "ReCreate: Reasoning and Creating Domain Agents Driven by Experience",
+        )
+
+    def test_individually_listed_authors_are_extracted_without_affiliations(self) -> None:
+        front_matter = """Evolve as a Team: Collaborative Self-Evolution for
+LLM-based Multi-Agent Systems
+Zhezheng Hao1
+Tianfu Wang2
+Huanshuo Dong3
+Hande Dong3† Jiawei Chen1†
+1 Zhejiang University
+2 Hong Kong University of Science and Technology
+Abstract
+This paper presents a collaborative system.
+"""
+
+        self.assertEqual(
+            [author.name for author in self.parser.extract_authors(front_matter)],
+            ["Zhezheng Hao", "Tianfu Wang", "Huanshuo Dong", "Hande Dong", "Jiawei Chen"],
+        )
+
     def test_old_numeric_false_positive_sections_request_repair(self) -> None:
         broken = [
             {"title": "2023. 2023."},

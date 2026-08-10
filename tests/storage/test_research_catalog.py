@@ -54,8 +54,32 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(conversations[0]["workspace_kind"], "paper_reading")
         self.assertEqual(conversations[0]["reading_session_id"], self.reading_id)
         self.assertEqual(readings[0]["reading_session_id"], self.reading_id)
+        self.assertEqual(readings[0]["paper_abstract"], "A robust control method.")
         self.assertEqual(papers[0]["reading_status"], "reading")
         self.assertEqual(papers[0]["library_note"], "重点看方法")
+
+    def test_paper_cards_normalize_structured_text_and_author_objects(self) -> None:
+        malformed_id = self.store.upsert_paper(
+            paper_id="paper-malformed-card",
+            title=(
+                "{'title': 'A Clean Card Title', "
+                "'abstract': 'The abstract belongs in the card body, not its title.'}"
+            ),
+            authors=["{'name': 'Alice Example', 'affiliation': 'Example Lab'}"],
+        )
+        self.store.add_to_library(malformed_id)
+
+        paper = next(
+            item for item in self.catalog.list_papers(library_only=True)
+            if item["paper_id"] == malformed_id
+        )
+
+        self.assertEqual(paper["title"], "A Clean Card Title")
+        self.assertEqual(
+            paper["abstract"],
+            "The abstract belongs in the card body, not its title.",
+        )
+        self.assertEqual(paper["authors"], ["Alice Example"])
 
     def test_transient_paper_transport_conversations_are_hidden(self) -> None:
         transient = "paper-reading-transport-only"
@@ -205,6 +229,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn("function renderFolderBranch", script)
         self.assertNotIn("window.prompt", script)
         self.assertIn("paper-record-card", script)
+        self.assertIn('return item.paper_abstract || "暂无摘要"', script)
+        self.assertNotIn('"paper-authors", item.authors.join', script)
         self.assertIn('dataset.action = "view-paper-note"', script)
         self.assertIn("function openLibraryPaperNote", script)
 

@@ -8,6 +8,7 @@ user profiles.
 
 from __future__ import annotations
 
+import ast
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -31,6 +32,25 @@ def _id(prefix: str) -> str:
 def _json(value: Any) -> str:
     """Encode only intentional, JSON-compatible content blocks."""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _author_names(values: Any) -> list[str]:
+    names: list[str] = []
+    for author in values if isinstance(values, list) else []:
+        candidate: Any = author
+        if isinstance(candidate, str) and candidate.lstrip().startswith("{"):
+            try:
+                candidate = ast.literal_eval(candidate)
+            except (ValueError, SyntaxError):
+                pass
+        if isinstance(candidate, dict):
+            candidate = candidate.get("name") or ""
+        elif getattr(candidate, "name", None):
+            candidate = candidate.name
+        name = str(candidate or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 class LocalResearchStore:
@@ -362,6 +382,7 @@ class LocalResearchStore:
         """Store one canonical paper record; DOI and arXiv IDs prevent duplicates."""
         if not title.strip():
             raise ValueError("title must not be empty")
+        authors = _author_names(authors)
         now = _now()
         paper_id = paper_id or _id("paper")
         with self._connection() as connection:
@@ -460,7 +481,7 @@ class LocalResearchStore:
         self.upsert_paper(
             paper_id=paper_id,
             title=str(document.get("title") or paper_id),
-            authors=[str(author) for author in document.get("authors", [])],
+            authors=_author_names(document.get("authors", [])),
             abstract=str(document.get("abstract") or "") or None,
             publication_year=document.get("year"),
             venue=str(document.get("venue") or "") or None,
@@ -746,7 +767,7 @@ class LocalResearchStore:
             paper_id = self.upsert_paper(
                 paper_id=str(paper.get("paper_id") or "") or None,
                 title=str(paper["title"]),
-                authors=[str(author) for author in paper.get("authors", [])],
+                authors=_author_names(paper.get("authors", [])),
                 abstract=str(paper.get("abstract") or "") or None,
                 publication_year=paper.get("year"),
                 doi=str(paper.get("doi") or "") or None,

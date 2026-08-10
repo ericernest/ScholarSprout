@@ -140,7 +140,6 @@ function renderCard(item) {
   const heading = element("div", paperView ? "paper-heading" : "");
   if (paperView) heading.append(element("span", "paper-kind", state.view === "paper-readings" ? "PAPER READING" : "PAPER LIBRARY"));
   heading.append(element("h2", "item-title", item.paper_title || item.title || item.query || "未命名记录"));
-  if (paperView && item.authors?.length) heading.append(element("p", "paper-authors", item.authors.join("、")));
   head.append(heading, element("time", "item-time", formatDate(item.updated_at)));
   card.append(head);
   const preview = previewFor(item);
@@ -725,7 +724,7 @@ async function startPaperReading(paperId, button) {
 }
 
 function previewFor(item) {
-  if (state.view === "paper-readings") return [item.venue, item.publication_year].filter(Boolean).join(" · ");
+  if (state.view === "paper-readings") return item.paper_abstract || "暂无摘要";
   if (state.view === "papers") return item.abstract || "暂无摘要";
   return item.preview || item.query || "";
 }

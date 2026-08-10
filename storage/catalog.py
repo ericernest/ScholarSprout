@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from typing import Any
 
 from .local_store import LocalResearchStore, _id, _json, _now
@@ -15,6 +17,66 @@ def _loads(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return fallback
+
+
+def _paper_authors(value: str | None) -> list[str]:
+    authors = _loads(value, [])
+    result: list[str] = []
+    for author in authors if isinstance(authors, list) else []:
+        candidate: Any = author
+        if isinstance(candidate, str) and candidate.lstrip().startswith("{"):
+            try:
+                candidate = ast.literal_eval(candidate)
+            except (ValueError, SyntaxError):
+                pass
+        if isinstance(candidate, dict):
+            candidate = candidate.get("name") or ""
+        name = re.sub(r"\s+", " ", str(candidate or "")).strip()
+        if name and not name.startswith("{") and name not in result:
+            result.append(name)
+    return result
+
+
+def _paper_display_fields(title_value: Any, abstract_value: Any) -> tuple[str, str]:
+    title = str(title_value or "").strip()
+    abstract = str(abstract_value or "").strip()
+    for raw, target in ((title, "title"), (abstract, "abstract")):
+        if not raw.lstrip().startswith(("{", "[")):
+            continue
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            try:
+                parsed = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                continue
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            parsed = parsed[0]
+        if not isinstance(parsed, dict):
+            continue
+        if target == "title":
+            title = str(parsed.get("title") or parsed.get("paper_title") or parsed.get("name") or "").strip()
+            abstract = abstract or str(parsed.get("abstract") or parsed.get("summary") or "").strip()
+        else:
+            abstract = str(parsed.get("abstract") or parsed.get("summary") or parsed.get("text") or "").strip()
+    title = re.sub(r"\s+", " ", title).strip(" \t\r\n\"'")
+    abstract = re.sub(r"\s+", " ", abstract).strip(" \t\r\n\"'")
+    parts = re.split(r"\s+(?:Abstract|摘要)\s*[:：.\-—–]?\s*", title, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2 and len(parts[1]) >= 40:
+        title = parts[0].strip()
+        abstract = abstract or parts[1].strip()
+    author_suffix = re.search(
+        r"\s+(?=[A-Z][A-Za-z'’\-]+(?:\s+(?:and|[A-Z][A-Za-z'’\-]+)){1,6}\d[∗†‡*]?(?:\s|$))",
+        title,
+    )
+    if author_suffix and author_suffix.start() >= 12:
+        title = title[:author_suffix.start()].strip()
+    if len(title) > 240:
+        sentence = re.split(r"(?<=[.!?。！？])\s+", title, maxsplit=1)[0]
+        title = sentence if len(sentence) <= 240 else f"{title[:237].rstrip()}…"
+    if title.startswith(("{", "[")) or not title:
+        title = "未命名论文"
+    return title, abstract
 
 
 class ResearchCatalog:
@@ -177,6 +239,30 @@ class ResearchCatalog:
                    WHERE r.artifact_id = ? ORDER BY r.recommendation_rank""",
                 (artifact_id,),
             ).fetchall()
+        recommendation_items = []
+        for item in recommendations:
+            display_title, display_abstract = _paper_display_fields(
+                item["title"], item["abstract"]
+            )
+            recommendation_items.append(
+                {
+                    "paper_id": item["paper_id"],
+                    "title": display_title,
+                    "authors": _paper_authors(item["authors_json"]),
+                    "abstract": display_abstract,
+                    "publication_year": item["publication_year"],
+                    "venue": item["venue"] or "",
+                    "doi": item["doi"] or "",
+                    "arxiv_id": item["arxiv_id"] or "",
+                    "source_url": item["source_url"] or "",
+                    "reason": item["reason"],
+                    "reading_focus": _loads(item["reading_focus_json"], []),
+                    "reading_priority": item["reading_priority"],
+                    "paper_role": item["paper_role"],
+                    "is_canonical": bool(item["is_canonical"]),
+                    "in_library": bool(item["in_library"]),
+                }
+            )
         return {
             "artifact_id": row["artifact_id"],
             "title": row["title"],
@@ -191,26 +277,7 @@ class ResearchCatalog:
             "quality": _loads(row["quality_json"], {}),
             "knowledge_graph": _loads(row["knowledge_graph_json"], {}),
             "error_summary": row["error_summary"] or "",
-            "recommendations": [
-                {
-                    "paper_id": item["paper_id"],
-                    "title": item["title"],
-                    "authors": _loads(item["authors_json"], []),
-                    "abstract": item["abstract"] or "",
-                    "publication_year": item["publication_year"],
-                    "venue": item["venue"] or "",
-                    "doi": item["doi"] or "",
-                    "arxiv_id": item["arxiv_id"] or "",
-                    "source_url": item["source_url"] or "",
-                    "reason": item["reason"],
-                    "reading_focus": _loads(item["reading_focus_json"], []),
-                    "reading_priority": item["reading_priority"],
-                    "paper_role": item["paper_role"],
-                    "is_canonical": bool(item["is_canonical"]),
-                    "in_library": bool(item["in_library"]),
-                }
-                for item in recommendations
-            ],
+            "recommendations": recommendation_items,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -219,7 +286,8 @@ class ResearchCatalog:
         pattern = f"%{search.strip()}%"
         with self.store._connection() as connection:
             rows = connection.execute(
-                """SELECT s.*, w.title, p.title AS paper_title, p.authors_json,
+                """SELECT s.*, w.title, p.title AS paper_title, p.abstract AS paper_abstract,
+                          p.authors_json,
                           p.publication_year, p.venue, d.document_json,
                           COUNT(DISTINCT a.annotation_id) AS annotation_count,
                           COUNT(DISTINCT b.reading_block_id) AS block_count
@@ -236,6 +304,9 @@ class ResearchCatalog:
         items = []
         for row in rows:
             document = _loads(row["document_json"], {})
+            display_title, display_abstract = _paper_display_fields(
+                row["paper_title"], row["paper_abstract"]
+            )
             current_section_title = ""
             for section in document.get("sections", []) if isinstance(document, dict) else []:
                 if str(section.get("section_id") or "") == str(row["current_section_id"] or ""):
@@ -247,8 +318,9 @@ class ResearchCatalog:
                 "conversation_id": row["conversation_id"],
                 "parent_reading_session_id": row["parent_reading_session_id"],
                 "title": row["title"],
-                "paper_title": row["paper_title"],
-                "authors": _loads(row["authors_json"], []),
+                "paper_title": display_title,
+                "paper_abstract": display_abstract,
+                "authors": _paper_authors(row["authors_json"]),
                 "publication_year": row["publication_year"],
                 "venue": row["venue"] or "",
                 "state": row["state"],
@@ -330,12 +402,16 @@ class ResearchCatalog:
         folder_paths = {
             folder["folder_id"]: folder["path"] for folder in self.list_folders()
         }
-        return [
-            {
+        items = []
+        for row in rows:
+            display_title, display_abstract = _paper_display_fields(
+                row["title"], row["abstract"]
+            )
+            items.append({
                 "paper_id": row["paper_id"],
-                "title": row["title"],
-                "authors": _loads(row["authors_json"], []),
-                "abstract": row["abstract"] or "",
+                "title": display_title,
+                "authors": _paper_authors(row["authors_json"]),
+                "abstract": display_abstract,
                 "publication_year": row["publication_year"],
                 "venue": row["venue"] or "",
                 "doi": row["doi"] or "",
@@ -353,9 +429,8 @@ class ResearchCatalog:
                 "has_document": bool(row["has_document"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
+            })
+        return items
 
     def set_library_item(
         self,
@@ -383,7 +458,7 @@ class ResearchCatalog:
     def get_paper_note(self, paper_id: str) -> dict[str, Any] | None:
         with self.store._connection() as connection:
             paper = connection.execute(
-                "SELECT title FROM papers WHERE paper_id = ?", (paper_id,)
+                "SELECT title, abstract FROM papers WHERE paper_id = ?", (paper_id,)
             ).fetchone()
             if paper is None:
                 return None
@@ -391,9 +466,10 @@ class ResearchCatalog:
                 "SELECT content_markdown, created_at, updated_at FROM paper_notes WHERE paper_id = ?",
                 (paper_id,),
             ).fetchone()
+        display_title, _ = _paper_display_fields(paper["title"], paper["abstract"])
         return {
             "paper_id": paper_id,
-            "paper_title": paper["title"],
+            "paper_title": display_title,
             "format": "markdown",
             "content_markdown": note["content_markdown"] if note else "",
             "created_at": note["created_at"] if note else None,
