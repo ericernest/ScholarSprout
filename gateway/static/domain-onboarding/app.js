@@ -897,15 +897,16 @@ function renderPaperDetail(paper) {
     ["综合推荐度", paper.final_score],
     ["主题相关", paper.relevance_score],
     ["领域语境", paper.context_score],
-    ["引用影响", paper.citation_score],
     ["时效性", paper.recency_score],
     ["内容差异性", paper.diversity_score],
-  ].filter(([, value]) => Number.isFinite(Number(value)));
+  ].filter(([, value]) => value != null && Number.isFinite(Number(value)));
+  const citationKnown = paper.citation_count != null
+    && Number.isFinite(Number(paper.citation_count));
   const metadata = [
     paper.source ? `来源：${paper.source}` : "",
-    paper.citation_count != null && Number.isFinite(Number(paper.citation_count))
+    citationKnown
       ? `引用数：${Number(paper.citation_count)}`
-      : "",
+      : "引用数：暂未获取",
     paper.doi ? `DOI：${paper.doi}` : "",
     paper.arxiv_id ? `arXiv：${paper.arxiv_id}` : "",
     (paper.publication_types || []).length ? `类型：${paper.publication_types.join("、")}` : "",
@@ -926,7 +927,7 @@ function renderPaperDetail(paper) {
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
       <div class="detail-block">
-        <h3>推荐依据 <span class="score-note">归一化信号 · 非论文质量绝对分</span></h3>
+        <h3>推荐依据 <span class="score-note">引用数仅作元数据参考，不参与推荐度</span></h3>
         <div class="paper-score-grid">
           ${scoreRows.map(([label, value]) => `
             <div class="paper-score-row">

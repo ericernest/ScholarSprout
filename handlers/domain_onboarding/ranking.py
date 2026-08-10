@@ -177,11 +177,6 @@ class WeightedPaperRanker:
             )
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
-            citations = min(
-                1.0,
-                math.log1p(paper.citation_count or 0)
-                / math.log1p(self.config.citation_saturation_count),
-            )
             recency = self._recency_score(paper.year)
             nearest_neighbor = max(
                 (
@@ -201,7 +196,6 @@ class WeightedPaperRanker:
             reading_priority = self._reading_priority(role, canonical is not None)
             base_score = (
                 self.config.relevance_weight * relevance
-                + self.config.citation_weight * citations
                 + self.config.recency_weight * recency
                 + self.config.diversity_weight * diversity
             )
@@ -217,7 +211,6 @@ class WeightedPaperRanker:
                     **paper.model_dump(),
                     relevance_score=round(relevance, 6),
                     context_score=round(context_score, 6),
-                    citation_score=round(citations, 6),
                     recency_score=round(recency, 6),
                     diversity_score=round(diversity, 6),
                     final_score=round(min(1.0, final), 6),

@@ -396,12 +396,21 @@ class RankingTests(unittest.TestCase):
                 {"survey", "foundational", "method", "evaluation", "application", "frontier", "other"},
             )
 
-    def test_citation_score_uses_absolute_saturation_not_batch_maximum(self) -> None:
-        paper = make_candidates(1)[0].model_copy(update={"citation_count": 2})
+    def test_citation_count_does_not_affect_ranking_scores(self) -> None:
+        paper = make_candidates(1)[0]
+        without_citations = paper.model_copy(update={"citation_count": None})
+        with_many_citations = paper.model_copy(update={"citation_count": 100_000})
 
-        ranked = self.ranker.rank([paper], make_plan(), limit=1).papers[0]
+        without_score = self.ranker.rank(
+            [without_citations], make_plan(), limit=1
+        ).papers[0]
+        with_score = self.ranker.rank(
+            [with_many_citations], make_plan(), limit=1
+        ).papers[0]
 
-        self.assertAlmostEqual(ranked.citation_score, 0.159017, places=6)
+        self.assertEqual(without_score.base_score, with_score.base_score)
+        self.assertEqual(without_score.final_score, with_score.final_score)
+        self.assertNotIn("citation_score", without_score.model_dump())
 
     def test_canonical_match_has_relevance_floor_when_tfidf_has_no_overlap(self) -> None:
         class ZeroVectorizer:

@@ -940,7 +940,9 @@ function hasPartialReadingMapContent(map = state.readingMap || state.paper?.read
   const hasMapItems = Boolean(survey.field_overview && Object.keys(survey.field_overview).length)
     || ["development_timeline", "pain_points", "taxonomy", "technical_routes", "representative_methods", "datasets", "evaluation_protocols", "applications", "open_challenges"]
       .some((key) => Array.isArray(survey[key]) && survey[key].length);
-  return hasMapItems || Boolean((map.section_guides || []).some((guide) => (guide.cards || []).length));
+  const prerequisite = map.prerequisite_card || {};
+  const hasPrerequisite = Boolean(Object.values(prerequisite).some((value) => Array.isArray(value) ? value.length : Boolean(value)));
+  return hasPrerequisite || hasMapItems || Boolean((map.section_guides || []).some((guide) => (guide.cards || []).length));
 }
 
 function isReadingMapDisplayable() {
@@ -1109,7 +1111,12 @@ function renderSectionGuide(guide, indexed = {}) {
 
 function renderPrerequisiteCard(card) {
   if (!card || typeof card !== "object") return null;
-  const hasContent = (card.concepts || []).length || (card.baseline_papers || []).length || (card.reading_order || []).length;
+  const anchorWorks = card.anchor_works || card.baseline_papers || [];
+  const hasContent = (card.concepts || []).length
+    || (card.field_questions || []).length
+    || anchorWorks.length
+    || (card.reading_order || []).length
+    || (card.common_confusions || []).length;
   if (!hasContent) return null;
   const article = create("section", "paper-section index-section prerequisite-section");
   article.id = "paper-section-prerequisites";
@@ -1121,9 +1128,15 @@ function renderPrerequisiteCard(card) {
       card_type: "prerequisite_concept",
       title: concept.name || "前置概念",
       content: {
+        why_needed: concept.why_needed,
+        learn_first: concept.learn_first,
+        difficulty: concept.difficulty,
+        evidence: concept.evidence,
+        /*
         "为什么需要": concept.why_needed,
         "先学": concept.learn_first,
         "难度": concept.difficulty,
+        */
       },
     }));
   });
@@ -1134,11 +1147,32 @@ function renderPrerequisiteCard(card) {
       content: { papers: card.baseline_papers.slice(0, 8) },
     }));
   }
+  if ((card.field_questions || []).length) {
+    guide.append(renderGuideCard({
+      card_type: "field_questions",
+      title: "Field Questions",
+      content: { questions: card.field_questions.slice(0, 8) },
+    }));
+  }
+  if (anchorWorks.length && !(card.baseline_papers || []).length) {
+    guide.append(renderGuideCard({
+      card_type: "anchor_works",
+      title: "Anchor Works",
+      content: { works: anchorWorks.slice(0, 8) },
+    }));
+  }
   if ((card.reading_order || []).length) {
     guide.append(renderGuideCard({
       card_type: "reading_route",
       title: "建议阅读顺序",
       content: { steps: card.reading_order },
+    }));
+  }
+  if ((card.common_confusions || []).length) {
+    guide.append(renderGuideCard({
+      card_type: "common_confusions",
+      title: "Common Confusions",
+      content: { confusions: card.common_confusions.slice(0, 8) },
     }));
   }
   body.append(guide);

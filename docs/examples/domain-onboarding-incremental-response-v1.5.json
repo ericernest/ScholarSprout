@@ -820,7 +820,6 @@
         "relevance_score": 0.231763,
         "context_score": 1.0,
         "final_score": 0.323798,
-        "citation_score": 0.0,
         "recency_score": 0.8,
         "diversity_score": 0.763277
       },
@@ -853,7 +852,6 @@
         "relevance_score": 0.083888,
         "context_score": 1.0,
         "final_score": 0.253263,
-        "citation_score": 0.0,
         "recency_score": 0.866667,
         "diversity_score": 0.771247
       },
@@ -890,7 +888,6 @@
         "relevance_score": 0.11426,
         "context_score": 1.0,
         "final_score": 0.228097,
-        "citation_score": 0.0,
         "recency_score": 0.6,
         "diversity_score": 0.752539
       },
@@ -917,7 +914,6 @@
         "relevance_score": 0.10601,
         "context_score": 1.0,
         "final_score": 0.301216,
-        "citation_score": 0.100329,
         "recency_score": 0.933333,
         "diversity_score": 0.828452
       },
@@ -949,7 +945,6 @@
         "relevance_score": 0.182218,
         "context_score": 1.0,
         "final_score": 0.319056,
-        "citation_score": 0.0,
         "recency_score": 0.933333,
         "diversity_score": 0.788365
       },
@@ -976,7 +971,6 @@
         "relevance_score": 0.115886,
         "context_score": 1.0,
         "final_score": 0.270862,
-        "citation_score": 0.0,
         "recency_score": 0.866667,
         "diversity_score": 0.771247
       },
@@ -1006,7 +1000,6 @@
         "relevance_score": 0.101194,
         "context_score": 1.0,
         "final_score": 0.250911,
-        "citation_score": 0.0,
         "recency_score": 0.8,
         "diversity_score": 0.752539
       }
