@@ -11,7 +11,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 from config.manager import load_config, resolve_data_dir, save_config
-from config.schema import AppConfig, OpenAIClientConfig, StorageConfig
+from config.schema import AppConfig, EmbeddingConfig, OpenAIClientConfig, StorageConfig
 from config.web import _is_local_request
 from gateway.app import app
 
@@ -25,6 +25,10 @@ class ConfigManagerTests(unittest.TestCase):
                     api_key="secret",
                     base_url="https://example.test/v1",
                     model_name="example-model",
+                ),
+                embedding=EmbeddingConfig(
+                    model_name="qwen3-embedding",
+                    base_url="https://embedding.example.test/v1",
                 ),
                 storage=StorageConfig(data_dir=str(Path(directory) / "data")),
             )
@@ -46,6 +50,8 @@ class ConfigManagerTests(unittest.TestCase):
             config = load_config(path)
 
             self.assertEqual(config.client.model_name, "legacy-model")
+            self.assertEqual(config.embedding.model_name, "qwen3-embedding")
+            self.assertIsNone(config.embedding.base_url)
             self.assertEqual(config.storage.data_dir, "~/.novicesynapse")
 
     def test_environment_data_dir_overrides_config(self) -> None:
@@ -70,6 +76,8 @@ class ConfigWebTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             body = response.json()
             self.assertTrue(body["client"]["api_key_configured"])
+            self.assertEqual(body["embedding"]["model_name"], "qwen3-embedding")
+            self.assertTrue(body["embedding"]["uses_client_base_url"])
             self.assertNotIn("never-return-this", response.text)
             self.assertEqual(body["storage"]["effective_data_dir"], str(Path(directory).resolve()))
 
@@ -88,6 +96,8 @@ class ConfigWebTests(unittest.TestCase):
                     json={
                         "base_url": "https://example.test/v1/",
                         "model_name": "new-model",
+                        "embedding_model_name": "custom-embedding",
+                        "embedding_base_url": "https://embedding.example.test/v1/",
                         "data_dir": str(target),
                     },
                 )
@@ -97,6 +107,11 @@ class ConfigWebTests(unittest.TestCase):
             self.assertEqual(config.client.api_key, "existing-secret")
             self.assertEqual(config.client.base_url, "https://example.test/v1")
             self.assertEqual(config.client.model_name, "new-model")
+            self.assertEqual(config.embedding.model_name, "custom-embedding")
+            self.assertEqual(
+                config.embedding.base_url,
+                "https://embedding.example.test/v1",
+            )
             self.assertEqual(config.storage.data_dir, str(target))
             self.assertTrue(target.is_dir())
             save.assert_called_once_with(config)
@@ -104,6 +119,8 @@ class ConfigWebTests(unittest.TestCase):
     def test_configuration_page_is_available(self) -> None:
         response = TestClient(app).get("/settings")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('id="embedding-model-name"', response.text)
+        self.assertIn('id="embedding-base-url"', response.text)
         self.assertIn("三步完成配置", response.text)
 
     def test_remote_configuration_is_rejected_by_default(self) -> None:

@@ -27,15 +27,28 @@ class GatewayProductionTests(unittest.TestCase):
         )
         store = MagicMock()
         store.recover_interrupted.return_value = 0
+        chat_model = object()
+        embedding_model = object()
 
         with (
-            patch("gateway.app.create_default_pipeline", return_value=pipeline),
+            patch("gateway.app.create_default_pipeline", return_value=pipeline) as create_pipeline,
             patch("gateway.app.create_audit_sink_from_env", return_value=audit),
             patch("gateway.app.create_job_store_from_env", return_value=store),
         ):
-            configure_domain_onboarding_runtime(state, object(), config)
+            configure_domain_onboarding_runtime(
+                state,
+                chat_model,
+                config,
+                embedding_model=embedding_model,
+                embedding_model_name="configured-embedding",
+            )
 
         self.assertIs(state.domain_onboarding_pipeline, pipeline)
+        create_pipeline.assert_called_once_with(
+            chat_model,
+            embedding_model=embedding_model,
+            embedding_model_name="configured-embedding",
+        )
         self.assertIs(state.domain_onboarding_audit_sink, audit)
         self.assertIsInstance(state.domain_onboarding_metrics, DomainOnboardingMetrics)
         self.assertIsNotNone(state.domain_onboarding_job_manager)

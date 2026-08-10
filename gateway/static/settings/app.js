@@ -2,6 +2,8 @@ const form = document.querySelector("#settings-form");
 const baseUrl = document.querySelector("#base-url");
 const apiKey = document.querySelector("#api-key");
 const modelName = document.querySelector("#model-name");
+const embeddingModelName = document.querySelector("#embedding-model-name");
+const embeddingBaseUrl = document.querySelector("#embedding-base-url");
 const dataDir = document.querySelector("#data-dir");
 const saveButton = document.querySelector("#save-button");
 const message = document.querySelector("#message");
@@ -27,6 +29,8 @@ form.addEventListener("submit", async (event) => {
   const payload = {
     base_url: baseUrl.value.trim(),
     model_name: modelName.value.trim(),
+    embedding_model_name: embeddingModelName.value.trim(),
+    embedding_base_url: embeddingBaseUrl.value.trim(),
     data_dir: dataDir.value.trim(),
   };
   if (apiKey.value.trim()) payload.api_key = apiKey.value.trim();
@@ -65,6 +69,8 @@ async function loadConfig() {
 function applyConfig(config) {
   baseUrl.value = config.client.base_url || "";
   modelName.value = config.client.model_name || "";
+  embeddingModelName.value = config.embedding?.model_name || "qwen3-embedding";
+  embeddingBaseUrl.value = config.embedding?.base_url || "";
   dataDir.value = config.storage.data_dir || "~/.novicesynapse";
   apiKeyState.textContent = config.client.api_key_configured
     ? "API Key 已配置；留空保存会保留原密钥。"

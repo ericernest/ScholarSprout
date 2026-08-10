@@ -29,9 +29,11 @@ class ConfigUpdate(BaseModel):
     api_key: str | None = None
     clear_api_key: bool = False
     model_name: str | None = None
+    embedding_base_url: str | None = None
+    embedding_model_name: str | None = None
     data_dir: str | None = None
 
-    @field_validator("base_url")
+    @field_validator("base_url", "embedding_base_url")
     @classmethod
     def validate_base_url(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -42,7 +44,7 @@ class ConfigUpdate(BaseModel):
             raise ValueError("base_url 必须是完整的 http(s) 地址")
         return normalized.rstrip("/")
 
-    @field_validator("model_name")
+    @field_validator("model_name", "embedding_model_name")
     @classmethod
     def normalize_model_name(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
@@ -90,6 +92,11 @@ def _public_config(config: object) -> dict[str, object]:
             "model_name": client.model_name,
             "api_key_configured": bool(client.api_key.strip()),
         },
+        "embedding": {
+            "base_url": config.embedding.base_url or "",
+            "model_name": config.embedding.model_name,
+            "uses_client_base_url": not bool(config.embedding.base_url),
+        },
         "storage": {
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
             "effective_data_dir": str(resolve_data_dir(config)),
@@ -118,6 +125,10 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.client.base_url = payload.base_url
         if "model_name" in payload.model_fields_set:
             config.client.model_name = payload.model_name
+        if "embedding_base_url" in payload.model_fields_set:
+            config.embedding.base_url = payload.embedding_base_url
+        if "embedding_model_name" in payload.model_fields_set:
+            config.embedding.model_name = payload.embedding_model_name or ""
         if payload.clear_api_key:
             config.client.api_key = ""
         elif payload.api_key is not None and payload.api_key.strip():
