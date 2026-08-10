@@ -44,7 +44,10 @@
               <div><strong>添加论文</strong><span>上传 PDF 或粘贴 PDF 链接，导入后自动进入论文管理。</span></div>
               <input id="paper-file-input" type="file" accept="application/pdf,.pdf" />
               <input id="paper-url-input" type="url" placeholder="https://…/paper.pdf" />
-              <button id="import-folder-button" class="folder-choice-button" type="button"><span class="folder-choice-icon">◇</span><span id="import-folder-label">未分类</span><span>⌄</span></button>
+              <button id="import-folder-button" class="folder-dropzone" type="button">
+                <span class="folder-drop-icon">↥</span>
+                <span class="folder-drop-copy"><strong>选择文件夹</strong><small id="import-folder-label">未放入文件夹</small></span>
+              </button>
               <button id="paper-import-button" type="button">添加到论文管理</button>
             </section>
             <section id="result-summary" class="result-summary"></section>

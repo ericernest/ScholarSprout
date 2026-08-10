@@ -6,7 +6,7 @@
 
 - 日常聊天：`gateway/message_flow.py` 在 handler 前后分别保存用户消息和可见的助手回复；同一页面会话始终复用一个 `conversation_id`，只有显式点击“新会话”才生成新 ID，标题取第一次提问。
 - 领域入门：同步 handler 保存完整分块结果；异步 job 在提交、阶段推进和完成/失败时更新同一个 artifact。
-- 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。上传、解析状态和详情查询不会创建会话，只有真实 Agent 问答写入对应的精读会话。
+- 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。上传、解析状态和详情查询不会创建会话；用户明确点击“开始论文精读”时创建空会话，后续 Agent 问答继续写入该会话。
 - 默认数据目录为 `~/.novicesynapse/`，可在 `/settings` 配置向导或 `~/.novicesynapse/config.json` 的 `storage.data_dir` 修改。`NOVICESYNAPSE_DATA_DIR` 仍作为部署环境的最高优先级覆盖项。领域入门 job 默认也使用同一个 `research.sqlite3`；只有显式配置 `DOMAIN_ONBOARDING_JOB_DB` 时才使用独立文件。
 
 数据目录修改后需要重启服务。新目录承接重启后的新读写，不会自动搬迁旧目录的数据；这样可以避免一次普通配置修改暗中移动或覆盖用户文件。
@@ -33,13 +33,12 @@
 | `paper_knowledge_graphs` | `graph_id`, `paper_id`, `graph_scope`, `graph_json`, `updated_at` | 单篇或跨论文知识图谱快照。 |
 | `paper_folders` | `folder_id`, `name`, `parent_folder_id`, 时间 | 论文管理中的多层文件夹树；同一父目录下名称唯一，不同分支允许同名。父目录筛选会包含全部后代文件夹。 |
 | `library_items` | `paper_id`, `reading_status`, `note`, `folder_id`, `added_at`, `updated_at` | 进入论文管理的论文及其阅读状态、备注和分类。阅读状态仅为 `unread / reading / read / archived`。 |
-| `paper_tags` / `paper_tag_links` | 标签身份、论文关联、添加时间 | 多对多标签。标签用于交叉主题，文件夹用于主分类，两者不混成一个字段。 |
 | `paper_annotations` | `annotation_id`, `paper_id`, `reading_session_id`, `annotation_type`, `color`, `page_number`, `section_id`, `selected_text`, `anchor_schema_version`, `anchor_json`, `note_text`, 时间 | PDF 高亮与注释。`anchor_json` 使用 `pdf-rects-v1`，保存页面内归一化矩形，因此缩放后仍能准确恢复；会话字段只记录来源，标注归属于论文并在该论文的 Fork/精读会话间共享。 |
 
 领域入门推荐论文后：
 
 1. 选择“加入论文管理”时，创建/复用 `papers`，再写入 `library_items`。
-2. 选择“论文精读”时，导入/复用论文并默认写入 `library_items`；真正开始问答后，仅把 `unread` 推进为 `reading`，不会覆盖用户已有的备注、文件夹或标签。
+2. 选择“论文精读”时，导入/复用论文并默认写入 `library_items`；从论文管理点击“开始论文精读”时先创建并持久化精读会话，再把 `unread` 推进为 `reading`，不会覆盖用户已有的备注或文件夹。
 3. 论文管理页也可直接上传 PDF 或粘贴 PDF 链接，导入完成即进入管理列表，并提供相同的精读入口。
 
 推荐论文已经有 `paper_id` 时，精读导入会把 PDF 附着到该论文实体，而不是另建一条同名记录；没有可下载链接时，论文卡片会要求用户选择本地 PDF。
@@ -84,6 +83,7 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 - `work_artifacts.state`：模式整体生命周期，`queued / running / paused / completed / failed / cancelled`。
 - `domain_onboardings.current_stage`：领域入门当前可恢复阶段；与整体状态互补。
 - `paper_reading_sessions.state`：用户的阅读会话，`active / paused / completed`。
+- `library_items.reading_status`：论文管理状态，`unread / reading / read / archived` 分别显示为“未读 / 阅读中 / 完成 / 归档”；导入默认为未读，开始精读自动推进为阅读中，完成和归档由用户在管理区手动切换。
 - `conversations.state`：聊天是否仍可继续，`active / closed`。
 
 不要把这四类状态合并成一列：它们回答的是不同问题，分别对应模式执行、pipeline 阶段、阅读 UI 和通用聊天。
@@ -96,10 +96,11 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 - `GET /api/research/domain-onboardings`：领域任务状态、阶段、推荐论文数和质量摘要。
 - `GET /api/research/domain-onboardings/{artifact_id}`：打开领域结果详情及推荐论文操作，不依赖自动页面跳转。
 - `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
-- `GET /api/research/papers`：论文管理状态、备注、文件夹、标签、精读及标注数；可按 `folder_id` 筛选。
+- `GET /api/research/papers`：论文管理状态、备注、文件夹、最新精读会话、精读及标注数；可按 `folder_id` 筛选。
 - `GET/POST/PATCH/DELETE /api/research/paper-folders`：读取、新建、重命名、移动和删除文件夹；为防误删，仅空文件夹可以删除。
-- `PATCH /api/research/papers/{paper_id}/folder`：只移动论文归属，不覆盖阅读状态、备注或标签。
-- `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理，更新体包含状态、备注、文件夹和标签；移出不会删除论文、精读记录或标注。
+- `PATCH /api/research/papers/{paper_id}/folder`：只移动论文归属，不覆盖阅读状态或备注。
+- `POST /api/research/papers/{paper_id}/reading-session`：在进入工作台前创建精读会话并把论文推进为“阅读中”，因此论文精读列表可以立即看到记录。
+- `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理，更新体包含状态、备注和文件夹；移出不会删除论文、精读记录或标注。
 - `GET/PUT/DELETE /api/research/papers/{paper_id}/annotations/...`：恢复、保存和删除高亮/注释。
 
 论文工作台仍在浏览器保存一份标注缓存，用于短时离线兜底；SQLite 是正式数据源。首次打开升级后的工作台时，已有浏览器标注会自动补写到 SQLite。

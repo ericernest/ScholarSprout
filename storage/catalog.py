@@ -267,10 +267,11 @@ class ResearchCatalog:
             rows = connection.execute(
                 f"""SELECT p.*, l.reading_status, l.note AS library_note, l.added_at,
                            l.folder_id, f.name AS folder_name,
-                           (SELECT GROUP_CONCAT(t.name, char(31))
-                            FROM paper_tag_links pt JOIN paper_tags t ON t.tag_id = pt.tag_id
-                            WHERE pt.paper_id = p.paper_id) AS tag_names,
                            COUNT(DISTINCT s.reading_session_id) AS reading_count,
+                           (SELECT latest.reading_session_id
+                            FROM paper_reading_sessions latest
+                            WHERE latest.paper_id = p.paper_id
+                            ORDER BY latest.updated_at DESC LIMIT 1) AS latest_reading_session_id,
                            COUNT(DISTINCT a.annotation_id) AS annotation_count,
                            CASE WHEN d.paper_id IS NULL THEN 0 ELSE 1 END AS has_document
                     FROM papers p
@@ -305,11 +306,8 @@ class ResearchCatalog:
                 "folder_id": row["folder_id"] or "",
                 "folder_name": row["folder_name"] or "",
                 "folder_path": folder_paths.get(row["folder_id"], ""),
-                "tags": sorted(
-                    [name for name in str(row["tag_names"] or "").split(chr(31)) if name],
-                    key=str.casefold,
-                ),
                 "reading_count": int(row["reading_count"]),
+                "latest_reading_session_id": row["latest_reading_session_id"] or "",
                 "annotation_count": int(row["annotation_count"]),
                 "has_document": bool(row["has_document"]),
                 "created_at": row["created_at"],
@@ -325,7 +323,6 @@ class ResearchCatalog:
         reading_status: str,
         note: str,
         folder_id: str | None = None,
-        tags: list[str] | None = None,
     ) -> bool:
         with self.store._connection() as connection:
             exists = connection.execute(
@@ -340,23 +337,6 @@ class ResearchCatalog:
         self.store.add_to_library(
             paper_id, reading_status=reading_status, note=note, folder_id=folder_id
         )
-        if tags is not None:
-            cleaned = list(dict.fromkeys(name.strip() for name in tags if name.strip()))[:30]
-            now = _now()
-            with self.store._connection() as connection:
-                connection.execute("DELETE FROM paper_tag_links WHERE paper_id = ?", (paper_id,))
-                for name in cleaned:
-                    connection.execute(
-                        "INSERT OR IGNORE INTO paper_tags(tag_id, name, created_at) VALUES (?, ?, ?)",
-                        (_id("tag"), name, now),
-                    )
-                    tag = connection.execute(
-                        "SELECT tag_id FROM paper_tags WHERE name = ? COLLATE NOCASE", (name,)
-                    ).fetchone()
-                    connection.execute(
-                        "INSERT INTO paper_tag_links(paper_id, tag_id, added_at) VALUES (?, ?, ?)",
-                        (paper_id, tag["tag_id"], now),
-                    )
         return True
 
     def list_folders(self) -> list[dict[str, Any]]:

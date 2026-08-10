@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 from fastapi.testclient import TestClient
 
 from gateway.app import app
-from storage import LocalResearchStore, ResearchCatalog
+from handlers.paper_reading.harness.session import SessionManager
+from storage import LocalResearchStore, PaperReadingStorage, ResearchCatalog
 
 
 class ResearchCatalogTests(unittest.TestCase):
@@ -96,14 +97,13 @@ class ResearchCatalogTests(unittest.TestCase):
     def test_paper_annotations_are_in_schema(self) -> None:
         self.assertIn("paper_annotations", self.store.list_table_names())
 
-    def test_folder_and_tags_round_trip_without_pipeline_overwrite(self) -> None:
+    def test_folder_and_note_round_trip_without_pipeline_overwrite(self) -> None:
         folder = self.catalog.create_folder("量子控制")
         saved = self.catalog.set_library_item(
             self.paper_id,
             reading_status="unread",
             note="保留这条备注",
             folder_id=folder["folder_id"],
-            tags=["控制", "鲁棒性", "控制"],
         )
         self.assertTrue(saved)
 
@@ -113,7 +113,7 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(paper["reading_status"], "reading")
         self.assertEqual(paper["library_note"], "保留这条备注")
         self.assertEqual(paper["folder_name"], "量子控制")
-        self.assertEqual(paper["tags"], ["控制", "鲁棒性"])
+        self.assertNotIn("tags", paper)
         self.assertEqual(self.catalog.list_papers(folder_id=folder["folder_id"])[0]["paper_id"], self.paper_id)
 
     def test_nested_folders_allow_same_name_in_different_branches(self) -> None:
@@ -130,7 +130,6 @@ class ResearchCatalogTests(unittest.TestCase):
             reading_status="unread",
             note="",
             folder_id=methods_a["folder_id"],
-            tags=[],
         )
 
         folders = {item["folder_id"]: item for item in self.catalog.list_folders()}
@@ -213,7 +212,6 @@ class ResearchLibraryApiTests(unittest.TestCase):
                     "reading_status": "unread",
                     "note": "先看实验",
                     "folder_id": folder.json()["folder_id"],
-                    "tags": ["benchmark", "实验"],
                 },
             )
             listed = client.get(
@@ -224,7 +222,7 @@ class ResearchLibraryApiTests(unittest.TestCase):
             self.assertEqual(folder.status_code, 201)
             self.assertEqual(saved.status_code, 200)
             self.assertEqual(listed.json()[0]["folder_name"], "方法论文")
-            self.assertEqual(listed.json()[0]["tags"], ["benchmark", "实验"])
+            self.assertNotIn("tags", listed.json()[0])
 
             moved = client.patch(
                 f"/api/research/papers/{paper_id}/folder", json={"folder_id": None}
@@ -233,7 +231,33 @@ class ResearchLibraryApiTests(unittest.TestCase):
             self.assertEqual(moved.status_code, 200)
             self.assertEqual(after_move["folder_id"], "")
             self.assertEqual(after_move["library_note"], "先看实验")
-            self.assertEqual(after_move["tags"], ["benchmark", "实验"])
+
+    def test_start_reading_endpoint_persists_session_and_advances_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = LocalResearchStore(root / "research.sqlite3")
+            store.initialize()
+            paper_id = store.upsert_paper(title="Session Paper", authors=["Author One"])
+            paper_storage = PaperReadingStorage(root / "paper_reading", research_store=store)
+            paper_storage.save_paper(
+                paper_id,
+                {"paper_id": paper_id, "title": "Session Paper", "authors": ["Author One"], "sections": []},
+            )
+            app.state.research_storage = store
+            app.state.paper_storage = paper_storage
+            app.state.session_manager = SessionManager(storage=paper_storage)
+
+            response = TestClient(app).post(
+                f"/api/research/papers/{paper_id}/reading-session"
+            )
+            reading_session_id = response.json()["reading_session_id"]
+            readings = ResearchCatalog(store).list_paper_readings()
+            paper = ResearchCatalog(store).list_papers(library_only=True)[0]
+
+            self.assertEqual(response.status_code, 201)
+            self.assertEqual(readings[0]["reading_session_id"], reading_session_id)
+            self.assertEqual(paper["latest_reading_session_id"], reading_session_id)
+            self.assertEqual(paper["reading_status"], "reading")
 
     def test_annotation_rejects_page_overflow(self) -> None:
         with TemporaryDirectory() as directory:
@@ -254,6 +278,24 @@ class ResearchLibraryApiTests(unittest.TestCase):
 
 
 class FolderSchemaMigrationTests(unittest.TestCase):
+    def test_schema_v6_removes_deprecated_tag_tables(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            store = LocalResearchStore(database)
+            store.initialize()
+            with store._connection() as connection:
+                connection.execute(
+                    "CREATE TABLE paper_tags(tag_id TEXT PRIMARY KEY, name TEXT, created_at TEXT)"
+                )
+                connection.execute(
+                    "CREATE TABLE paper_tag_links(paper_id TEXT, tag_id TEXT, added_at TEXT)"
+                )
+
+            store.initialize()
+
+            self.assertNotIn("paper_tags", store.list_table_names())
+            self.assertNotIn("paper_tag_links", store.list_table_names())
+
     def test_v4_global_folder_names_migrate_to_sibling_uniqueness(self) -> None:
         with TemporaryDirectory() as directory:
             database = Path(directory) / "research.sqlite3"

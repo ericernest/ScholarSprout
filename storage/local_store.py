@@ -17,7 +17,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _now() -> str:
@@ -113,12 +113,6 @@ class LocalResearchStore:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS paper_tags (
-                    tag_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                    created_at TEXT NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS library_items (
                     paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
                     reading_status TEXT NOT NULL CHECK(reading_status IN ('unread', 'reading', 'read', 'archived')),
@@ -126,13 +120,6 @@ class LocalResearchStore:
                     folder_id TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL,
                     added_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS paper_tag_links (
-                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
-                    tag_id TEXT NOT NULL REFERENCES paper_tags(tag_id) ON DELETE CASCADE,
-                    added_at TEXT NOT NULL,
-                    PRIMARY KEY(paper_id, tag_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS paper_annotations (
@@ -281,8 +268,6 @@ class LocalResearchStore:
                     ON paper_reading_sessions(paper_id, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_annotations_paper_page
                     ON paper_annotations(paper_id, page_number, created_at);
-                CREATE INDEX IF NOT EXISTS idx_paper_tag_links_tag
-                    ON paper_tag_links(tag_id, paper_id);
                 CREATE INDEX IF NOT EXISTS idx_memory_snapshots_conversation
                     ON conversation_memory_snapshots(conversation_id, created_at DESC);
                 """
@@ -296,6 +281,10 @@ class LocalResearchStore:
             )
             self._ensure_column(connection, "paper_reading_sessions", "user_id", "TEXT")
             self._migrate_folder_name_uniqueness(connection)
+            # Tags were removed from the V1 product in schema v6. Drop the old
+            # join table first so existing local databases migrate cleanly.
+            connection.execute("DROP TABLE IF EXISTS paper_tag_links")
+            connection.execute("DROP TABLE IF EXISTS paper_tags")
             self._ensure_column(
                 connection,
                 "library_items",

@@ -19,7 +19,6 @@ class LibraryItemUpdate(BaseModel):
     reading_status: Literal["unread", "reading", "read", "archived"] = "unread"
     note: str = Field(default="", max_length=4000)
     folder_id: str | None = Field(default=None, max_length=180)
-    tags: list[str] = Field(default_factory=list, max_length=30)
 
 
 class FolderCreate(BaseModel):
@@ -174,10 +173,38 @@ def save_library_item(paper_id: str, payload: LibraryItemUpdate, request: Reques
         reading_status=payload.reading_status,
         note=payload.note.strip(),
         folder_id=payload.folder_id,
-        tags=payload.tags,
     ):
         raise HTTPException(status_code=404, detail="论文不存在。")
     return {"paper_id": paper_id, "saved": True}
+
+
+@router.post("/papers/{paper_id}/reading-session", status_code=201)
+def create_paper_reading_session(paper_id: str, request: Request) -> dict:
+    """Create and persist a reading session before opening the workbench."""
+    store = getattr(request.app.state, "research_storage", None)
+    session_manager = getattr(request.app.state, "session_manager", None)
+    paper_storage = getattr(request.app.state, "paper_storage", None)
+    if not isinstance(store, LocalResearchStore) or session_manager is None:
+        raise HTTPException(status_code=503, detail="论文精读服务尚未初始化。")
+    with store._connection() as connection:
+        paper = connection.execute(
+            "SELECT title FROM papers WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+    if paper is None:
+        raise HTTPException(status_code=404, detail="论文不存在。")
+    if paper_storage is None or paper_storage.load_paper(paper_id) is None:
+        raise HTTPException(status_code=409, detail="请先导入或上传这篇论文的 PDF。")
+    session = session_manager.create_session(
+        paper_id=paper_id,
+        paper_title=str(paper["title"] or paper_id),
+        user_id="default",
+    )
+    store.ensure_library_item(paper_id, reading_status="reading")
+    return {
+        "paper_id": paper_id,
+        "reading_session_id": session.session_id,
+        "state": session.state,
+    }
 
 
 @router.delete("/papers/{paper_id}/library")
