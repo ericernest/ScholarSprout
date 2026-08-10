@@ -215,6 +215,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn('id="reading-filter"', response.text)
         self.assertIn('id="paper-note-dialog"', response.text)
         self.assertIn('id="library-paper-note-content"', response.text)
+        self.assertIn('/static/vendor/katex/katex.min.js', response.text)
+        self.assertIn('/static/paper-reading/note-editor.js', response.text)
         self.assertIn('id="folder-tree"', response.text)
         self.assertIn('id="folder-form-dialog"', response.text)
         self.assertIn('id="folder-picker-dialog"', response.text)
@@ -233,6 +235,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertNotIn('"paper-authors", item.authors.join', script)
         self.assertIn('dataset.action = "view-paper-note"', script)
         self.assertIn("function openLibraryPaperNote", script)
+        self.assertIn("window.renderPaperMarkdown(note.content_markdown)", script)
+        self.assertNotIn('element("pre", "paper-note-source"', script)
 
     def test_library_and_annotation_endpoints(self) -> None:
         with TemporaryDirectory() as directory:

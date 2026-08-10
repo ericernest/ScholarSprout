@@ -547,5 +547,13 @@
     }
   }
 
+  function renderPaperMarkdown(markdown, className = "paper-note-rendered") {
+    const renderer = Object.create(PaperMarkdownEditor.prototype);
+    const root = renderer.parseMarkdown(markdown);
+    root.className = className;
+    return root;
+  }
+
   window.PaperMarkdownEditor = PaperMarkdownEditor;
+  window.renderPaperMarkdown = renderPaperMarkdown;
 })();

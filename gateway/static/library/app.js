@@ -306,7 +306,7 @@ async function openLibraryPaperNote(paperId, paperTitle, canEdit) {
     const note = await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`);
     content.replaceChildren();
     if (note.content_markdown) {
-      content.append(element("pre", "paper-note-source", note.content_markdown));
+      content.append(window.renderPaperMarkdown(note.content_markdown));
     } else {
       content.append(element("p", "paper-note-empty", "这篇论文还没有笔记。"));
     }

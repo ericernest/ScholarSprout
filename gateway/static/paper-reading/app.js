@@ -718,6 +718,7 @@ async function openPaperNoteDrawer() {
   if (!state.paperId) return;
   if (state.paperNoteLoadedFor !== state.paperId) await loadPaperNote();
   if (state.paperNoteLoadedFor !== state.paperId) return;
+  setPaperNoteMode("normal");
   const drawer = $("paper-note-drawer");
   syncPaperNoteDrawerBounds();
   drawer.classList.add("is-open");
