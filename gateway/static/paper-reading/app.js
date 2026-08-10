@@ -39,7 +39,7 @@ const state = {
   pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
-  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null,
+  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "source",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -613,6 +613,7 @@ async function enterWorkbench() {
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
+  syncPaperNoteDrawerBounds();
   $("paper-note-button").hidden = !state.paperId;
   if (state.paperId && state.paperNoteLoadedFor !== state.paperId) void loadPaperNote();
   $("paper-boot").hidden = true;
@@ -631,6 +632,14 @@ function bindPaperNote() {
   $("paper-note-close-button").addEventListener("click", closePaperNoteDrawer);
   $("paper-note-drag-handle").addEventListener("click", closePaperNoteDrawer);
   $("paper-note-save-button").addEventListener("click", () => savePaperNote());
+  $("paper-note-mode").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-paper-note-mode]");
+    if (button) setPaperNoteMode(button.dataset.paperNoteMode);
+  });
+  $("paper-note-toolbar").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-markdown-action]");
+    if (button) applyMarkdownAction(button.dataset.markdownAction);
+  });
   input.addEventListener("input", () => {
     state.paperNoteDirty = true;
     updatePaperNoteCount();
@@ -641,6 +650,12 @@ function bindPaperNote() {
   input.addEventListener("blur", () => {
     if (state.paperNoteDirty) void savePaperNote({ quiet: true });
   });
+  input.addEventListener("keydown", handlePaperNoteShortcut);
+  window.addEventListener("resize", syncPaperNoteDrawerBounds);
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(syncPaperNoteDrawerBounds);
+    observer.observe(document.querySelector(".reader-panel"));
+  }
   document.addEventListener("keydown", (event) => {
     const drawerOpen = $("paper-note-drawer").classList.contains("is-open");
     if (event.key === "Escape" && drawerOpen) {
@@ -666,6 +681,7 @@ async function loadPaperNote() {
     state.paperNoteLoadedFor = paperId;
     state.paperNoteDirty = false;
     updatePaperNoteCount();
+    renderPaperNotePreview();
     setPaperNoteStatus(note.updated_at ? "已保存" : "空白笔记");
   } catch (error) {
     setPaperNoteStatus("读取失败", true);
@@ -703,10 +719,13 @@ async function openPaperNoteDrawer() {
   if (state.paperNoteLoadedFor !== state.paperId) await loadPaperNote();
   if (state.paperNoteLoadedFor !== state.paperId) return;
   const drawer = $("paper-note-drawer");
+  syncPaperNoteDrawerBounds();
   drawer.classList.add("is-open");
   drawer.setAttribute("aria-hidden", "false");
   $("paper-note-button").classList.add("is-active");
-  window.setTimeout(() => $("paper-note-input").focus(), 180);
+  window.setTimeout(() => {
+    if (state.paperNoteMode === "source") $("paper-note-input").focus();
+  }, 180);
 }
 
 function closePaperNoteDrawer() {
@@ -733,6 +752,81 @@ function setPaperNoteStatus(message, isError = false) {
   const status = $("paper-note-save-status");
   status.textContent = message;
   status.classList.toggle("is-error", isError);
+}
+
+function setPaperNoteMode(mode) {
+  if (!['source', 'preview'].includes(mode)) return;
+  state.paperNoteMode = mode;
+  const sourceMode = mode === "source";
+  $("paper-note-input").hidden = !sourceMode;
+  $("paper-note-preview").hidden = sourceMode;
+  $("paper-note-toolbar").hidden = !sourceMode;
+  $("paper-note-shortcuts").hidden = !sourceMode;
+  $("paper-note-mode").querySelectorAll("[data-paper-note-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.paperNoteMode === mode);
+  });
+  if (sourceMode) $("paper-note-input").focus();
+  else renderPaperNotePreview();
+}
+
+function renderPaperNotePreview() {
+  const preview = $("paper-note-preview");
+  preview.replaceChildren(renderMarkdown($("paper-note-input").value || "_这篇论文还没有笔记。_"));
+}
+
+function handlePaperNoteShortcut(event) {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  const key = event.key.toLowerCase();
+  let action = "";
+  if (key === "b") action = "bold";
+  else if (key === "i") action = "italic";
+  else if (key === "k") action = "link";
+  else if (event.altKey && key === "1") action = "heading";
+  else if (event.shiftKey && event.code === "Digit8") action = "bullet";
+  else if (event.shiftKey && event.code === "Digit7") action = "ordered";
+  if (!action) return;
+  event.preventDefault();
+  applyMarkdownAction(action);
+}
+
+function applyMarkdownAction(action) {
+  setPaperNoteMode("source");
+  const input = $("paper-note-input");
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const selected = input.value.slice(start, end);
+  const inline = {
+    bold: ["**", "**", "加粗文字"],
+    italic: ["*", "*", "斜体文字"],
+    code: ["`", "`", "代码"],
+    link: ["[", "](https://)", "链接文字"],
+  }[action];
+  if (inline) {
+    const content = selected || inline[2];
+    input.setRangeText(`${inline[0]}${content}${inline[1]}`, start, end, "end");
+    input.setSelectionRange(start + inline[0].length, start + inline[0].length + content.length);
+  } else {
+    const lineStart = input.value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const nextLine = input.value.indexOf("\n", end);
+    const lineEnd = nextLine === -1 ? input.value.length : nextLine;
+    const block = input.value.slice(lineStart, lineEnd);
+    const prefixes = { heading: "# ", quote: "> ", bullet: "- ", ordered: "1. ", task: "- [ ] " };
+    const prefix = prefixes[action];
+    if (!prefix) return;
+    const formatted = block.split("\n").map((line, index) => action === "ordered" ? `${index + 1}. ${line}` : `${prefix}${line}`).join("\n");
+    input.setRangeText(formatted, lineStart, lineEnd, "select");
+  }
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
+}
+
+function syncPaperNoteDrawerBounds() {
+  const reader = document.querySelector(".reader-panel");
+  const drawer = $("paper-note-drawer");
+  if (!reader || !drawer) return;
+  const rect = reader.getBoundingClientRect();
+  drawer.style.setProperty("--paper-note-left", `${Math.max(0, rect.left)}px`);
+  drawer.style.setProperty("--paper-note-width", `${Math.min(window.innerWidth, rect.width)}px`);
 }
 
 async function fetchResearchJson(url, options = {}) {

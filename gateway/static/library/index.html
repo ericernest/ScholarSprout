@@ -87,6 +87,11 @@
         <footer><button class="dialog-secondary" type="button" data-close-dialog="folder-delete-dialog">取消</button><button class="dialog-danger" type="submit">删除</button></footer>
       </form>
     </dialog>
+    <dialog id="paper-note-dialog" class="paper-note-viewer">
+      <header><div><span>MARKDOWN NOTE</span><h2 id="library-paper-note-title">论文笔记</h2></div><button class="dialog-icon-button" type="button" data-close-dialog="paper-note-dialog">×</button></header>
+      <div id="library-paper-note-content" class="paper-note-viewer-content"><p>正在读取笔记…</p></div>
+      <footer><a id="library-paper-note-edit" href="/app?mode=paper_reading">进入精读页编辑</a><button type="button" data-close-dialog="paper-note-dialog">关闭</button></footer>
+    </dialog>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="/static/library/app.js"></script>
   </body>

@@ -167,6 +167,7 @@ function renderCard(item) {
     actions.append(link(domainWorkspace(item.artifact_id), "进入领域入门  ↗", true));
   } else if (state.view === "paper-readings") {
     actions.append(link(paperWorkspace(item.paper_id, item.reading_session_id), "继续论文精读  ↗", true));
+    actions.append(renderPaperNoteButton(item));
   } else {
     if (item.reading_count) {
       actions.append(link(paperWorkspace(item.paper_id, item.latest_reading_session_id), "继续论文精读  ↗", true));
@@ -182,10 +183,19 @@ function renderCard(item) {
       start.dataset.pdfUrl = paperPdfUrl(item);
       actions.append(start);
     }
-    actions.append(renderPaperControls(item));
+    actions.append(renderPaperNoteButton(item), renderPaperControls(item));
   }
   card.append(actions);
   return card;
+}
+
+function renderPaperNoteButton(item) {
+  const noteButton = element("button", "paper-note-view-button", "查看笔记");
+  noteButton.dataset.action = "view-paper-note";
+  noteButton.dataset.paperId = item.paper_id;
+  noteButton.dataset.paperTitle = item.paper_title || item.title || "论文";
+  noteButton.dataset.canEdit = String(state.view === "paper-readings" || Boolean(item.has_document || item.reading_count));
+  return noteButton;
 }
 
 function renderPaperControls(item) {
@@ -253,6 +263,14 @@ async function handleItemAction(event) {
     });
     return;
   }
+  if (button.dataset.action === "view-paper-note") {
+    await openLibraryPaperNote(
+      button.dataset.paperId,
+      button.dataset.paperTitle,
+      button.dataset.canEdit === "true",
+    );
+    return;
+  }
   const paperId = button.dataset.paperId;
   button.disabled = true;
   try {
@@ -274,6 +292,28 @@ async function handleItemAction(event) {
 function openCard(card) {
   if (!card) return;
   if (card.dataset.href) window.location.href = card.dataset.href;
+}
+
+async function openLibraryPaperNote(paperId, paperTitle, canEdit) {
+  const dialog = document.querySelector("#paper-note-dialog");
+  const content = document.querySelector("#library-paper-note-content");
+  const edit = document.querySelector("#library-paper-note-edit");
+  document.querySelector("#library-paper-note-title").textContent = `${paperTitle || "论文"} · 笔记`;
+  content.replaceChildren(element("p", "paper-note-empty", "正在读取笔记…"));
+  edit.href = paperWorkspace(paperId, "");
+  edit.hidden = !canEdit;
+  dialog.showModal();
+  try {
+    const note = await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`);
+    content.replaceChildren();
+    if (note.content_markdown) {
+      content.append(element("pre", "paper-note-source", note.content_markdown));
+    } else {
+      content.append(element("p", "paper-note-empty", "这篇论文还没有笔记。"));
+    }
+  } catch (error) {
+    content.replaceChildren(element("p", "paper-note-empty is-error", error.message || "笔记读取失败。"));
+  }
 }
 
 function foldersByParent(parentId) {

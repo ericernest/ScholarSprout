@@ -189,6 +189,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn('id="paper-import"', response.text)
         self.assertIn('id="paper-file-button"', response.text)
         self.assertIn('id="reading-filter"', response.text)
+        self.assertIn('id="paper-note-dialog"', response.text)
+        self.assertIn('id="library-paper-note-content"', response.text)
         self.assertIn('id="folder-tree"', response.text)
         self.assertIn('id="folder-form-dialog"', response.text)
         self.assertIn('id="folder-picker-dialog"', response.text)
@@ -203,6 +205,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn("function renderFolderBranch", script)
         self.assertNotIn("window.prompt", script)
         self.assertIn("paper-record-card", script)
+        self.assertIn('dataset.action = "view-paper-note"', script)
+        self.assertIn("function openLibraryPaperNote", script)
 
     def test_library_and_annotation_endpoints(self) -> None:
         with TemporaryDirectory() as directory:

@@ -169,10 +169,13 @@
       <button id="paper-note-drag-handle" class="paper-note-drag-handle" type="button" aria-label="收起论文笔记"><span></span></button>
       <header>
         <div><p class="panel-label">Paper note · Markdown</p><h2 id="paper-note-title">论文笔记</h2></div>
-        <div class="paper-note-actions"><span id="paper-note-save-status">尚未修改</span><button id="paper-note-save-button" class="mini-button is-accent" type="button">保存</button><button id="paper-note-close-button" class="dialog-close" type="button" aria-label="收起论文笔记">×</button></div>
+        <div class="paper-note-actions"><span id="paper-note-save-status">尚未修改</span><div id="paper-note-mode" class="paper-note-mode" role="group" aria-label="笔记显示模式"><button class="is-active" type="button" data-paper-note-mode="source">源码</button><button type="button" data-paper-note-mode="preview">预览</button></div><button id="paper-note-save-button" class="mini-button is-accent" type="button">保存</button><button id="paper-note-close-button" class="dialog-close" type="button" aria-label="收起论文笔记">×</button></div>
       </header>
-      <textarea id="paper-note-input" spellcheck="true" placeholder="# 阅读笔记&#10;&#10;记录核心问题、方法、证据、疑问与后续想法……"></textarea>
-      <footer><span>使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。</span><span id="paper-note-count">0 字</span></footer>
+      <div id="paper-note-toolbar" class="paper-note-toolbar" role="toolbar" aria-label="Markdown 格式工具">
+        <button type="button" data-markdown-action="heading" title="标题（Ctrl+Alt+1）">H1</button><button type="button" data-markdown-action="bold" title="加粗（Ctrl+B）"><strong>B</strong></button><button type="button" data-markdown-action="italic" title="斜体（Ctrl+I）"><em>I</em></button><span></span><button type="button" data-markdown-action="quote" title="引用">❝</button><button type="button" data-markdown-action="bullet" title="无序列表（Ctrl+Shift+8）">• 列表</button><button type="button" data-markdown-action="ordered" title="有序列表（Ctrl+Shift+7）">1. 列表</button><button type="button" data-markdown-action="task" title="任务列表">☐ 任务</button><span></span><button type="button" data-markdown-action="code" title="行内代码">&lt;/&gt;</button><button type="button" data-markdown-action="link" title="链接（Ctrl+K）">链接</button>
+      </div>
+      <div class="paper-note-editor-body"><textarea id="paper-note-input" spellcheck="true" placeholder="# 阅读笔记&#10;&#10;记录核心问题、方法、证据、疑问与后续想法……"></textarea><div id="paper-note-preview" class="paper-note-preview" hidden></div></div>
+      <footer><span id="paper-note-shortcuts">Ctrl+B 加粗 · Ctrl+I 斜体 · Ctrl+K 链接 · Ctrl+S 保存</span><span id="paper-note-count">0 字</span></footer>
     </section>
 
     <div id="fork-modal" class="fork-modal" hidden>

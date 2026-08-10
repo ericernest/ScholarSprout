@@ -82,6 +82,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "paper-note-drawer",
             "paper-note-input",
             "paper-note-save-button",
+            "paper-note-toolbar",
+            "paper-note-mode",
+            "paper-note-preview",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
@@ -97,6 +100,15 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function savePaperNote", javascript)
         self.assertIn("content_markdown", javascript)
         self.assertIn(".paper-note-drawer.is-open", styles)
+        self.assertIn("function applyMarkdownAction", javascript)
+        self.assertIn("function handlePaperNoteShortcut", javascript)
+        self.assertIn("function syncPaperNoteDrawerBounds", javascript)
+        self.assertIn("--paper-note-left", styles)
+        self.assertIn('data-paper-note-mode="source"', (FRONTEND / "index.html").read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。",
+            (FRONTEND / "index.html").read_text(encoding="utf-8"),
+        )
 
     def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:
         html = (STATIC / "chat.html").read_text(encoding="utf-8")
