@@ -21,6 +21,7 @@ from handlers.domain_onboarding.schemas import (
     DomainOnboardingRequest,
     GenerationResult,
     ModelCallStats,
+    PaperSearchQuery,
     PlanningResult,
     RetrievalResult,
     RetrievalStats,
@@ -79,6 +80,24 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_retrieved_papers_are_annotated_with_query_role_and_path(self) -> None:
+        paper = make_candidates(1)[0].model_copy(
+            update={"matched_queries": ["RAG survey"]}
+        )
+        annotated = DomainOnboardingPipeline._annotate_candidate_query_hints(
+            [paper],
+            [
+                PaperSearchQuery(
+                    query="RAG survey",
+                    role_hint="survey",
+                    path_id="foundations",
+                )
+            ],
+        )
+
+        self.assertEqual(annotated[0].matched_role_hints, ["survey"])
+        self.assertEqual(annotated[0].matched_path_hints, ["foundations"])
+
     def test_stage_planning_json_failure_falls_back_to_standard_generation(self) -> None:
         config = DomainOnboardingConfig(staged_development_enabled=True)
         delegate = StructuredOnboardingGenerator(
@@ -331,6 +350,12 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertGreater(trace.retrieved_paper_count, 0)
         self.assertGreater(trace.selected_paper_count, 0)
+        self.assertTrue(trace.ranking_role_candidate_counts)
+        self.assertTrue(trace.ranking_selected_role_counts)
+        self.assertEqual(
+            result.output.reproducibility["ranking_selected_role_counts"],
+            trace.ranking_selected_role_counts,
+        )
         self.assertGreater(trace.supplemental_query_count, 0)
         self.assertEqual(
             trace.search_query_count,

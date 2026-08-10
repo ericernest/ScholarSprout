@@ -54,6 +54,16 @@ class PlannerTests(unittest.TestCase):
             "ARXIV:2310.11511",
         )
         self.assertIn("ARXIV:2309.15217", plan.search_queries)
+        self.assertEqual(
+            plan.search_queries,
+            [query.query for query in plan.paper_queries],
+        )
+        self.assertTrue(
+            set(planner.config.ranking_required_roles).issubset(
+                {query.role_hint for query in plan.paper_queries}
+            )
+        )
+        self.assertTrue(all(query.path_id for query in plan.paper_queries))
         self.assertEqual(model.calls[0]["timeout"], 110.0)
         user_payload = model.calls[0]["messages"][1]["content"]
         self.assertNotIn("learner_profile", user_payload)
@@ -78,6 +88,7 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(any("graph neural networks" in query for query in plan.search_queries))
         self.assertEqual(plan.translated_domain, "graph neural networks")
         self.assertIn("GNN", plan.expanded_terms)
+        self.assertTrue(all(query.path_id for query in plan.paper_queries))
         self.assertEqual(result.stats.model_calls, 1)
         self.assertEqual(result.stats.total_tokens, 50)
 
@@ -345,7 +356,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(len(result.papers), 1)
         self.assertTrue(result.stats.errors)
 
-    def test_composite_caps_queries_sent_to_each_source(self) -> None:
+    def test_composite_caps_and_rotates_queries_across_sources(self) -> None:
         observed: list[list[str]] = []
 
         class Working:
@@ -359,7 +370,8 @@ class RetrievalTests(unittest.TestCase):
         ).search(["q1", "q2", "q3", "q4"], limit_per_query=1)
 
         self.assertTrue(result.papers)
-        self.assertEqual(observed, [["q1", "q2"], ["q1", "q2"]])
+        self.assertCountEqual(observed, [["q1", "q2"], ["q3", "q4"]])
+        self.assertEqual({query for batch in observed for query in batch}, {"q1", "q2", "q3", "q4"})
 
 
 class RankingTests(unittest.TestCase):
@@ -373,6 +385,27 @@ class RankingTests(unittest.TestCase):
         titles = [paper.title for paper in result.papers]
         self.assertEqual(titles.count(papers[0].title), 1)
         self.assertEqual(result.stats.deduplicated_count, 3)
+
+    def test_deduplication_merges_query_role_and_path_hints(self) -> None:
+        paper = make_candidates(1)[0].model_copy(
+            update={
+                "matched_role_hints": ["survey"],
+                "matched_path_hints": ["foundations"],
+            }
+        )
+        duplicate = paper.model_copy(
+            update={
+                "paper_id": "duplicate-id",
+                "matched_role_hints": ["method"],
+                "matched_path_hints": ["methods"],
+            }
+        )
+
+        merged = self.ranker._deduplicate([paper, duplicate])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(set(merged[0].matched_role_hints), {"survey", "method"})
+        self.assertEqual(set(merged[0].matched_path_hints), {"foundations", "methods"})
 
     def test_invalid_url_is_filtered(self) -> None:
         invalid = PaperCandidate(
@@ -522,6 +555,51 @@ class RankingTests(unittest.TestCase):
             result.stats.candidate_source_counts,
             {"source_a": 2, "source_b": 2, "source_c": 2},
         )
+
+    def test_candidate_limit_preserves_each_available_query_role(self) -> None:
+        ranker = WeightedPaperRanker(
+            DomainOnboardingConfig(candidate_paper_limit=5, selected_paper_limit=5)
+        )
+        papers = [
+            PaperCandidate(
+                paper_id=f"{role}-{index}",
+                title=f"RAG {role} paper {index}",
+                abstract="retrieval augmented generation",
+                year=2024,
+                url=f"https://example.org/{role}/{index}",
+                source="one_source",
+                matched_role_hints=[role],
+            )
+            for role, count in (
+                ("survey", 8),
+                ("foundational", 1),
+                ("method", 1),
+                ("evaluation", 1),
+                ("frontier", 1),
+            )
+            for index in range(count)
+        ]
+
+        limited = ranker._limit_candidates_by_source(papers, 5)
+
+        self.assertEqual(
+            {paper.matched_role_hints[0] for paper in limited},
+            {"survey", "foundational", "method", "evaluation", "frontier"},
+        )
+
+    def test_role_hint_recovers_foundational_role_without_citation_count(self) -> None:
+        paper = PaperCandidate(
+            paper_id="hinted-foundation",
+            title="Early Retrieval Augmentation Architecture",
+            abstract="retrieval augmented generation",
+            year=2020,
+            url="https://example.org/hinted-foundation",
+            source="test",
+            citation_count=None,
+            matched_role_hints=["foundational"],
+        )
+
+        self.assertEqual(self.ranker._classify_role(paper), "foundational")
 
     def test_source_specific_identity_mismatch_is_filtered(self) -> None:
         papers = [

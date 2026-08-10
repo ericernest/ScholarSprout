@@ -364,7 +364,10 @@ class MMRRankingTests(unittest.TestCase):
             ["primary", "evaluation"],
         )
         self.assertEqual(set(result.stats.mmr_scores), {"primary", "evaluation"})
-        self.assertEqual(result.stats.ranking_strategy, "per_path_rrf_then_global_mmr")
+        self.assertEqual(
+            result.stats.ranking_strategy,
+            "role_stratified_per_path_rrf_then_global_mmr",
+        )
         self.assertEqual(
             set(result.stats.per_path_candidate_counts),
             {"path-1", "path-2", "path-3"},

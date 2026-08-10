@@ -39,6 +39,8 @@ from .schemas import (
     DomainOnboardingRequest,
     FinalQualitySummary,
     ModelCallStats,
+    PaperCandidate,
+    PaperSearchQuery,
     PipelineResult,
     QualityAttempt,
     RankingStats,
@@ -172,7 +174,10 @@ class DomainOnboardingPipeline:
                 self._record_retrieval_stats(trace, error.stats)
                 return self._result(status="retrieval_failed", query=request.query, error=str(error))
 
-            candidates = retrieval_result.papers
+            candidates = self._annotate_candidate_query_hints(
+                retrieval_result.papers,
+                plan.paper_queries,
+            )
             trace.retrieved_paper_count = len(candidates)
             self._record_retrieval_stats(trace, retrieval_result.stats)
             ranking_result, trace.ranking_duration_ms = context.call(
@@ -313,6 +318,8 @@ class DomainOnboardingPipeline:
                     "ranking_strategy": trace.ranking_strategy,
                     "ranking_path_candidate_counts": trace.ranking_path_candidate_counts,
                     "ranking_selected_path_counts": trace.ranking_selected_path_counts,
+                    "ranking_role_candidate_counts": trace.ranking_role_candidate_counts,
+                    "ranking_selected_role_counts": trace.ranking_selected_role_counts,
                     "canonical_registry_version": getattr(
                         getattr(self.ranker, "canonical_registry", None),
                         "version",
@@ -685,7 +692,22 @@ class DomainOnboardingPipeline:
             trace.retrieval_duration_ms = context.stage_durations_ms.get("retrieval", 0.0)
             self._record_retrieval_stats(trace, error.stats, accumulate=True)
             return ranked
-        extra = retrieval_result.papers
+        supplemental_specs = [
+            PaperSearchQuery(
+                query=query,
+                role_hint=role,
+                path_id="",
+                priority=1,
+            )
+            for gap in gaps
+            for role in gap.missing_roles
+            for query in gap.supplemental_queries
+            if query.strip()
+        ]
+        extra = self._annotate_candidate_query_hints(
+            retrieval_result.papers,
+            supplemental_specs,
+        )
         trace.retrieval_duration_ms += duration
         self._record_retrieval_stats(trace, retrieval_result.stats, accumulate=True)
         trace.search_query_count += len(queries)
@@ -706,6 +728,50 @@ class DomainOnboardingPipeline:
         trace.verified_paper_count = max(0, trace.deduplicated_paper_count - trace.invalid_paper_count)
         trace.selected_paper_count = len(reranked)
         return reranked or ranked
+
+    @staticmethod
+    def _annotate_candidate_query_hints(
+        papers: list[PaperCandidate],
+        query_specs: list[PaperSearchQuery],
+    ) -> list[PaperCandidate]:
+        specs_by_query = {spec.query: spec for spec in query_specs}
+        annotated: list[PaperCandidate] = []
+        for paper in papers:
+            matched_specs = [
+                specs_by_query[query]
+                for query in paper.matched_queries
+                if query in specs_by_query
+            ]
+            if not matched_specs:
+                annotated.append(paper)
+                continue
+            annotated.append(
+                paper.model_copy(
+                    update={
+                        "matched_role_hints": list(
+                            dict.fromkeys(
+                                [
+                                    *paper.matched_role_hints,
+                                    *(spec.role_hint for spec in matched_specs),
+                                ]
+                            )
+                        ),
+                        "matched_path_hints": list(
+                            dict.fromkeys(
+                                [
+                                    *paper.matched_path_hints,
+                                    *(
+                                        spec.path_id
+                                        for spec in matched_specs
+                                        if spec.path_id
+                                    ),
+                                ]
+                            )
+                        ),
+                    }
+                )
+            )
+        return annotated
 
     def _research_development_stages(
         self,
@@ -954,6 +1020,8 @@ class DomainOnboardingPipeline:
         trace.ranking_strategy = stats.ranking_strategy
         trace.ranking_path_candidate_counts = dict(stats.per_path_candidate_counts)
         trace.ranking_selected_path_counts = dict(stats.selected_path_counts)
+        trace.ranking_role_candidate_counts = dict(stats.per_role_candidate_counts)
+        trace.ranking_selected_role_counts = dict(stats.selected_role_counts)
         trace.low_relevance_filtered_count = stats.low_relevance_filtered_count
 
     def _record_retrieval_stats(

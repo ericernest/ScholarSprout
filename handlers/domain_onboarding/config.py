@@ -87,6 +87,7 @@ class DomainOnboardingConfig(BaseModel):
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
     ranking_path_fusion_weight: float = Field(default=0.20, ge=0.0, le=0.5)
     ranking_path_pool_multiplier: int = Field(default=2, ge=1, le=5)
+    ranking_role_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_rrf_k: int = Field(default=60, ge=1, le=200)
     ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "application", "frontier"]] = Field(
         default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]

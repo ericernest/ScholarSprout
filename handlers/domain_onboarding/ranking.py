@@ -247,8 +247,16 @@ class WeightedPaperRanker:
         if len(abstract_ready) >= self.config.ranking_min_abstract_candidates:
             low_relevance_filtered_count += len(ranked) - len(abstract_ready)
             ranked = abstract_ready
-        selected, mmr_scores = self._select_mmr(
+        per_role_candidate_counts = {
+            role: sum(paper.paper_role == role for paper in ranked)
+            for role in self.config.ranking_required_roles
+        }
+        role_balanced_pool = self._build_role_balanced_pool(
             ranked,
+            min(limit, self.config.selected_paper_limit),
+        )
+        selected, mmr_scores = self._select_mmr(
+            role_balanced_pool,
             vector_by_id,
             min(limit, self.config.selected_paper_limit),
         )
@@ -274,9 +282,14 @@ class WeightedPaperRanker:
                     for role in self.config.ranking_required_roles
                     if role not in {paper.paper_role for paper in selected}
                 ],
-                ranking_strategy="per_path_rrf_then_global_mmr",
+                ranking_strategy="role_stratified_per_path_rrf_then_global_mmr",
                 per_path_candidate_counts=per_path_candidate_counts,
                 selected_path_counts=selected_path_counts,
+                per_role_candidate_counts=per_role_candidate_counts,
+                selected_role_counts={
+                    role: sum(paper.paper_role == role for paper in selected)
+                    for role in sorted({paper.paper_role for paper in selected})
+                },
             ),
         )
 
@@ -299,28 +312,48 @@ class WeightedPaperRanker:
     def _vectorizer_name(vectorizer: TextVectorizer) -> str:
         return str(getattr(vectorizer, "name", type(vectorizer).__name__)).strip().lower()
 
-    @staticmethod
     def _limit_candidates_by_source(
+        self,
         papers: list[PaperCandidate],
         limit: int,
     ) -> list[PaperCandidate]:
-        """在候选上限内轮询各来源，同时保留每个来源内部的原始顺序。"""
+        """在候选上限内同时轮询角色桶与来源，避免早期查询挤占候选池。"""
         if limit <= 0:
             return []
-        by_source: dict[str, list[PaperCandidate]] = {}
+        role_order: list[PaperRole] = [
+            *self.config.ranking_required_roles,
+            "application",
+            "other",
+        ]
+        by_role_source: dict[PaperRole, dict[str, list[PaperCandidate]]] = {}
         for paper in papers:
-            by_source.setdefault(paper.source, []).append(paper)
-        offsets = {source: 0 for source in by_source}
+            role = next(
+                (
+                    candidate
+                    for candidate in role_order
+                    if candidate in paper.matched_role_hints
+                ),
+                "other",
+            )
+            by_role_source.setdefault(role, {}).setdefault(paper.source, []).append(paper)
+        offsets = {
+            (role, source): 0
+            for role, sources in by_role_source.items()
+            for source in sources
+        }
         limited: list[PaperCandidate] = []
         while len(limited) < limit:
             added = False
-            for source, batch in by_source.items():
-                offset = offsets[source]
-                if offset >= len(batch):
-                    continue
-                limited.append(batch[offset])
-                offsets[source] = offset + 1
-                added = True
+            for role in role_order:
+                for source, batch in by_role_source.get(role, {}).items():
+                    offset = offsets[(role, source)]
+                    if offset >= len(batch):
+                        continue
+                    limited.append(batch[offset])
+                    offsets[(role, source)] = offset + 1
+                    added = True
+                    if len(limited) >= limit:
+                        break
                 if len(limited) >= limit:
                     break
             if not added:
@@ -345,6 +378,16 @@ class WeightedPaperRanker:
             else:
                 existing = merged[canonical]
                 existing.matched_queries = list(dict.fromkeys([*existing.matched_queries, *paper.matched_queries]))
+                existing.matched_role_hints = list(
+                    dict.fromkeys(
+                        [*existing.matched_role_hints, *paper.matched_role_hints]
+                    )
+                )
+                existing.matched_path_hints = list(
+                    dict.fromkeys(
+                        [*existing.matched_path_hints, *paper.matched_path_hints]
+                    )
+                )
                 if (paper.citation_count or 0) > (existing.citation_count or 0):
                     existing.citation_count = paper.citation_count
                 if not existing.abstract and paper.abstract:
@@ -410,8 +453,6 @@ class WeightedPaperRanker:
             title,
         ):
             return "survey"
-        if re.search(r"benchmark|evaluation|evaluating|dataset|评测", title):
-            return "evaluation"
         if re.search(
             r"medical|imaging|remote sensing|segmentation|detection|forecasting|"
             r"clinical|finance|industrial|application|legal|litigation|ehr|"
@@ -419,15 +460,55 @@ class WeightedPaperRanker:
             text,
         ):
             return "application"
+        if re.search(r"benchmark|evaluation|evaluating|dataset|metrics?|评测", title):
+            return "evaluation"
         year = paper.year or 0
         current = datetime.now(timezone.utc).year
+        if "foundational" in paper.matched_role_hints and year <= current - 3:
+            return "foundational"
         if year and year <= current - 8 and (paper.citation_count or 0) >= 100:
             return "foundational"
+        if "frontier" in paper.matched_role_hints and year >= current - 2:
+            return "frontier"
+        if "evaluation" in paper.matched_role_hints and re.search(
+            r"benchmark|evaluation|evaluating|dataset|metrics?|评测",
+            text,
+        ):
+            return "evaluation"
+        if "method" in paper.matched_role_hints:
+            return "method"
         if re.search(r"method|model|framework|architecture|algorithm", text):
             return "method"
         if year >= current - 2:
             return "frontier"
         return "other"
+
+    def _build_role_balanced_pool(
+        self,
+        ranked: list[RankedPaper],
+        limit: int,
+    ) -> list[RankedPaper]:
+        if limit <= 0 or len(ranked) <= limit:
+            return ranked
+        available_roles = [
+            role
+            for role in self.config.ranking_required_roles
+            if any(paper.paper_role == role for paper in ranked)
+        ]
+        if not available_roles:
+            return ranked
+        per_role_limit = max(
+            1,
+            math.ceil(limit / len(available_roles))
+            * self.config.ranking_role_pool_multiplier,
+        )
+        pool_ids = {paper.paper_id for paper in ranked[:limit]}
+        for role in available_roles:
+            role_ids = [
+                paper.paper_id for paper in ranked if paper.paper_role == role
+            ][:per_role_limit]
+            pool_ids.update(role_ids)
+        return [paper for paper in ranked if paper.paper_id in pool_ids]
 
     @staticmethod
     def _reading_priority(role: PaperRole, is_canonical: bool) -> ReadingPriority:

@@ -17,6 +17,8 @@ from .schemas import (
     LearnerProfile,
     ModelCallStats,
     PlanningResult,
+    PaperRole,
+    PaperSearchQuery,
     ResearchPerspective,
 )
 
@@ -62,6 +64,15 @@ _DOMAIN_EXPANSIONS = {
 
 
 class StormLitePlanner:
+    role_query_terms: dict[PaperRole, str] = {
+        "survey": "survey systematic review overview",
+        "foundational": "foundational seminal early work",
+        "method": "methods architectures algorithms framework",
+        "evaluation": "benchmark evaluation dataset metrics",
+        "frontier": "recent advances open challenges 2025 2026",
+        "application": "applications case study",
+        "other": "research papers",
+    }
     def __init__(self, model: Any, config: DomainOnboardingConfig):
         self.model = model
         self.config = config
@@ -222,28 +233,119 @@ class StormLitePlanner:
                     if index < len(templates)
                     else f'"{english}" {perspective.name} research'
                 ]
-        plan.search_queries = self._with_canonical_query(plan)
+        plan.paper_queries = self._build_role_queries(plan, english)
+        plan.search_queries = [query.query for query in plan.paper_queries]
         return DomainResearchPlan.model_validate(plan.model_dump())
 
-    def _with_canonical_query(self, plan: DomainResearchPlan) -> list[str]:
+    def _build_role_queries(
+        self,
+        plan: DomainResearchPlan,
+        english: str,
+    ) -> list[PaperSearchQuery]:
+        path_ids = [perspective.path_id for perspective in plan.perspectives]
+        role_paths = {
+            "survey": path_ids[0] if path_ids else "foundations",
+            "foundational": path_ids[0] if path_ids else "foundations",
+            "method": path_ids[1] if len(path_ids) > 1 else "methods",
+            "evaluation": path_ids[2] if len(path_ids) > 2 else "evaluation-frontier",
+            "frontier": path_ids[2] if len(path_ids) > 2 else "evaluation-frontier",
+            "application": path_ids[-1] if path_ids else "applications",
+            "other": "",
+        }
         specs = self.canonical_registry.specs(plan.normalized_domain)
         preferred_roles = ["foundational", "survey", "method", "evaluation"]
         ordered = sorted(
             specs,
             key=lambda spec: preferred_roles.index(spec.role) if spec.role in preferred_roles else len(preferred_roles),
         )
-        exact = [
-            f"ARXIV:{spec.arxiv_id}" if spec.arxiv_id else f'"{spec.title}"'
-            for spec in ordered
-        ]
-        path_queries: list[str] = []
-        max_queries = max((len(path.search_queries) for path in plan.perspectives), default=0)
-        for query_index in range(max_queries):
-            path_queries.extend(
-                path.search_queries[query_index]
-                for path in plan.perspectives
-                if query_index < len(path.search_queries)
+        canonical_queries: list[PaperSearchQuery] = []
+        for spec in ordered:
+            canonical_queries.append(
+                PaperSearchQuery(
+                    query=(
+                        f"ARXIV:{spec.arxiv_id}"
+                        if spec.arxiv_id
+                        else f'"{spec.title}"'
+                    ),
+                    role_hint=spec.role,
+                    path_id=role_paths.get(spec.role, ""),
+                    priority=1,
+                )
             )
-        return list(dict.fromkeys([*exact, *path_queries, *plan.search_queries]))[
-            : self.config.search_queries_limit
+
+        perspective_defaults: list[PaperRole] = [
+            "survey",
+            "method",
+            "evaluation",
         ]
+        planned_queries: list[PaperSearchQuery] = []
+        for index, perspective in enumerate(plan.perspectives):
+            default_role = perspective_defaults[min(index, len(perspective_defaults) - 1)]
+            for query in perspective.search_queries:
+                role = self._infer_query_role(query, default=default_role)
+                planned_queries.append(
+                    PaperSearchQuery(
+                        query=query,
+                        role_hint=role,
+                        path_id=perspective.path_id,
+                        priority=2,
+                    )
+                )
+        for query in plan.search_queries:
+            role = self._infer_query_role(query, default="method")
+            planned_queries.append(
+                PaperSearchQuery(
+                    query=query,
+                    role_hint=role,
+                    path_id=role_paths.get(role, ""),
+                    priority=2,
+                )
+            )
+
+        required_roles = list(self.config.ranking_required_roles)
+        selected: list[PaperSearchQuery] = []
+        for candidate in canonical_queries:
+            if candidate.role_hint in required_roles and not any(
+                item.role_hint == candidate.role_hint for item in selected
+            ):
+                selected.append(candidate)
+        for role in required_roles:
+            if any(item.role_hint == role for item in selected):
+                continue
+            planned = next(
+                (item for item in planned_queries if item.role_hint == role),
+                None,
+            )
+            selected.append(
+                planned
+                or PaperSearchQuery(
+                    query=f'"{english}" {self.role_query_terms[role]}',
+                    role_hint=role,
+                    path_id=role_paths.get(role, ""),
+                    priority=3,
+                )
+            )
+
+        extras = [*canonical_queries, *planned_queries]
+        for candidate in extras:
+            if len(selected) >= self.config.search_queries_limit:
+                break
+            if any(item.query.casefold() == candidate.query.casefold() for item in selected):
+                continue
+            selected.append(candidate)
+        return selected[: self.config.search_queries_limit]
+
+    @staticmethod
+    def _infer_query_role(query: str, *, default: PaperRole) -> PaperRole:
+        lowered = query.lower()
+        if re.search(r"survey|systematic review|overview", lowered):
+            return "survey"
+        if re.search(r"foundational|seminal|early work|fundamentals", lowered):
+            return "foundational"
+        if re.search(r"benchmark|evaluation|dataset|metric", lowered):
+            return "evaluation"
+        if re.search(r"recent|advance|frontier|open challenge|state of the art", lowered):
+            return "frontier"
+        if re.search(r"method|model|architecture|algorithm|framework", lowered):
+            return "method"
+        return default
