@@ -108,7 +108,7 @@ class DomainOnboardingConfig(BaseModel):
     generation_development_stage_max_tokens: int = Field(
         default=2600, ge=800, le=3000
     )
-    development_stage_planning_max_tokens: int = Field(default=550, ge=400, le=2400)
+    development_stage_planning_max_tokens: int = Field(default=1400, ge=400, le=2400)
     development_stage_planning_timeout_seconds: float = Field(
         default=65.0, gt=0.0, le=120.0
     )

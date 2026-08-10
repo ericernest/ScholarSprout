@@ -18,6 +18,19 @@ class StructuredLLMError(RuntimeError):
         self.stats = stats
 
 
+def _get_finish_reason(response: Any) -> str:
+    choices = getattr(response, "choices", None) or (
+        response.get("choices", []) if isinstance(response, dict) else []
+    )
+    if not choices:
+        return ""
+    choice = choices[0]
+    reason = getattr(choice, "finish_reason", None) or (
+        choice.get("finish_reason") if isinstance(choice, dict) else None
+    )
+    return str(reason or "")
+
+
 def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     text = raw_text.strip()
     if not text:
@@ -101,6 +114,7 @@ def invoke_json(
             pending_chars = 0
             last_emitted_at = perf_counter()
             usage = None
+            finish_reason = ""
 
             def flush_delta(*, force: bool = False) -> None:
                 nonlocal pending_chars, last_emitted_at
@@ -135,6 +149,11 @@ def invoke_json(
                     if not choices:
                         continue
                     choice = choices[0]
+                    chunk_finish_reason = getattr(choice, "finish_reason", None) or (
+                        choice.get("finish_reason") if isinstance(choice, dict) else None
+                    )
+                    if chunk_finish_reason:
+                        finish_reason = str(chunk_finish_reason)
                     delta = getattr(choice, "delta", None) or (
                         choice.get("delta", {}) if isinstance(choice, dict) else {}
                     )
@@ -155,7 +174,12 @@ def invoke_json(
                     if callable(close):
                         close()
             response = {
-                "choices": [{"message": {"role": "assistant", "content": "".join(parts)}}],
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "".join(parts)},
+                        "finish_reason": finish_reason,
+                    }
+                ],
                 "usage": usage,
             }
         else:
@@ -186,5 +210,11 @@ def invoke_json(
     content = get_message_content(get_response_message(response))
     parsed = parse_json_object(content)
     if parsed is None:
+        if _get_finish_reason(response) == "length":
+            token_limit = max_tokens if max_tokens is not None else "the configured limit"
+            raise StructuredLLMError(
+                f"LLM JSON response was truncated at max_tokens={token_limit}",
+                stats,
+            )
         raise StructuredLLMError("LLM did not return a JSON object", stats)
     return parsed, stats
