@@ -313,7 +313,6 @@ class MMRRankingTests(unittest.TestCase):
             candidate_paper_limit=3,
             selected_paper_limit=2,
             relevance_weight=1.0,
-            citation_weight=0.0,
             recency_weight=0.0,
             diversity_weight=0.0,
             mmr_lambda=0.4,

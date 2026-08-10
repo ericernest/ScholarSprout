@@ -337,7 +337,6 @@ class PaperCandidate(OnboardingModel):
 class RankedPaper(PaperCandidate):
     relevance_score: float = Field(ge=0.0, le=1.0)
     context_score: float = Field(default=1.0, ge=0.0, le=1.0)
-    citation_score: float = Field(ge=0.0, le=1.0)
     recency_score: float = Field(ge=0.0, le=1.0)
     diversity_score: float = Field(ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
@@ -368,7 +367,6 @@ class SelectedPaper(OnboardingModel):
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
     context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    citation_score: float = Field(default=0.0, ge=0.0, le=1.0)
     recency_score: float = Field(default=0.0, ge=0.0, le=1.0)
     diversity_score: float = Field(default=0.0, ge=0.0, le=1.0)
     contribution: str = ""

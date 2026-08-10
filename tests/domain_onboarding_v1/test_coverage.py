@@ -17,7 +17,6 @@ def ranked_paper(paper_id: str, title: str, abstract: str, role: str) -> RankedP
         url=f"https://example.org/{paper_id}",
         source="test",
         relevance_score=0.8,
-        citation_score=0.5,
         recency_score=0.5,
         diversity_score=0.5,
         final_score=0.7,
