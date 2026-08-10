@@ -103,6 +103,23 @@ class ModelRoutingTests(unittest.TestCase):
         finally:
             pipeline.close()
 
+    def test_default_generation_route_does_not_mix_provider_model_ids(self) -> None:
+        class ConfiguredModel(FakeJSONModel):
+            class Config:
+                model_name = "deepseek-v4-flash"
+
+            config = Config()
+
+        with patch.dict("os.environ", {}, clear=True):
+            pipeline = create_default_pipeline(ConfiguredModel([{"ok": True}]))
+        try:
+            self.assertEqual(
+                pipeline.generator.model.model_names,
+                ["deepseek-v4-flash", "deepseek-v4-pro"],
+            )
+        finally:
+            pipeline.close()
+
     def test_caller_validation_failure_uses_next_model(self) -> None:
         delegate = FakeJSONModel([{"wrong": True}, {"learning_path": []}])
         model = RoutedChatModel(
