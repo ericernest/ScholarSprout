@@ -79,11 +79,9 @@ class DomainOnboardingConfig(BaseModel):
     generation_timeout_seconds: float = Field(default=450.0, gt=0.0, le=480.0)
     evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
-    relevance_weight: float = Field(default=0.55, ge=0.0, le=1.0)
-    citation_weight: float = Field(default=0.20, ge=0.0, le=1.0)
-    citation_saturation_count: int = Field(default=1000, ge=1, le=1_000_000)
+    relevance_weight: float = Field(default=0.70, ge=0.0, le=1.0)
     ranking_missing_abstract_penalty: float = Field(default=0.80, ge=0.0, le=1.0)
-    recency_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    recency_weight: float = Field(default=0.20, ge=0.0, le=1.0)
     diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
@@ -160,7 +158,6 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError("selected_paper_limit must not exceed candidate_paper_limit")
         total = (
             self.relevance_weight
-            + self.citation_weight
             + self.recency_weight
             + self.diversity_weight
         )
