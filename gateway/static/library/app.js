@@ -5,7 +5,12 @@ const VIEWS = {
   papers: { title: "论文管理", kicker: "PAPER LIBRARY", description: "收藏、标记阅读状态，并管理论文上的高亮与注释。", endpoint: "/api/research/papers", empty: "在全部论文中选择需要长期管理的论文。" },
 };
 
-const state = { view: new URLSearchParams(location.search).get("view") || "conversations", search: "", allPapers: false, items: [], folders: [], folderId: "" };
+const state = {
+  view: new URLSearchParams(location.search).get("view") || "conversations",
+  search: "", allPapers: false, items: [], folders: [], folderId: "",
+  expandedFolders: new Set(), importFolderId: "", folderForm: null, folderPicker: null,
+  deleteFolderId: "", counts: {},
+};
 if (!(state.view in VIEWS)) state.view = "conversations";
 const items = document.querySelector("#items");
 let searchTimer = null;
@@ -26,13 +31,16 @@ function boot() {
     state.allPapers = event.target.checked;
     loadItems();
   });
-  document.querySelector("#folder-filter").addEventListener("change", (event) => {
-    state.folderId = event.target.value;
-    loadItems();
-  });
-  document.querySelector("#create-folder-button").addEventListener("click", createFolder);
+  document.querySelector("#create-folder-button").addEventListener("click", () => openFolderForm({ parentId: selectedFolderParent() }));
+  document.querySelector("#folder-root-create").addEventListener("click", () => openFolderForm({ parentId: null }));
+  document.querySelector("#folder-tree").addEventListener("click", handleFolderTreeAction);
+  document.querySelector("#import-folder-button").addEventListener("click", () => openFolderPicker({ type: "import", folderId: state.importFolderId }));
   document.querySelector("#paper-import-button").addEventListener("click", importPaper);
   document.querySelector("#detail-close-button").addEventListener("click", () => document.querySelector("#domain-detail-dialog").close());
+  document.querySelector("#folder-form").addEventListener("submit", saveFolderForm);
+  document.querySelector("#folder-picker-form").addEventListener("submit", confirmFolderPicker);
+  document.querySelector("#folder-delete-form").addEventListener("submit", deleteSelectedFolder);
+  document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close()));
   items.addEventListener("click", handleItemAction);
   items.addEventListener("keydown", (event) => {
     if ((event.key === "Enter" || event.key === " ") && event.target.matches(".item-card")) {
@@ -47,10 +55,12 @@ function boot() {
 async function loadCounts() {
   try {
     const counts = await fetchJson("/api/research/summary");
+    state.counts = counts;
     Object.entries(counts).forEach(([key, value]) => {
       const target = document.querySelector(`[data-count="${key}"]`);
       if (target) target.textContent = value;
     });
+    if (state.view === "papers") renderMainFolderTree();
   } catch (error) { toast(error.message, true); }
 }
 
@@ -63,6 +73,8 @@ function setView(view, updateUrl = true) {
   document.querySelector("#view-description").textContent = config.description;
   document.querySelector("#paper-scope").hidden = state.view !== "papers";
   document.querySelector("#paper-import").hidden = state.view !== "papers";
+  document.querySelector("#folder-pane").hidden = state.view !== "papers";
+  document.querySelector("#records-layout").classList.toggle("has-folder-pane", state.view === "papers");
   document.querySelector("#search-input").placeholder = state.view === "papers" ? "搜索标题、作者或摘要" : "搜索标题或内容";
   if (updateUrl) history.replaceState(null, "", `/library?view=${encodeURIComponent(state.view)}`);
   if (state.view === "papers") {
@@ -74,9 +86,9 @@ function setView(view, updateUrl = true) {
 
 async function loadFolders() {
   state.folders = await fetchJson("/api/research/paper-folders");
-  const filter = document.querySelector("#folder-filter");
-  filter.replaceChildren(new Option("全部文件夹", ""));
-  state.folders.forEach((folder) => filter.add(new Option(`${folder.name}（${folder.paper_count}）`, folder.folder_id, false, folder.folder_id === state.folderId)));
+  state.folders.filter((folder) => !folder.parent_folder_id).forEach((folder) => state.expandedFolders.add(folder.folder_id));
+  renderMainFolderTree();
+  syncFolderLabels();
 }
 
 async function loadItems() {
@@ -179,10 +191,16 @@ function renderPaperControls(item) {
   note.dataset.paperNote = item.paper_id;
   note.placeholder = "论文备注（可选）";
   note.value = item.library_note || "";
-  const folder = document.createElement("select");
-  folder.dataset.paperFolder = item.paper_id;
-  folder.add(new Option("未分类", ""));
-  state.folders.forEach((entry) => folder.add(new Option(entry.name, entry.folder_id, false, entry.folder_id === item.folder_id)));
+  const folder = element("button", "folder-choice-button");
+  folder.type = "button";
+  folder.dataset.action = "choose-paper-folder";
+  folder.dataset.paperId = item.paper_id;
+  folder.dataset.currentFolderId = item.folder_id || "";
+  folder.append(
+    element("span", "folder-choice-icon", "◇"),
+    element("span", "folder-choice-label", item.folder_path || item.folder_name || "未分类"),
+    element("span", "folder-choice-chevron", "⌄"),
+  );
   const tags = document.createElement("input");
   tags.dataset.paperTags = item.paper_id;
   tags.placeholder = "标签，用逗号分隔";
@@ -216,13 +234,21 @@ async function handleItemAction(event) {
     await attachManagedPaper(button.dataset.paperId, button.dataset.pdfUrl, button);
     return;
   }
+  if (button.dataset.action === "choose-paper-folder") {
+    openFolderPicker({
+      type: "paper",
+      paperId: button.dataset.paperId,
+      folderId: button.dataset.currentFolderId,
+    });
+    return;
+  }
   const paperId = button.dataset.paperId;
   button.disabled = true;
   try {
     if (button.dataset.action === "save-paper") {
       const readingStatus = document.querySelector(`[data-paper-status="${cssEscape(paperId)}"]`).value;
       const note = document.querySelector(`[data-paper-note="${cssEscape(paperId)}"]`).value.trim();
-      const folderId = document.querySelector(`[data-paper-folder="${cssEscape(paperId)}"]`).value || null;
+      const folderId = document.querySelector(`[data-action="choose-paper-folder"][data-paper-id="${cssEscape(paperId)}"]`).dataset.currentFolderId || null;
       const tags = document.querySelector(`[data-paper-tags="${cssEscape(paperId)}"]`).value.split(/[,，]/).map((value) => value.trim()).filter(Boolean);
       await fetchJson(`/api/research/papers/${encodeURIComponent(paperId)}/library`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reading_status: readingStatus, note, folder_id: folderId, tags }) });
       toast("论文管理信息已保存。");
@@ -297,15 +323,233 @@ function renderRecommendation(paper) {
   return card;
 }
 
-async function createFolder() {
-  const name = window.prompt("文件夹名称");
-  if (!name?.trim()) return;
+function foldersByParent(parentId) {
+  return state.folders
+    .filter((folder) => (folder.parent_folder_id || "") === (parentId || ""))
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+}
+
+function folderById(folderId) {
+  return state.folders.find((folder) => folder.folder_id === folderId) || null;
+}
+
+function folderPath(folderId) {
+  if (!folderId) return "未分类";
+  return folderById(folderId)?.path || folderById(folderId)?.name || "未分类";
+}
+
+function folderSubtreeCount(folderId) {
+  const folder = folderById(folderId);
+  return Number(folder?.paper_count || 0) + foldersByParent(folderId).reduce((sum, child) => sum + folderSubtreeCount(child.folder_id), 0);
+}
+
+function renderMainFolderTree() {
+  const tree = document.querySelector("#folder-tree");
+  tree.replaceChildren();
+  tree.append(renderLibraryRootRow("", "全部论文", Number(state.counts.library_papers || 0), "▱"));
+  tree.append(renderLibraryRootRow("__unfiled__", "未分类", unfiledCount(), "◇"));
+  foldersByParent(null).forEach((folder) => tree.append(renderFolderBranch(folder, 0, { manage: true })));
+  const active = state.folderId ? folderPath(state.folderId) : "全部论文";
+  document.querySelector("#folder-breadcrumb").textContent = active;
+}
+
+function renderLibraryRootRow(folderId, label, count, icon) {
+  const row = element("button", `folder-root-row${state.folderId === folderId ? " is-active" : ""}`);
+  row.type = "button";
+  row.dataset.folderOpen = folderId;
+  row.append(element("span", "folder-row-icon", icon), element("span", "folder-row-name", label), element("b", "folder-row-count", String(count)));
+  return row;
+}
+
+function renderFolderBranch(folder, depth, options = {}) {
+  const branch = element("div", "folder-branch");
+  const children = foldersByParent(folder.folder_id);
+  const expanded = state.expandedFolders.has(folder.folder_id);
+  const row = element("div", `folder-row${state.folderId === folder.folder_id ? " is-active" : ""}`);
+  row.style.setProperty("--folder-depth", String(depth));
+  const toggle = element("button", `folder-toggle${children.length ? "" : " is-empty"}`, children.length ? (expanded ? "⌄" : "›") : "");
+  toggle.type = "button";
+  toggle.dataset.folderToggle = folder.folder_id;
+  const open = element("button", "folder-open");
+  open.type = "button";
+  open.dataset.folderOpen = folder.folder_id;
+  open.append(element("span", "folder-row-icon", expanded ? "◆" : "◇"), element("span", "folder-row-name", folder.name), element("b", "folder-row-count", String(folderSubtreeCount(folder.folder_id))));
+  row.append(toggle, open);
+  if (options.manage) {
+    const actions = element("div", "folder-row-actions");
+    [["new", "＋", "新建子文件夹"], ["edit", "✎", "重命名或移动"], ["delete", "×", "删除文件夹"]].forEach(([action, label, title]) => {
+      const button = element("button", action === "delete" ? "is-danger" : "", label);
+      button.type = "button";
+      button.title = title;
+      button.dataset.folderAction = action;
+      button.dataset.folderId = folder.folder_id;
+      actions.append(button);
+    });
+    row.append(actions);
+  }
+  branch.append(row);
+  if (children.length && expanded) {
+    const childWrap = element("div", "folder-children");
+    children.forEach((child) => childWrap.append(renderFolderBranch(child, depth + 1, options)));
+    branch.append(childWrap);
+  }
+  return branch;
+}
+
+function handleFolderTreeAction(event) {
+  const toggle = event.target.closest("[data-folder-toggle]");
+  if (toggle) {
+    const folderId = toggle.dataset.folderToggle;
+    if (state.expandedFolders.has(folderId)) state.expandedFolders.delete(folderId);
+    else state.expandedFolders.add(folderId);
+    renderMainFolderTree();
+    return;
+  }
+  const action = event.target.closest("[data-folder-action]");
+  if (action) {
+    const folder = folderById(action.dataset.folderId);
+    if (!folder) return;
+    if (action.dataset.folderAction === "new") openFolderForm({ parentId: folder.folder_id });
+    if (action.dataset.folderAction === "edit") openFolderForm({ folderId: folder.folder_id });
+    if (action.dataset.folderAction === "delete") openDeleteFolder(folder.folder_id);
+    return;
+  }
+  const open = event.target.closest("[data-folder-open]");
+  if (open) {
+    state.folderId = open.dataset.folderOpen;
+    renderMainFolderTree();
+    loadItems();
+  }
+}
+
+function selectedFolderParent() {
+  return state.folderId && state.folderId !== "__unfiled__" ? state.folderId : null;
+}
+
+function unfiledCount() {
+  return Number(state.counts.unfiled_papers || 0);
+}
+
+function renderDialogFolderTree(container, selectedId, excludedId = "", includeUnfiled = true) {
+  container.replaceChildren();
+  const root = element("button", `dialog-folder-row${selectedId === "" ? " is-selected" : ""}`);
+  root.type = "button";
+  root.dataset.selectFolder = "";
+  root.append(element("span", "folder-row-icon", includeUnfiled ? "◇" : "▱"), element("span", "folder-row-name", includeUnfiled ? "未分类" : "资料库根目录"));
+  container.append(root);
+  const excluded = new Set(excludedId ? [excludedId, ...folderDescendantIds(excludedId)] : []);
+  function append(parentId, depth) {
+    foldersByParent(parentId).forEach((folder) => {
+      if (excluded.has(folder.folder_id)) return;
+      const row = element("button", `dialog-folder-row${selectedId === folder.folder_id ? " is-selected" : ""}`);
+      row.type = "button";
+      row.style.setProperty("--folder-depth", String(depth));
+      row.dataset.selectFolder = folder.folder_id;
+      row.append(element("span", "folder-row-icon", "◇"), element("span", "folder-row-name", folder.name), element("small", "", String(folderSubtreeCount(folder.folder_id))));
+      container.append(row);
+      append(folder.folder_id, depth + 1);
+    });
+  }
+  append(null, 0);
+  container.onclick = (event) => {
+    const row = event.target.closest("[data-select-folder]");
+    if (!row) return;
+    const value = row.dataset.selectFolder;
+    if (container.id === "folder-parent-tree") state.folderForm.parentId = value || null;
+    else state.folderPicker.folderId = value;
+    renderDialogFolderTree(container, value, excludedId, includeUnfiled);
+  };
+}
+
+function folderDescendantIds(folderId) {
+  const result = [];
+  foldersByParent(folderId).forEach((child) => {
+    result.push(child.folder_id, ...folderDescendantIds(child.folder_id));
+  });
+  return result;
+}
+
+function openFolderForm({ folderId = "", parentId = null } = {}) {
+  const folder = folderById(folderId);
+  state.folderForm = { folderId, parentId: folder ? folder.parent_folder_id : parentId };
+  document.querySelector("#folder-form-title").textContent = folder ? "编辑文件夹" : "新建文件夹";
+  document.querySelector("#folder-form-submit").textContent = folder ? "保存修改" : "创建文件夹";
+  document.querySelector("#folder-name-input").value = folder?.name || "";
+  document.querySelector("#folder-form-error").hidden = true;
+  renderDialogFolderTree(document.querySelector("#folder-parent-tree"), state.folderForm.parentId || "", folderId, false);
+  const dialog = document.querySelector("#folder-form-dialog");
+  dialog.showModal();
+  requestAnimationFrame(() => document.querySelector("#folder-name-input").focus());
+}
+
+async function saveFolderForm(event) {
+  event.preventDefault();
+  const error = document.querySelector("#folder-form-error");
+  const name = document.querySelector("#folder-name-input").value.trim();
+  if (!name) { error.textContent = "请输入文件夹名称。"; error.hidden = false; return; }
+  const submit = document.querySelector("#folder-form-submit");
+  submit.disabled = true;
   try {
-    await fetchJson("/api/research/paper-folders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+    const editing = Boolean(state.folderForm.folderId);
+    const endpoint = editing ? `/api/research/paper-folders/${encodeURIComponent(state.folderForm.folderId)}` : "/api/research/paper-folders";
+    await fetchJson(endpoint, { method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, parent_folder_id: state.folderForm.parentId }) });
+    document.querySelector("#folder-form-dialog").close();
     await loadFolders();
-    renderItems();
-    toast("文件夹已创建。");
+    await loadItems();
+    toast(editing ? "文件夹已更新。" : "文件夹已创建。");
+  } catch (exception) {
+    error.textContent = exception.message;
+    error.hidden = false;
+  } finally { submit.disabled = false; }
+}
+
+function openFolderPicker({ type, paperId = "", folderId = "" }) {
+  state.folderPicker = { type, paperId, folderId: folderId || "" };
+  document.querySelector("#folder-picker-title").textContent = type === "import" ? "选择导入位置" : "选择论文文件夹";
+  document.querySelector("#folder-picker-copy").textContent = type === "import" ? "新导入的论文会直接保存到所选文件夹。" : "选择后保存管理信息即可完成移动。";
+  renderDialogFolderTree(document.querySelector("#folder-picker-tree"), state.folderPicker.folderId, "", true);
+  document.querySelector("#folder-picker-dialog").showModal();
+}
+
+function confirmFolderPicker(event) {
+  event.preventDefault();
+  const folderId = state.folderPicker.folderId || "";
+  if (state.folderPicker.type === "import") {
+    state.importFolderId = folderId;
+    document.querySelector("#import-folder-label").textContent = folderPath(folderId);
+  } else {
+    const button = document.querySelector(`[data-action="choose-paper-folder"][data-paper-id="${cssEscape(state.folderPicker.paperId)}"]`);
+    if (button) {
+      button.dataset.currentFolderId = folderId;
+      button.querySelector(".folder-choice-label").textContent = folderPath(folderId);
+    }
+  }
+  document.querySelector("#folder-picker-dialog").close();
+}
+
+function openDeleteFolder(folderId) {
+  state.deleteFolderId = folderId;
+  document.querySelector("#folder-delete-copy").textContent = `删除“${folderPath(folderId)}”？仅空文件夹可以删除。`;
+  document.querySelector("#folder-delete-dialog").showModal();
+}
+
+async function deleteSelectedFolder(event) {
+  event.preventDefault();
+  try {
+    await fetchJson(`/api/research/paper-folders/${encodeURIComponent(state.deleteFolderId)}`, { method: "DELETE" });
+    if (state.folderId === state.deleteFolderId) state.folderId = "";
+    document.querySelector("#folder-delete-dialog").close();
+    await loadFolders();
+    await loadItems();
+    toast("文件夹已删除。");
   } catch (error) { toast(error.message, true); }
+}
+
+function syncFolderLabels() {
+  document.querySelector("#import-folder-label").textContent = folderPath(state.importFolderId);
+  document.querySelectorAll('[data-action="choose-paper-folder"]').forEach((button) => {
+    button.querySelector(".folder-choice-label").textContent = folderPath(button.dataset.currentFolderId);
+  });
 }
 
 async function importPaper() {
@@ -319,10 +563,17 @@ async function importPaper() {
     const payload = file
       ? { pdf_data: await fileToBase64(file), metadata: { original_filename: file.name, size_bytes: file.size } }
       : { pdf_url: pdfUrl };
-    await uploadPaperPayload(payload);
+    const uploaded = await uploadPaperPayload(payload);
+    if (state.importFolderId) {
+      await fetchJson(`/api/research/papers/${encodeURIComponent(uploaded.paper_id)}/folder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_id: state.importFolderId }),
+      });
+    }
     document.querySelector("#paper-file-input").value = "";
     document.querySelector("#paper-url-input").value = "";
-    await Promise.all([loadCounts(), loadItems()]);
+    await Promise.all([loadCounts(), loadFolders(), loadItems()]);
     toast("论文已添加到论文管理，可直接开始精读。");
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.textContent = "添加到论文管理"; }
@@ -388,7 +639,7 @@ function metaFor(item) {
   if (state.view === "conversations") return [[`${item.message_count} 条消息`], ...(item.modes || []).map((mode) => [modeLabel(mode), true]), item.parent_conversation_id ? ["Fork 会话", true] : null].filter(Boolean);
   if (state.view === "domain-onboardings") return [[stateLabel(item.state)], [`阶段：${item.current_stage}`, true], [`${item.recommendation_count} 篇推荐论文`], item.quality_score != null ? [`质量 ${Math.round(item.quality_score * 100)}%`, true] : null].filter(Boolean);
   if (state.view === "paper-readings") return [[readingState(item.state)], [`${Math.round(Number(item.progress?.percentage || 0))}%`], [`${item.block_count} 个分析块`, true], [`${item.annotation_count} 条标注`, true]];
-  return [[item.in_library ? statusLabel(item.reading_status) : "未加入论文库"], item.folder_name ? [`文件夹：${item.folder_name}`, true] : null, ...(item.tags || []).map((tag) => [`# ${tag}`]), item.publication_year ? [String(item.publication_year), true] : null, [`${item.reading_count} 次精读`], [`${item.annotation_count} 条标注`, true]].filter(Boolean);
+  return [[item.in_library ? statusLabel(item.reading_status) : "未加入论文库"], item.folder_path ? [`文件夹：${item.folder_path}`, true] : null, ...(item.tags || []).map((tag) => [`# ${tag}`]), item.publication_year ? [String(item.publication_year), true] : null, [`${item.reading_count} 次精读`], [`${item.annotation_count} 条标注`, true]].filter(Boolean);
 }
 
 function showSkeletons() { document.querySelector("#empty-state").hidden = true; items.replaceChildren(...[1,2,3].map(() => element("div", "skeleton"))); }

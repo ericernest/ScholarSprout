@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -114,6 +116,39 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(paper["tags"], ["控制", "鲁棒性"])
         self.assertEqual(self.catalog.list_papers(folder_id=folder["folder_id"])[0]["paper_id"], self.paper_id)
 
+    def test_nested_folders_allow_same_name_in_different_branches(self) -> None:
+        project_a = self.catalog.create_folder("项目 A")
+        project_b = self.catalog.create_folder("项目 B")
+        methods_a = self.catalog.create_folder(
+            "方法", parent_folder_id=project_a["folder_id"]
+        )
+        methods_b = self.catalog.create_folder(
+            "方法", parent_folder_id=project_b["folder_id"]
+        )
+        self.catalog.set_library_item(
+            self.paper_id,
+            reading_status="unread",
+            note="",
+            folder_id=methods_a["folder_id"],
+            tags=[],
+        )
+
+        folders = {item["folder_id"]: item for item in self.catalog.list_folders()}
+        subtree = self.catalog.list_papers(folder_id=project_a["folder_id"])
+
+        self.assertEqual(folders[methods_a["folder_id"]]["path"], "项目 A / 方法")
+        self.assertEqual(folders[methods_b["folder_id"]]["path"], "项目 B / 方法")
+        self.assertEqual(subtree[0]["paper_id"], self.paper_id)
+        self.assertEqual(subtree[0]["folder_path"], "项目 A / 方法")
+        with self.assertRaisesRegex(ValueError, "子文件夹"):
+            self.catalog.update_folder(
+                project_a["folder_id"],
+                name="项目 A",
+                parent_folder_id=methods_a["folder_id"],
+            )
+        with self.assertRaisesRegex(ValueError, "不为空"):
+            self.catalog.delete_folder(project_a["folder_id"])
+
 
 class ResearchLibraryApiTests(unittest.TestCase):
     def test_library_page_is_available(self) -> None:
@@ -121,13 +156,17 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("研究资料库", response.text)
         self.assertIn('id="paper-import"', response.text)
-        self.assertIn('id="folder-filter"', response.text)
+        self.assertIn('id="folder-tree"', response.text)
+        self.assertIn('id="folder-form-dialog"', response.text)
+        self.assertIn('id="folder-picker-dialog"', response.text)
         self.assertIn('href="/app?new=1"', response.text)
 
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)
         self.assertIn("function openDomainDetail", script)
         self.assertIn("function attachManagedPaper", script)
+        self.assertIn("function renderFolderBranch", script)
+        self.assertNotIn("window.prompt", script)
         self.assertIn("paper-record-card", script)
 
     def test_library_and_annotation_endpoints(self) -> None:
@@ -187,6 +226,15 @@ class ResearchLibraryApiTests(unittest.TestCase):
             self.assertEqual(listed.json()[0]["folder_name"], "方法论文")
             self.assertEqual(listed.json()[0]["tags"], ["benchmark", "实验"])
 
+            moved = client.patch(
+                f"/api/research/papers/{paper_id}/folder", json={"folder_id": None}
+            )
+            after_move = client.get("/api/research/papers").json()[0]
+            self.assertEqual(moved.status_code, 200)
+            self.assertEqual(after_move["folder_id"], "")
+            self.assertEqual(after_move["library_note"], "先看实验")
+            self.assertEqual(after_move["tags"], ["benchmark", "实验"])
+
     def test_annotation_rejects_page_overflow(self) -> None:
         with TemporaryDirectory() as directory:
             store = LocalResearchStore(Path(directory) / "research.sqlite3")
@@ -203,6 +251,31 @@ class ResearchLibraryApiTests(unittest.TestCase):
                 },
             )
             self.assertEqual(response.status_code, 422)
+
+
+class FolderSchemaMigrationTests(unittest.TestCase):
+    def test_v4_global_folder_names_migrate_to_sibling_uniqueness(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    """CREATE TABLE paper_folders (
+                       folder_id TEXT PRIMARY KEY,
+                       name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                       parent_folder_id TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL,
+                       created_at TEXT NOT NULL,
+                       updated_at TEXT NOT NULL)"""
+                )
+            store = LocalResearchStore(database)
+            store.initialize()
+            catalog = ResearchCatalog(store)
+            left = catalog.create_folder("左侧")
+            right = catalog.create_folder("右侧")
+
+            catalog.create_folder("方法", parent_folder_id=left["folder_id"])
+            catalog.create_folder("方法", parent_folder_id=right["folder_id"])
+
+            self.assertEqual(len(catalog.list_folders()), 4)
 
 
 if __name__ == "__main__":

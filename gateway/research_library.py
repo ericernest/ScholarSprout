@@ -27,6 +27,15 @@ class FolderCreate(BaseModel):
     parent_folder_id: str | None = Field(default=None, max_length=180)
 
 
+class FolderUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    parent_folder_id: str | None = Field(default=None, max_length=180)
+
+
+class PaperFolderAssignment(BaseModel):
+    folder_id: str | None = Field(default=None, max_length=180)
+
+
 class PdfRect(BaseModel):
     left: float = Field(ge=0, le=1)
     top: float = Field(ge=0, le=1)
@@ -114,17 +123,46 @@ def paper_folders(request: Request) -> list[dict]:
 
 @router.post("/paper-folders", status_code=201)
 def create_paper_folder(payload: FolderCreate, request: Request) -> dict:
+    if not payload.name.strip():
+        raise HTTPException(status_code=422, detail="文件夹名称不能为空。")
     try:
         return _catalog(request).create_folder(
             payload.name.strip(), parent_folder_id=payload.parent_folder_id
         )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except sqlite3.IntegrityError as error:
-        raise HTTPException(status_code=409, detail="文件夹名称已存在，或上级文件夹无效。") from error
+        raise HTTPException(status_code=409, detail="同一目录下已经存在同名文件夹。") from error
+
+
+@router.patch("/paper-folders/{folder_id}")
+def update_paper_folder(
+    folder_id: str, payload: FolderUpdate, request: Request
+) -> dict:
+    if not payload.name.strip():
+        raise HTTPException(status_code=422, detail="文件夹名称不能为空。")
+    try:
+        item = _catalog(request).update_folder(
+            folder_id,
+            name=payload.name.strip(),
+            parent_folder_id=payload.parent_folder_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="目标目录下已经存在同名文件夹。") from error
+    if item is None:
+        raise HTTPException(status_code=404, detail="文件夹不存在。")
+    return item
 
 
 @router.delete("/paper-folders/{folder_id}")
 def delete_paper_folder(folder_id: str, request: Request) -> dict:
-    if not _catalog(request).delete_folder(folder_id):
+    try:
+        deleted = _catalog(request).delete_folder(folder_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not deleted:
         raise HTTPException(status_code=404, detail="文件夹不存在。")
     return {"folder_id": folder_id, "deleted": True}
 
@@ -147,6 +185,21 @@ def delete_library_item(paper_id: str, request: Request) -> dict:
     if not _catalog(request).remove_library_item(paper_id):
         raise HTTPException(status_code=404, detail="论文不在论文库中。")
     return {"paper_id": paper_id, "removed": True}
+
+
+@router.patch("/papers/{paper_id}/folder")
+def move_paper_to_folder(
+    paper_id: str, payload: PaperFolderAssignment, request: Request
+) -> dict:
+    try:
+        moved = _catalog(request).move_library_item(
+            paper_id, folder_id=payload.folder_id
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not moved:
+        raise HTTPException(status_code=404, detail="论文不在论文管理中。")
+    return {"paper_id": paper_id, "folder_id": payload.folder_id, "moved": True}
 
 
 @router.get("/papers/{paper_id}/annotations")

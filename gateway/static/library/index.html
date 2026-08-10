@@ -30,24 +30,57 @@
           <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="搜索标题或内容" autocomplete="off" /></label>
           <div id="paper-scope" class="paper-scope" hidden>
             <label class="scope-switch"><input id="show-all-papers" type="checkbox" /><span>显示全部论文</span></label>
-            <select id="folder-filter" aria-label="按文件夹筛选"><option value="">全部文件夹</option></select>
-            <button id="create-folder-button" type="button">＋ 新建文件夹</button>
+            <span id="folder-breadcrumb" class="folder-breadcrumb">全部论文</span>
+            <button id="create-folder-button" class="folder-create-button" type="button"><span>＋</span> 新建文件夹</button>
           </div>
         </div>
-        <section id="paper-import" class="paper-import" hidden>
-          <div><strong>添加论文</strong><span>上传 PDF 或粘贴 PDF 链接，导入后自动进入论文管理。</span></div>
-          <input id="paper-file-input" type="file" accept="application/pdf,.pdf" />
-          <input id="paper-url-input" type="url" placeholder="https://…/paper.pdf" />
-          <button id="paper-import-button" type="button">添加到论文管理</button>
-        </section>
-        <section id="result-summary" class="result-summary"></section>
-        <section id="items" class="items" aria-live="polite"></section>
-        <section id="empty-state" class="empty-state" hidden><span>✦</span><h2 id="empty-title">这里还没有内容</h2><p id="empty-copy">从一次新会话开始，结果会自动出现在这里。</p><a href="/app">开始使用</a></section>
+        <div id="records-layout" class="records-layout">
+          <aside id="folder-pane" class="folder-pane" hidden>
+            <header><div><span>LIBRARY</span><strong>我的文件夹</strong></div><button id="folder-root-create" type="button" title="新建顶层文件夹">＋</button></header>
+            <nav id="folder-tree" class="folder-tree" aria-label="论文文件夹"></nav>
+          </aside>
+          <div class="records-content">
+            <section id="paper-import" class="paper-import" hidden>
+              <div><strong>添加论文</strong><span>上传 PDF 或粘贴 PDF 链接，导入后自动进入论文管理。</span></div>
+              <input id="paper-file-input" type="file" accept="application/pdf,.pdf" />
+              <input id="paper-url-input" type="url" placeholder="https://…/paper.pdf" />
+              <button id="import-folder-button" class="folder-choice-button" type="button"><span class="folder-choice-icon">◇</span><span id="import-folder-label">未分类</span><span>⌄</span></button>
+              <button id="paper-import-button" type="button">添加到论文管理</button>
+            </section>
+            <section id="result-summary" class="result-summary"></section>
+            <section id="items" class="items" aria-live="polite"></section>
+            <section id="empty-state" class="empty-state" hidden><span>✦</span><h2 id="empty-title">这里还没有内容</h2><p id="empty-copy">从一次新会话开始，结果会自动出现在这里。</p><a href="/app">开始使用</a></section>
+          </div>
+        </div>
       </section>
     </main>
     <dialog id="domain-detail-dialog" class="detail-dialog">
       <button id="detail-close-button" class="detail-close" type="button" aria-label="关闭">×</button>
       <div id="domain-detail-content"></div>
+    </dialog>
+    <dialog id="folder-form-dialog" class="folder-dialog">
+      <form id="folder-form" method="dialog">
+        <header><div><span>FOLDER</span><h2 id="folder-form-title">新建文件夹</h2></div><button class="dialog-icon-button" type="button" data-close-dialog="folder-form-dialog">×</button></header>
+        <label class="dialog-field"><span>文件夹名称</span><input id="folder-name-input" maxlength="80" autocomplete="off" required /></label>
+        <fieldset><legend>所在位置</legend><div id="folder-parent-tree" class="dialog-folder-tree"></div></fieldset>
+        <p id="folder-form-error" class="dialog-error" hidden></p>
+        <footer><button class="dialog-secondary" type="button" data-close-dialog="folder-form-dialog">取消</button><button id="folder-form-submit" class="dialog-primary" type="submit">创建文件夹</button></footer>
+      </form>
+    </dialog>
+    <dialog id="folder-picker-dialog" class="folder-dialog folder-picker-dialog">
+      <form id="folder-picker-form" method="dialog">
+        <header><div><span>MOVE TO</span><h2 id="folder-picker-title">选择文件夹</h2></div><button class="dialog-icon-button" type="button" data-close-dialog="folder-picker-dialog">×</button></header>
+        <p id="folder-picker-copy" class="dialog-copy">选择论文要保存到的位置。</p>
+        <div id="folder-picker-tree" class="dialog-folder-tree"></div>
+        <footer><button class="dialog-secondary" type="button" data-close-dialog="folder-picker-dialog">取消</button><button class="dialog-primary" type="submit">选择此文件夹</button></footer>
+      </form>
+    </dialog>
+    <dialog id="folder-delete-dialog" class="folder-dialog compact-dialog">
+      <form id="folder-delete-form" method="dialog">
+        <header><div><span>DELETE</span><h2>删除文件夹</h2></div><button class="dialog-icon-button" type="button" data-close-dialog="folder-delete-dialog">×</button></header>
+        <p id="folder-delete-copy" class="dialog-copy"></p>
+        <footer><button class="dialog-secondary" type="button" data-close-dialog="folder-delete-dialog">取消</button><button class="dialog-danger" type="submit">删除</button></footer>
+      </form>
     </dialog>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="/static/library/app.js"></script>

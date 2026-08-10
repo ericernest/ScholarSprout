@@ -17,7 +17,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _now() -> str:
@@ -107,7 +107,7 @@ class LocalResearchStore:
 
                 CREATE TABLE IF NOT EXISTS paper_folders (
                     folder_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    name TEXT NOT NULL COLLATE NOCASE,
                     parent_folder_id TEXT REFERENCES paper_folders(folder_id) ON DELETE SET NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -295,6 +295,7 @@ class LocalResearchStore:
                 connection, "messages", "channel", "TEXT NOT NULL DEFAULT 'web'"
             )
             self._ensure_column(connection, "paper_reading_sessions", "user_id", "TEXT")
+            self._migrate_folder_name_uniqueness(connection)
             self._ensure_column(
                 connection,
                 "library_items",
@@ -303,6 +304,10 @@ class LocalResearchStore:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_library_items_folder ON library_items(folder_id, updated_at DESC)"
+            )
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_folders_parent_name
+                   ON paper_folders(COALESCE(parent_folder_id, ''), name COLLATE NOCASE)"""
             )
             self._ensure_column(
                 connection,
@@ -314,6 +319,36 @@ class LocalResearchStore:
                 "INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now()),
             )
+
+    @staticmethod
+    def _migrate_folder_name_uniqueness(connection: sqlite3.Connection) -> None:
+        """Replace v4's global folder-name uniqueness with sibling uniqueness."""
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'paper_folders'"
+        ).fetchone()
+        definition = str(row["sql"] or "") if row else ""
+        if "NAME TEXT NOT NULL UNIQUE" not in definition.upper():
+            return
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE paper_folders_v5 (
+                    folder_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    parent_folder_id TEXT REFERENCES paper_folders_v5(folder_id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO paper_folders_v5(folder_id, name, parent_folder_id, created_at, updated_at)
+                    SELECT folder_id, name, parent_folder_id, created_at, updated_at FROM paper_folders;
+                DROP TABLE paper_folders;
+                ALTER TABLE paper_folders_v5 RENAME TO paper_folders;
+                """
+            )
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
     def upsert_paper(
         self,

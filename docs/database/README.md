@@ -31,7 +31,7 @@
 | `paper_files` | `paper_file_id`, `paper_id`, `file_kind`, `storage_uri`, `sha256`, `created_at` | PDF、抽取全文或图片的本地文件索引及完整性校验。 |
 | `paper_documents` | `paper_id`, `content_schema_version`, `document_json`, `updated_at` | 解析后的章节、图表索引、导读地图及仍在迭代的论文文档结构。 |
 | `paper_knowledge_graphs` | `graph_id`, `paper_id`, `graph_scope`, `graph_json`, `updated_at` | 单篇或跨论文知识图谱快照。 |
-| `paper_folders` | `folder_id`, `name`, `parent_folder_id`, 时间 | 论文管理中的分类/文件夹；v1 界面先使用单层目录，数据关系保留后续层级能力。 |
+| `paper_folders` | `folder_id`, `name`, `parent_folder_id`, 时间 | 论文管理中的多层文件夹树；同一父目录下名称唯一，不同分支允许同名。父目录筛选会包含全部后代文件夹。 |
 | `library_items` | `paper_id`, `reading_status`, `note`, `folder_id`, `added_at`, `updated_at` | 进入论文管理的论文及其阅读状态、备注和分类。阅读状态仅为 `unread / reading / read / archived`。 |
 | `paper_tags` / `paper_tag_links` | 标签身份、论文关联、添加时间 | 多对多标签。标签用于交叉主题，文件夹用于主分类，两者不混成一个字段。 |
 | `paper_annotations` | `annotation_id`, `paper_id`, `reading_session_id`, `annotation_type`, `color`, `page_number`, `section_id`, `selected_text`, `anchor_schema_version`, `anchor_json`, `note_text`, 时间 | PDF 高亮与注释。`anchor_json` 使用 `pdf-rects-v1`，保存页面内归一化矩形，因此缩放后仍能准确恢复；会话字段只记录来源，标注归属于论文并在该论文的 Fork/精读会话间共享。 |
@@ -97,7 +97,8 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 - `GET /api/research/domain-onboardings/{artifact_id}`：打开领域结果详情及推荐论文操作，不依赖自动页面跳转。
 - `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
 - `GET /api/research/papers`：论文管理状态、备注、文件夹、标签、精读及标注数；可按 `folder_id` 筛选。
-- `GET/POST/DELETE /api/research/paper-folders`：读取、新建和删除论文分类；删除分类只会把论文变为未分类。
+- `GET/POST/PATCH/DELETE /api/research/paper-folders`：读取、新建、重命名、移动和删除文件夹；为防误删，仅空文件夹可以删除。
+- `PATCH /api/research/papers/{paper_id}/folder`：只移动论文归属，不覆盖阅读状态、备注或标签。
 - `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理，更新体包含状态、备注、文件夹和标签；移出不会删除论文、精读记录或标注。
 - `GET/PUT/DELETE /api/research/papers/{paper_id}/annotations/...`：恢复、保存和删除高亮/注释。
 

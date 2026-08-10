@@ -31,6 +31,7 @@ class ResearchCatalog:
                    (SELECT COUNT(*) FROM domain_onboardings) AS domain_onboardings,
                    (SELECT COUNT(*) FROM paper_reading_sessions) AS paper_readings,
                    (SELECT COUNT(*) FROM library_items) AS library_papers,
+                   (SELECT COUNT(*) FROM library_items WHERE folder_id IS NULL) AS unfiled_papers,
                    (SELECT COUNT(*) FROM papers) AS all_papers"""
             ).fetchone()
         return {key: int(row[key]) for key in row.keys()}
@@ -244,9 +245,22 @@ class ResearchCatalog:
     ) -> list[dict[str, Any]]:
         pattern = f"%{search.strip()}%"
         library_clause = "AND l.paper_id IS NOT NULL" if library_only else ""
-        folder_clause = "AND l.folder_id = ?" if folder_id else ""
+        if folder_id == "__unfiled__":
+            folder_clause = "AND l.folder_id IS NULL"
+        elif folder_id:
+            folder_clause = """AND l.folder_id IN (
+                WITH RECURSIVE subtree(folder_id) AS (
+                    SELECT ?
+                    UNION ALL
+                    SELECT child.folder_id FROM paper_folders child
+                    JOIN subtree parent ON child.parent_folder_id = parent.folder_id
+                )
+                SELECT folder_id FROM subtree
+            )"""
+        else:
+            folder_clause = ""
         parameters: list[Any] = [pattern, pattern, pattern]
-        if folder_id:
+        if folder_id and folder_id != "__unfiled__":
             parameters.append(folder_id)
         parameters.append(limit)
         with self.store._connection() as connection:
@@ -271,6 +285,9 @@ class ResearchCatalog:
                     GROUP BY p.paper_id ORDER BY COALESCE(l.updated_at, p.updated_at) DESC LIMIT ?""",
                 parameters,
             ).fetchall()
+        folder_paths = {
+            folder["folder_id"]: folder["path"] for folder in self.list_folders()
+        }
         return [
             {
                 "paper_id": row["paper_id"],
@@ -287,6 +304,7 @@ class ResearchCatalog:
                 "library_note": row["library_note"] or "",
                 "folder_id": row["folder_id"] or "",
                 "folder_name": row["folder_name"] or "",
+                "folder_path": folder_paths.get(row["folder_id"], ""),
                 "tags": sorted(
                     [name for name in str(row["tag_names"] or "").split(chr(31)) if name],
                     key=str.casefold,
@@ -344,9 +362,22 @@ class ResearchCatalog:
     def list_folders(self) -> list[dict[str, Any]]:
         with self.store._connection() as connection:
             rows = connection.execute(
-                """SELECT f.*, COUNT(l.paper_id) AS paper_count
-                   FROM paper_folders f LEFT JOIN library_items l ON l.folder_id = f.folder_id
-                   GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE"""
+                """WITH RECURSIVE folder_tree AS (
+                       SELECT folder_id, name, parent_folder_id, created_at, updated_at,
+                              name AS path, 0 AS depth
+                       FROM paper_folders WHERE parent_folder_id IS NULL
+                       UNION ALL
+                       SELECT child.folder_id, child.name, child.parent_folder_id,
+                              child.created_at, child.updated_at,
+                              tree.path || ' / ' || child.name, tree.depth + 1
+                       FROM paper_folders child
+                       JOIN folder_tree tree ON child.parent_folder_id = tree.folder_id
+                   )
+                   SELECT tree.*, COUNT(l.paper_id) AS paper_count
+                   FROM folder_tree tree
+                   LEFT JOIN library_items l ON l.folder_id = tree.folder_id
+                   GROUP BY tree.folder_id
+                   ORDER BY tree.path COLLATE NOCASE"""
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -354,21 +385,99 @@ class ResearchCatalog:
         now = _now()
         folder_id = _id("folder")
         with self.store._connection() as connection:
+            if parent_folder_id and connection.execute(
+                "SELECT 1 FROM paper_folders WHERE folder_id = ?", (parent_folder_id,)
+            ).fetchone() is None:
+                raise ValueError("上级文件夹不存在。")
             connection.execute(
                 """INSERT INTO paper_folders(folder_id, name, parent_folder_id, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 (folder_id, name.strip(), parent_folder_id, now, now),
             )
-        return {"folder_id": folder_id, "name": name.strip(), "parent_folder_id": parent_folder_id, "paper_count": 0}
+        return {
+            "folder_id": folder_id,
+            "name": name.strip(),
+            "parent_folder_id": parent_folder_id,
+            "paper_count": 0,
+        }
+
+    def update_folder(
+        self,
+        folder_id: str,
+        *,
+        name: str,
+        parent_folder_id: str | None,
+    ) -> dict[str, Any] | None:
+        with self.store._connection() as connection:
+            current = connection.execute(
+                "SELECT * FROM paper_folders WHERE folder_id = ?", (folder_id,)
+            ).fetchone()
+            if current is None:
+                return None
+            if parent_folder_id == folder_id:
+                raise ValueError("文件夹不能移动到自身。")
+            if parent_folder_id:
+                parent = connection.execute(
+                    "SELECT 1 FROM paper_folders WHERE folder_id = ?", (parent_folder_id,)
+                ).fetchone()
+                if parent is None:
+                    raise ValueError("目标文件夹不存在。")
+                descendant = connection.execute(
+                    """WITH RECURSIVE descendants(folder_id) AS (
+                           SELECT folder_id FROM paper_folders WHERE parent_folder_id = ?
+                           UNION ALL
+                           SELECT child.folder_id FROM paper_folders child
+                           JOIN descendants parent ON child.parent_folder_id = parent.folder_id
+                       )
+                       SELECT 1 FROM descendants WHERE folder_id = ?""",
+                    (folder_id, parent_folder_id),
+                ).fetchone()
+                if descendant is not None:
+                    raise ValueError("文件夹不能移动到自己的子文件夹中。")
+            now = _now()
+            connection.execute(
+                """UPDATE paper_folders SET name = ?, parent_folder_id = ?, updated_at = ?
+                   WHERE folder_id = ?""",
+                (name.strip(), parent_folder_id, now, folder_id),
+            )
+        return {
+            "folder_id": folder_id,
+            "name": name.strip(),
+            "parent_folder_id": parent_folder_id,
+        }
 
     def delete_folder(self, folder_id: str) -> bool:
         with self.store._connection() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM paper_folders WHERE folder_id = ?", (folder_id,)
+            ).fetchone()
+            if exists is None:
+                return False
+            has_contents = connection.execute(
+                """SELECT EXISTS(SELECT 1 FROM paper_folders WHERE parent_folder_id = ?)
+                          OR EXISTS(SELECT 1 FROM library_items WHERE folder_id = ?) AS value""",
+                (folder_id, folder_id),
+            ).fetchone()
+            if bool(has_contents["value"]):
+                raise ValueError("文件夹不为空，请先移动其中的论文和子文件夹。")
             cursor = connection.execute("DELETE FROM paper_folders WHERE folder_id = ?", (folder_id,))
         return cursor.rowcount > 0
 
     def remove_library_item(self, paper_id: str) -> bool:
         with self.store._connection() as connection:
             cursor = connection.execute("DELETE FROM library_items WHERE paper_id = ?", (paper_id,))
+        return cursor.rowcount > 0
+
+    def move_library_item(self, paper_id: str, *, folder_id: str | None) -> bool:
+        with self.store._connection() as connection:
+            if folder_id and connection.execute(
+                "SELECT 1 FROM paper_folders WHERE folder_id = ?", (folder_id,)
+            ).fetchone() is None:
+                raise ValueError("目标文件夹不存在。")
+            cursor = connection.execute(
+                "UPDATE library_items SET folder_id = ?, updated_at = ? WHERE paper_id = ?",
+                (folder_id, _now(), paper_id),
+            )
         return cursor.rowcount > 0
 
     def list_annotations(
