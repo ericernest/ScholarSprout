@@ -455,6 +455,7 @@ function updateDomainOnboardingCard(taskId, snapshot, labels = null) {
 function restoreDomainOnboardingCard() {
   const saved = loadDomainWorkspace();
   if (!saved?.task_id || !saved?.request?.query) return;
+  if (saved.request?.session_id !== sessionId) return;
   const exists = Array.from(document.querySelectorAll(".domain-card-message"))
     .some((node) => node.dataset.taskId === saved.task_id);
   if (exists) return;
