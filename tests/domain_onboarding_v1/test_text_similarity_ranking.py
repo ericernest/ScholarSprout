@@ -97,6 +97,28 @@ class TextSimilarityTests(unittest.TestCase):
         finally:
             pipeline.close()
 
+    def test_default_pipeline_uses_configured_embedding_client_and_model(self) -> None:
+        class ChatModel:
+            pass
+
+        class EmbeddingModel:
+            def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+                return [[1.0] for _ in texts]
+
+        embedding_model = EmbeddingModel()
+        with patch.dict("os.environ", {}, clear=True):
+            pipeline = create_default_pipeline(
+                ChatModel(),
+                embedding_model=embedding_model,
+                embedding_model_name="configured-embedding",
+            )
+        try:
+            provider = pipeline.ranker.vectorizer.provider
+            self.assertIs(provider.model, embedding_model)
+            self.assertEqual(provider.embedding_model, "configured-embedding")
+        finally:
+            pipeline.close()
+
     def test_default_pipeline_can_disable_embeddings(self) -> None:
         with patch.dict(
             "os.environ",

@@ -6,7 +6,13 @@ import json
 import os
 from pathlib import Path
 
-from .schema import AppConfig, OpenAIClientConfig, StorageConfig, dump_app_config
+from .schema import (
+    AppConfig,
+    EmbeddingConfig,
+    OpenAIClientConfig,
+    StorageConfig,
+    dump_app_config,
+)
 
 USER_CONFIG_DIR = Path.home() / ".novicesynapse"
 USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
@@ -33,6 +39,7 @@ def load_config(config_file: Path | None = None) -> AppConfig:
         raise RuntimeError(f"Failed to read config file: {path}") from error
 
     client_data = data.get("client", {})
+    embedding_data = data.get("embedding", {})
     storage_data = data.get("storage", {})
 
     return AppConfig(
@@ -48,6 +55,12 @@ def load_config(config_file: Path | None = None) -> AppConfig:
             output_cost_per_million_tokens=client_data.get(
                 "output_cost_per_million_tokens"
             ),
+        ),
+        embedding=EmbeddingConfig(
+            model_name=str(
+                embedding_data.get("model_name") or "qwen3-embedding"
+            ).strip(),
+            base_url=embedding_data.get("base_url") or None,
         ),
         storage=StorageConfig(
             data_dir=str(storage_data.get("data_dir") or DEFAULT_DATA_DIR),

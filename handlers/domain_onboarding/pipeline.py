@@ -247,11 +247,12 @@ class DomainOnboardingPipeline:
                         "stage_planning", 0.0
                     )
                     self._record_generation_model_stats(trace, error.stats)
-                    return self._result(
-                        status="generation_failed",
-                        query=request.query,
-                        error=f"development stage planning failed: {error}",
-                    )
+                    # Stage planning improves the development timeline, but it is
+                    # optional. A malformed JSON response must not fail the whole
+                    # onboarding task; the generator can produce the standard
+                    # development section when no stage plans are present.
+                    plan.development_stage_plans = []
+                    trace.development_stage_count = 0
 
             self._emit(
                 progress_callback,
@@ -997,6 +998,9 @@ class DomainOnboardingPipeline:
 def create_default_pipeline(
     model: Any,
     config: DomainOnboardingConfig | None = None,
+    *,
+    embedding_model: Any | None = None,
+    embedding_model_name: str | None = None,
 ) -> DomainOnboardingPipeline:
     settings = config or DomainOnboardingConfig()
     planning_model = routed_model_from_env(
@@ -1005,10 +1009,6 @@ def create_default_pipeline(
         route_name="planning",
     )
     configured_generation = os.getenv("DOMAIN_ONBOARDING_GENERATION_MODELS")
-    if not configured_generation:
-        primary = getattr(getattr(model, "config", None), "model_name", "")
-        backups = ["deepseek-v4-pro", "glm-5.2-107", "deepseek-v4-flash", "qwen3.6-reasoner"]
-        configured_generation = ",".join([primary, *backups]) if primary else ",".join(backups)
     generation_model = routed_model_from_env(
         model,
         configured_generation,
@@ -1063,9 +1063,10 @@ def create_default_pipeline(
     embedding_enabled = os.getenv(
         "DOMAIN_ONBOARDING_EMBEDDING_ENABLED", "true"
     ).strip().lower() not in {"0", "false", "no", "off"}
-    remote_embedding_model = os.getenv(
-        "DOMAIN_ONBOARDING_EMBEDDING_MODEL", "qwen3-embedding"
-    ).strip()
+    remote_embedding_model = os.getenv("DOMAIN_ONBOARDING_EMBEDDING_MODEL")
+    if remote_embedding_model is None:
+        remote_embedding_model = embedding_model_name or "qwen3-embedding"
+    remote_embedding_model = remote_embedding_model.strip()
     embedding_provider = None
     if embedding_enabled and local_embedding_model:
         embedding_provider = FastEmbedProvider(
@@ -1073,7 +1074,10 @@ def create_default_pipeline(
             cache_dir=os.getenv("DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR") or None,
         )
     elif embedding_enabled and remote_embedding_model:
-        embedding_provider = OpenAIEmbeddingProvider(model, remote_embedding_model)
+        embedding_provider = OpenAIEmbeddingProvider(
+            embedding_model or model,
+            remote_embedding_model,
+        )
     vectorizer = (
         CachedEmbeddingTextVectorizer(
             embedding_provider,

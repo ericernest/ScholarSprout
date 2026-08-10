@@ -24,7 +24,6 @@
         <button id="topbar-retry-button" class="ghost-button" type="button" hidden>重试任务</button>
         <button id="cancel-button" class="ghost-button" type="button">中断生成</button>
         <a class="ghost-button" href="/library?view=domain-onboardings">领域列表</a>
-        <a class="primary-button" href="/app?mode=domain_onboarding">新建领域</a>
       </div>
     </header>
 
@@ -46,8 +45,7 @@
           <button class="nav-item" data-target="landscape" type="button"><span>04</span>概念全景</button>
           <button class="nav-item" data-target="learning-path" type="button"><span>05</span>学习路线</button>
           <button class="nav-item" data-target="papers" type="button"><span>06</span>论文清单</button>
-          <button class="nav-item" data-target="quality" type="button"><span>07</span>质量评估</button>
-          <button id="graph-nav" class="nav-item" data-target="knowledge-graph" type="button" hidden><span>08</span>知识图谱</button>
+          <button id="graph-nav" class="nav-item" data-target="knowledge-graph" type="button" hidden><span>07</span>知识图谱</button>
         </nav>
         <div class="sidebar-foot">
           <span>结构化结果随生成过程增量更新</span>
@@ -103,14 +101,6 @@
             <div id="paper-filters" class="filter-row"></div>
           </header>
           <div id="papers-content" class="paper-list loading-grid"></div>
-        </section>
-
-        <section id="quality" class="content-section reveal">
-          <header class="section-heading">
-            <div><span>QUALITY GATES</span><h2>质量评估</h2></div>
-            <p>总分与硬门槛分别呈现，避免用平均分掩盖关键失败。</p>
-          </header>
-          <div id="quality-content" class="loading-grid"></div>
         </section>
 
         <section id="knowledge-graph" class="content-section reveal" hidden>

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from channels.base import ChannelMessage
 from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.execution import PipelineExecutionContext
-from handlers.domain_onboarding.generator import StructuredOnboardingGenerator
+from handlers.domain_onboarding.generator import GenerationError, StructuredOnboardingGenerator
 from handlers.domain_onboarding.metrics import DomainOnboardingMetrics, DomainOnboardingRequestTrace
 from handlers.domain_onboarding.pipeline import DomainOnboardingPipeline
 from handlers.domain_onboarding.profile import RuleBasedProfileBuilder
@@ -79,6 +79,46 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_stage_planning_json_failure_falls_back_to_standard_generation(self) -> None:
+        config = DomainOnboardingConfig(staged_development_enabled=True)
+        delegate = StructuredOnboardingGenerator(
+            FakeJSONModel([make_generation_payload([paper.paper_id for paper in make_candidates()])]),
+            config,
+        )
+
+        class StagePlanningFailureGenerator:
+            def __init__(self) -> None:
+                self.stage_planning_calls = 0
+                self.generation_calls = 0
+
+            def plan_development_research(self, *args, **kwargs):
+                self.stage_planning_calls += 1
+                raise GenerationError("LLM did not return a JSON object")
+
+            def generate(self, *args, **kwargs):
+                self.generation_calls += 1
+                return delegate.generate(*args, **kwargs)
+
+        generator = StagePlanningFailureGenerator()
+        pipeline = DomainOnboardingPipeline(
+            profile_builder=RuleBasedProfileBuilder(),
+            planner=FakePlanner(),
+            retriever=FakeRetriever(),
+            ranker=WeightedPaperRanker(config),
+            generator=generator,
+            evaluator=CompositeQualityEvaluator(config),
+            repairer=TargetedRepairer(delegate, config),
+            config=config,
+        )
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertIn(result.status, {"ok", "quality_warning"}, result.error)
+        self.assertEqual(generator.stage_planning_calls, 1)
+        self.assertEqual(generator.generation_calls, 1)
+        self.assertEqual(trace.development_stage_count, 0)
+
     def test_stage_research_retrieves_and_binds_each_stage_independently(self) -> None:
         pipeline = make_pipeline([make_generation_payload(["paper-0"])])
         pipeline.config.staged_development_enabled = True

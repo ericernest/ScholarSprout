@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -457,6 +458,20 @@ def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
     setup_complete = is_setup_complete(config)
     model = OpenAIClient(config.client) if setup_complete else SetupRequiredModel(config.client)
+    embedding_base_url = (
+        os.getenv("DOMAIN_ONBOARDING_EMBEDDING_BASE_URL")
+        or config.embedding.base_url
+        or config.client.base_url
+    )
+    embedding_model = model
+    if setup_complete and embedding_base_url != config.client.base_url:
+        embedding_model = OpenAIClient(
+            replace(
+                config.client,
+                base_url=embedding_base_url,
+                model_name=config.embedding.model_name,
+            )
+        )
     chat_agent = create_agent(model, "chat")
     domain_onboarding_agent = create_agent(model, "domain_onboarding")
     paper_reading_agent = create_agent(model, "paper_reading")
@@ -491,7 +506,12 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.paper_reading_agent = paper_reading_agent
     app.state.research_storage = research_storage
     configure_domain_onboarding_runtime(
-        app.state, model, config.client, research_storage=research_storage
+        app.state,
+        model,
+        config.client,
+        research_storage=research_storage,
+        embedding_model=embedding_model,
+        embedding_model_name=config.embedding.model_name,
     )
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
@@ -516,9 +536,15 @@ def configure_domain_onboarding_runtime(
     model: object,
     client_config: object,
     research_storage: LocalResearchStore | None = None,
+    embedding_model: object | None = None,
+    embedding_model_name: str | None = None,
 ) -> None:
     """Wire the V1 pipeline and its observability dependencies into the gateway."""
-    app_state.domain_onboarding_pipeline = create_default_pipeline(model)
+    app_state.domain_onboarding_pipeline = create_default_pipeline(
+        model,
+        embedding_model=embedding_model,
+        embedding_model_name=embedding_model_name,
+    )
     app_state.domain_onboarding_metrics = DomainOnboardingMetrics(
         input_cost_per_million_tokens=getattr(
             client_config, "input_cost_per_million_tokens", None

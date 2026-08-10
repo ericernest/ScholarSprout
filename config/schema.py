@@ -18,6 +18,14 @@ class OpenAIClientConfig:
     output_cost_per_million_tokens: float | None = None
 
 
+@dataclass(slots=True)
+class EmbeddingConfig:
+    """OpenAI-compatible embedding endpoint used by domain onboarding."""
+
+    model_name: str = "qwen3-embedding"
+    base_url: str | None = None
+
+
 # 描述本地持久化数据的目录配置。
 @dataclass(slots=True)
 class StorageConfig:
@@ -28,6 +36,7 @@ class StorageConfig:
 @dataclass(slots=True)
 class AppConfig:
     client: OpenAIClientConfig = field(default_factory=OpenAIClientConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
 
 

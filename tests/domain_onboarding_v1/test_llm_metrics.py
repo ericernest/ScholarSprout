@@ -14,6 +14,28 @@ class FailedLLMCallMetricsTests(unittest.TestCase):
             {"domain": "检索增强生成"},
         )
 
+    def test_parser_accepts_fenced_complete_object(self) -> None:
+        self.assertEqual(
+            parse_json_object('```json\n{"domain":"RAG"}\n```'),
+            {"domain": "RAG"},
+        )
+
+    def test_parser_repairs_unescaped_quotes_inside_paper_title(self) -> None:
+        raw_text = (
+            '{"activities":["Read CAMEL: Communicative Agents for '
+            '"Mind" Exploration"],"evidence_claims":[]}'
+        )
+
+        self.assertEqual(
+            parse_json_object(raw_text),
+            {
+                "activities": [
+                    'Read CAMEL: Communicative Agents for "Mind" Exploration'
+                ],
+                "evidence_claims": [],
+            },
+        )
+
     def test_parser_rejects_inner_object_from_truncated_outer_object(self) -> None:
         raw_text = (
             '{"domain":"检索增强生成","prerequisites":['
@@ -67,6 +89,28 @@ class FailedLLMCallMetricsTests(unittest.TestCase):
             model.calls[0]["response_format"],
             {"type": "json_object"},
         )
+
+    def test_streaming_length_finish_reason_reports_truncation(self) -> None:
+        class TruncatedStreamingModel:
+            supports_streaming = True
+
+            def chat_stream(self, **kwargs):
+                yield {"choices": [{"delta": {"content": '{"stages":['}}]}
+                yield {
+                    "choices": [{"delta": {"content": '{"name":"first"}'}}]
+                }
+                yield {"choices": [{"delta": {}, "finish_reason": "length"}]}
+
+        with self.assertRaisesRegex(
+            StructuredLLMError,
+            "truncated at max_tokens=1400",
+        ):
+            invoke_json(
+                TruncatedStreamingModel(),
+                system_prompt="system",
+                user_prompt="user",
+                max_tokens=1400,
+            )
 
     def test_invalid_json_error_preserves_reported_usage(self) -> None:
         model = FakeJSONModel(["not json"])

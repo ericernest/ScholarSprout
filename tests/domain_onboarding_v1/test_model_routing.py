@@ -103,6 +103,25 @@ class ModelRoutingTests(unittest.TestCase):
         finally:
             pipeline.close()
 
+    def test_default_generation_uses_configured_client_model_without_override(self) -> None:
+        class ConfiguredModel(FakeJSONModel):
+            class Config:
+                model_name = "deepseek-v4-flash"
+
+            config = Config()
+
+        with patch.dict("os.environ", {}, clear=True):
+            delegate = ConfiguredModel([{"ok": True}])
+            pipeline = create_default_pipeline(delegate)
+        try:
+            self.assertIs(pipeline.generator.model, delegate)
+            self.assertIs(pipeline.generator.section_models["development"], delegate)
+            self.assertIs(pipeline.generator.section_models["landscape"], delegate)
+            self.assertIs(pipeline.generator.section_models["learning_path"], delegate)
+            self.assertIs(pipeline.generator.repair_model, delegate)
+        finally:
+            pipeline.close()
+
     def test_caller_validation_failure_uses_next_model(self) -> None:
         delegate = FakeJSONModel([{"wrong": True}, {"learning_path": []}])
         model = RoutedChatModel(

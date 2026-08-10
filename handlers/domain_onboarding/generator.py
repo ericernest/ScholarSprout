@@ -497,6 +497,12 @@ class StructuredOnboardingGenerator:
             if not isinstance(stage, dict):
                 stages = unwrapped.get("development_stages")
                 stage = stages[0] if isinstance(stages, list) and stages else None
+            if not isinstance(stage, dict) and all(
+                key in unwrapped for key in ("stage_id", "name", "summary")
+            ):
+                # Some models return the requested stage object directly
+                # instead of wrapping it in development_stage.
+                stage = unwrapped
             if not isinstance(stage, dict):
                 raise GenerationError(
                     f"stage {stage_plan.stage_id} response is missing development_stage",

@@ -68,6 +68,18 @@
             </label>
 
             <label>
+              <span>Embedding 模型</span>
+              <input id="embedding-model-name" name="embedding_model_name" type="text" required placeholder="例如 qwen3-embedding" />
+              <small>用于领域入门的论文相关性排序与证据匹配；请求失败时会自动降级到本地词法排序。</small>
+            </label>
+
+            <label>
+              <span>Embedding Base URL</span>
+              <input id="embedding-base-url" name="embedding_base_url" type="url" placeholder="https://你的向量服务地址/v1" />
+              <small>填写 OpenAI-compatible Embeddings 接口地址；留空时复用上面的 Base URL。</small>
+            </label>
+
+            <label>
               <span>数据目录</span>
               <input id="data-dir" name="data_dir" type="text" required placeholder="例如 D:\NoviceSynapseData" />
               <small id="data-dir-help">支持绝对路径和 ~/ 开头的用户目录路径。</small>

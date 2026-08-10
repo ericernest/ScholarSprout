@@ -12,6 +12,9 @@ DOMAIN_ONBOARDING_AUDIT_FSYNC=1
 # 如需优先使用本地 ONNX 多语言 embedding：
 # DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 # DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/novicesynapse/embeddings
+# The browser settings page stores embedding.model_name and embedding.base_url.
+# Environment variables remain the highest-priority deployment overrides.
+DOMAIN_ONBOARDING_EMBEDDING_BASE_URL=<openai-compatible-embedding-base-url>
 # 覆盖远程模型 ID：DOMAIN_ONBOARDING_EMBEDDING_MODEL=<embedding-model>
 # 显式关闭 embedding 并只使用 TF-IDF：DOMAIN_ONBOARDING_EMBEDDING_ENABLED=false
 SEMANTIC_SCHOLAR_API_KEY=<optional>
