@@ -51,6 +51,8 @@ class ResearchCatalogTests(unittest.TestCase):
 
         self.assertEqual(conversations[0]["conversation_id"], self.conversation_id)
         self.assertEqual(conversations[0]["message_count"], 1)
+        self.assertEqual(conversations[0]["workspace_kind"], "paper_reading")
+        self.assertEqual(conversations[0]["reading_session_id"], self.reading_id)
         self.assertEqual(readings[0]["reading_session_id"], self.reading_id)
         self.assertEqual(papers[0]["reading_status"], "reading")
         self.assertEqual(papers[0]["library_note"], "重点看方法")
@@ -162,7 +164,9 @@ class ResearchLibraryApiTests(unittest.TestCase):
 
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)
-        self.assertIn("function openDomainDetail", script)
+        self.assertIn("function domainWorkspace", script)
+        self.assertIn("function conversationWorkspace", script)
+        self.assertNotIn("function openDomainDetail", script)
         self.assertIn("function attachManagedPaper", script)
         self.assertIn("function renderFolderBranch", script)
         self.assertNotIn("window.prompt", script)
@@ -196,6 +200,44 @@ class ResearchLibraryApiTests(unittest.TestCase):
             self.assertEqual(annotation.status_code, 200)
             self.assertEqual(listed.json()[0]["selected_text"], "important result")
             self.assertNotIn("anchor_json", listed.text)
+
+    def test_domain_workspace_restores_persisted_artifact_without_browser_cache(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = LocalResearchStore(Path(directory) / "research.sqlite3")
+            store.initialize()
+            task_id = "domain-task-from-library"
+            store.create_domain_onboarding(
+                artifact_id=task_id,
+                title="领域入门：量子控制",
+                query="量子控制入门",
+                language="zh-CN",
+            )
+            store.persist_domain_onboarding_result(
+                artifact_id=task_id,
+                query="量子控制入门",
+                response={
+                    "status": "ok",
+                    "schema_version": "domain-onboarding-output-test",
+                    "domain": "量子控制",
+                    "text": "从控制目标与脉冲设计开始。",
+                    "learning_path": [{"title": "基础"}],
+                    "papers": [],
+                },
+            )
+            app.state.research_storage = store
+            app.state.domain_onboarding_job_store = None
+            app.state.domain_onboarding_job_manager = None
+
+            response = TestClient(app).get(
+                f"/api/research/domain-onboardings/{task_id}/workspace"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["workspace_source"], "catalog")
+            self.assertEqual(response.json()["result"]["domain"], "量子控制")
+            self.assertEqual(
+                response.json()["result"]["learning_path"][0]["title"], "基础"
+            )
 
     def test_folder_api_and_library_classification(self) -> None:
         with TemporaryDirectory() as directory:

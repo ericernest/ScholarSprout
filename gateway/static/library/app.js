@@ -37,7 +37,6 @@ function boot() {
   document.querySelector("#folder-tree").addEventListener("click", handleFolderTreeAction);
   document.querySelector("#import-folder-button").addEventListener("click", () => openFolderPicker({ type: "import", folderId: state.importFolderId }));
   document.querySelector("#paper-import-button").addEventListener("click", importPaper);
-  document.querySelector("#detail-close-button").addEventListener("click", () => document.querySelector("#domain-detail-dialog").close());
   document.querySelector("#folder-form").addEventListener("submit", saveFolderForm);
   document.querySelector("#folder-picker-form").addEventListener("submit", confirmFolderPicker);
   document.querySelector("#folder-delete-form").addEventListener("submit", deleteSelectedFolder);
@@ -129,10 +128,10 @@ function renderCard(item) {
   card.tabIndex = 0;
   card.setAttribute("role", "link");
   card.dataset.id = item.conversation_id || item.artifact_id || item.reading_session_id || item.paper_id;
-  if (state.view === "conversations") card.dataset.href = `/app?conversation_id=${encodeURIComponent(item.conversation_id)}`;
+  if (state.view === "conversations") card.dataset.href = conversationWorkspace(item);
   if (state.view === "paper-readings") card.dataset.href = paperWorkspace(item.paper_id, item.reading_session_id);
   if (state.view === "papers") card.dataset.href = item.has_document || item.reading_count ? paperWorkspace(item.paper_id, "") : (item.source_url || "");
-  if (state.view === "domain-onboardings") card.dataset.domainId = item.artifact_id;
+  if (state.view === "domain-onboardings") card.dataset.href = domainWorkspace(item.artifact_id);
   const head = element("div", "item-head");
   const heading = element("div", paperView ? "paper-heading" : "");
   if (paperView) heading.append(element("span", "paper-kind", state.view === "paper-readings" ? "PAPER READING" : "PAPER LIBRARY"));
@@ -159,12 +158,9 @@ function renderCard(item) {
   }
   const actions = element("div", "item-actions");
   if (state.view === "conversations") {
-    actions.append(link(`/app?conversation_id=${encodeURIComponent(item.conversation_id)}`, "继续会话", true));
+    actions.append(link(conversationWorkspace(item), conversationActionLabel(item), true));
   } else if (state.view === "domain-onboardings") {
-    const open = element("button", "accent", "查看领域结果");
-    open.dataset.action = "open-domain";
-    open.dataset.domainId = item.artifact_id;
-    actions.append(open);
+    actions.append(link(domainWorkspace(item.artifact_id), "进入领域入门  ↗", true));
   } else if (state.view === "paper-readings") {
     actions.append(link(paperWorkspace(item.paper_id, item.reading_session_id), "继续论文精读  ↗", true));
   } else {
@@ -237,10 +233,6 @@ async function handleItemAction(event) {
     return;
   }
   event.stopPropagation();
-  if (button.dataset.action === "open-domain") {
-    await openDomainDetail(button.dataset.domainId);
-    return;
-  }
   if (button.dataset.action === "attach-paper") {
     await attachManagedPaper(button.dataset.paperId, button.dataset.pdfUrl, button);
     return;
@@ -277,65 +269,7 @@ async function handleItemAction(event) {
 
 function openCard(card) {
   if (!card) return;
-  if (card.dataset.domainId) openDomainDetail(card.dataset.domainId);
-  else if (card.dataset.href) window.location.href = card.dataset.href;
-}
-
-async function openDomainDetail(artifactId) {
-  const dialog = document.querySelector("#domain-detail-dialog");
-  const content = document.querySelector("#domain-detail-content");
-  content.replaceChildren(element("p", "detail-loading", "正在读取领域结果…"));
-  if (!dialog.open) dialog.showModal();
-  try {
-    const item = await fetchJson(`/api/research/domain-onboardings/${encodeURIComponent(artifactId)}`);
-    const header = element("header", "detail-header");
-    header.append(element("p", "eyebrow", "DOMAIN ONBOARDING"), element("h2", "", item.title || item.query));
-    const summary = item.overview?.summary || item.overview?.domain_definition || item.query;
-    header.append(element("p", "detail-summary", summary));
-    const path = element("section", "detail-section");
-    path.append(element("h3", "", `学习路径（${item.learning_path?.length || 0}）`));
-    const pathList = element("ol", "detail-list");
-    (item.learning_path || []).forEach((step) => pathList.append(element("li", "", step.title || step.name || step.topic || JSON.stringify(step))));
-    if (!pathList.childElementCount) pathList.append(element("li", "", "暂无学习路径"));
-    path.append(pathList);
-    const papers = element("section", "detail-section");
-    papers.append(element("h3", "", `推荐论文（${item.recommendations?.length || 0}）`));
-    (item.recommendations || []).forEach((paper) => papers.append(renderRecommendation(paper)));
-    content.replaceChildren(header, path, papers);
-  } catch (error) {
-    content.replaceChildren(element("p", "detail-error", error.message));
-  }
-}
-
-function renderRecommendation(paper) {
-  const card = element("article", "recommendation-card");
-  card.append(element("strong", "", paper.title), element("p", "", paper.reason || paper.abstract || ""));
-  const actions = element("div", "recommendation-actions");
-  const add = element("button", "", paper.in_library ? "已在论文管理" : "加入论文管理");
-  add.disabled = paper.in_library;
-  add.addEventListener("click", async () => {
-    add.disabled = true;
-    try {
-      await fetchJson(`/api/research/papers/${encodeURIComponent(paper.paper_id)}/library`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reading_status: "unread", note: "" }) });
-      add.textContent = "已在论文管理";
-      loadCounts();
-    } catch (error) { add.disabled = false; toast(error.message, true); }
-  });
-  const pdfUrl = paperPdfUrl(paper);
-  const read = element("button", "accent", "论文精读");
-  read.disabled = !pdfUrl;
-  read.title = pdfUrl ? "导入 PDF 并进入精读" : "该推荐项没有可用的 PDF 链接";
-  read.addEventListener("click", async () => {
-    read.disabled = true;
-    try {
-      const uploaded = await uploadPaperPayload({ paper_id: paper.paper_id, pdf_url: pdfUrl, metadata: { title: paper.title } });
-      const session = await createPaperReadingSession(uploaded.paper_id);
-      window.location.href = paperWorkspace(uploaded.paper_id, session.reading_session_id);
-    } catch (error) { read.disabled = false; toast(error.message, true); }
-  });
-  actions.append(add, read);
-  card.append(actions);
-  return card;
+  if (card.dataset.href) window.location.href = card.dataset.href;
 }
 
 function foldersByParent(parentId) {
@@ -672,7 +606,18 @@ function metaFor(item) {
 
 function showSkeletons() { document.querySelector("#empty-state").hidden = true; items.replaceChildren(...[1,2,3].map(() => element("div", "skeleton"))); }
 function showEmpty(title, copy) { const empty = document.querySelector("#empty-state"); empty.hidden = false; document.querySelector("#empty-title").textContent = title; document.querySelector("#empty-copy").textContent = copy; }
+function domainWorkspace(artifactId) { return `/app/domain-onboarding?task_id=${encodeURIComponent(artifactId)}`; }
 function paperWorkspace(paperId, sessionId) { const params = new URLSearchParams({ paper_id: paperId }); if (sessionId) params.set("session_id", sessionId); return `/app/paper-reading?${params}`; }
+function conversationWorkspace(item) {
+  if (item.workspace_kind === "domain_onboarding" && item.workspace_artifact_id) return domainWorkspace(item.workspace_artifact_id);
+  if (item.workspace_kind === "paper_reading" && item.paper_id && item.reading_session_id) return paperWorkspace(item.paper_id, item.reading_session_id);
+  return `/app?conversation_id=${encodeURIComponent(item.conversation_id)}`;
+}
+function conversationActionLabel(item) {
+  if (item.workspace_kind === "domain_onboarding") return "进入领域入门  ↗";
+  if (item.workspace_kind === "paper_reading") return "进入论文精读  ↗";
+  return "继续会话";
+}
 function element(tag, className = "", text = "") { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node; }
 function link(href, text, accent = false) { const item = element("a", accent ? "accent" : "", text); item.href = href; return item; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "" : new Intl.DateTimeFormat("zh-CN", { month:"short",day:"numeric",hour:"2-digit",minute:"2-digit" }).format(date); }

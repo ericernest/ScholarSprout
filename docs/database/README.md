@@ -90,11 +90,12 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 
 ## 前端资料库与 API
 
-`/library` 是统一研究资料库，左侧四个视图分别读取会话、领域入门、论文精读和论文管理数据。列表只读取稳定展示字段及必要计数，不直接暴露数据库中的 JSON 字符串。
+`/library` 是统一研究资料库，左侧四个视图分别读取会话、领域入门、论文精读和论文管理数据。列表只读取稳定展示字段及必要计数，不直接暴露数据库中的 JSON 字符串。领域入门记录直接进入领域工作台；会话按其最新关联产物进入领域入门或论文精读工作台，只有纯聊天会话返回聊天页。
 
 - `GET /api/research/conversations`：会话标题、模式、消息数和最后一条消息摘要。
 - `GET /api/research/domain-onboardings`：领域任务状态、阶段、推荐论文数和质量摘要。
-- `GET /api/research/domain-onboardings/{artifact_id}`：打开领域结果详情及推荐论文操作，不依赖自动页面跳转。
+- `GET /api/research/domain-onboardings/{artifact_id}`：提供领域结果的稳定持久化字段及推荐论文信息。
+- `GET /api/research/domain-onboardings/{artifact_id}/workspace`：优先恢复仍在 job store 中的实时任务；任务记录已过期时，从正式持久化内容重建只读工作台快照。
 - `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
 - `GET /api/research/papers`：论文管理状态、备注、文件夹、最新精读会话、精读及标注数；可按 `folder_id` 筛选。
 - `GET/POST/PATCH/DELETE /api/research/paper-folders`：读取、新建、重命名、移动和删除文件夹；为防误删，仅空文件夹可以删除。

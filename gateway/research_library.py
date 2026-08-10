@@ -97,6 +97,56 @@ def domain_onboarding_detail(artifact_id: str, request: Request) -> dict:
     return item
 
 
+@router.get("/domain-onboardings/{artifact_id}/workspace")
+def domain_onboarding_workspace(artifact_id: str, request: Request) -> dict:
+    """Return a workbench snapshot for an active job or a persisted artifact."""
+    item = _catalog(request).get_domain_onboarding(artifact_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="领域入门记录不存在。")
+    job_store = getattr(request.app.state, "domain_onboarding_job_store", None)
+    manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
+    job = job_store.get(artifact_id) if job_store is not None else None
+    if job is not None and manager is not None:
+        return {
+            **job,
+            "access_token": manager.access_token(artifact_id),
+            "workspace_source": "job",
+        }
+
+    overview = item.get("overview") if isinstance(item.get("overview"), dict) else {}
+    quality = item.get("quality") if isinstance(item.get("quality"), dict) else {}
+    result = {
+        **overview,
+        **quality,
+        "schema_version": item.get("output_schema_version") or "",
+        "query": item.get("query") or "",
+        "learner_profile": item.get("learner_profile") or {},
+        "research_plan": item.get("research_plan") or {},
+        "learning_path": item.get("learning_path") or [],
+        "knowledge_graph": item.get("knowledge_graph") or {},
+        "papers": [
+            {
+                **paper,
+                "year": paper.get("publication_year"),
+                "url": paper.get("source_url") or "",
+                "contribution": paper.get("reason") or "",
+            }
+            for paper in item.get("recommendations") or []
+        ],
+    }
+    return {
+        "task_id": artifact_id,
+        "state": item.get("state") or "completed",
+        "current_stage": item.get("current_stage") or "completed",
+        "progress": 1.0 if item.get("state") == "completed" else 0.0,
+        "request": {"query": item.get("query") or ""},
+        "result": result,
+        "error": item.get("error_summary") or None,
+        "retryable": False,
+        "workspace_source": "catalog",
+    }
+
+
 @router.get("/paper-readings")
 def paper_readings(request: Request, search: Search = "", limit: Limit = 100) -> list[dict]:
     return _catalog(request).list_paper_readings(search=search, limit=limit)

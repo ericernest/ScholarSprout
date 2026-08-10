@@ -43,6 +43,23 @@ class ResearchCatalog:
                 """SELECT c.conversation_id, c.title, c.state, c.parent_conversation_id,
                           c.created_at, c.last_active_at, COUNT(m.message_id) AS message_count,
                           GROUP_CONCAT(DISTINCT m.mode) AS modes,
+                          (SELECT linked_artifact.artifact_kind
+                           FROM conversation_artifacts link
+                           JOIN work_artifacts linked_artifact ON linked_artifact.artifact_id = link.artifact_id
+                           WHERE link.conversation_id = c.conversation_id
+                           ORDER BY link.linked_at DESC LIMIT 1) AS workspace_kind,
+                          (SELECT link.artifact_id
+                           FROM conversation_artifacts link
+                           WHERE link.conversation_id = c.conversation_id
+                           ORDER BY link.linked_at DESC LIMIT 1) AS workspace_artifact_id,
+                          (SELECT reading.reading_session_id
+                           FROM paper_reading_sessions reading
+                           WHERE reading.conversation_id = c.conversation_id
+                           ORDER BY reading.updated_at DESC LIMIT 1) AS reading_session_id,
+                          (SELECT reading.paper_id
+                           FROM paper_reading_sessions reading
+                           WHERE reading.conversation_id = c.conversation_id
+                           ORDER BY reading.updated_at DESC LIMIT 1) AS paper_id,
                           (SELECT content FROM messages latest
                            WHERE latest.conversation_id = c.conversation_id
                            ORDER BY latest.sequence_number DESC LIMIT 1) AS latest_message
@@ -70,6 +87,10 @@ class ResearchCatalog:
                 "updated_at": row["last_active_at"],
                 "message_count": int(row["message_count"]),
                 "modes": [item for item in str(row["modes"] or "").split(",") if item],
+                "workspace_kind": row["workspace_kind"] or "chat",
+                "workspace_artifact_id": row["workspace_artifact_id"] or "",
+                "reading_session_id": row["reading_session_id"] or "",
+                "paper_id": row["paper_id"] or "",
                 "preview": str(row["latest_message"] or "")[:240],
             }
             for row in rows
@@ -162,10 +183,14 @@ class ResearchCatalog:
             "query": row["query"],
             "state": row["state"],
             "current_stage": row["current_stage"],
+            "output_schema_version": row["output_schema_version"] or "",
+            "learner_profile": _loads(row["learner_profile_json"], {}),
             "overview": _loads(row["overview_json"], {}),
             "research_plan": _loads(row["research_plan_json"], {}),
             "learning_path": _loads(row["learning_path_json"], []),
             "quality": _loads(row["quality_json"], {}),
+            "knowledge_graph": _loads(row["knowledge_graph_json"], {}),
+            "error_summary": row["error_summary"] or "",
             "recommendations": [
                 {
                     "paper_id": item["paper_id"],
@@ -180,6 +205,8 @@ class ResearchCatalog:
                     "reason": item["reason"],
                     "reading_focus": _loads(item["reading_focus_json"], []),
                     "reading_priority": item["reading_priority"],
+                    "paper_role": item["paper_role"],
+                    "is_canonical": bool(item["is_canonical"]),
                     "in_library": bool(item["in_library"]),
                 }
                 for item in recommendations
