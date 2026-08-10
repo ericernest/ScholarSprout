@@ -14,6 +14,7 @@ from handlers.paper_reading.pipeline.parser import PDFParser
 from handlers.paper_reading.handler import (
     _build_llm_reading_map,
     _build_reading_map,
+    _build_reading_map_prompt,
     _ensure_paper_figures,
     _load_paper_data,
     _normalize_reading_map,
@@ -500,6 +501,61 @@ More results.
         self.assertEqual(reading_map["status"], "failed")
         self.assertFalse(reading_map["survey_map"])
         self.assertFalse(reading_map["section_guides"])
+
+    def test_reading_map_prompt_is_compact_and_uses_longer_timeout(self) -> None:
+        sections = [
+            {
+                "section_id": f"sec:{index}",
+                "title": f"Section {index}",
+                "content": "x" * 2000,
+            }
+            for index in range(100)
+        ]
+        fallback = {
+            "paper_type": "research",
+            "map_variant": "research",
+            "research_problem": {"title": "Problem"},
+            "core_method": {"name": "Method"},
+            "large_unused_value": "y" * 100000,
+        }
+        prompt = _build_reading_map_prompt(
+            {"title": "Compact map", "abstract": "Abstract", "sections": sections},
+            fallback,
+            None,
+        )
+
+        self.assertLess(len(prompt), 40000)
+        self.assertNotIn("heuristic_fallback", prompt)
+        self.assertNotIn("large_unused_value", prompt)
+
+        class RecordingModel:
+            def __init__(self) -> None:
+                self.kwargs = {}
+
+            def chat(self, **kwargs):
+                self.kwargs = kwargs
+                content = json.dumps({
+                    "paper_type": "research",
+                    "map_variant": "research",
+                    "research_problem": {"title": "Problem", "one_sentence": "A visible problem."},
+                    "core_method": {"name": "Method", "one_sentence": "A visible method."},
+                    "section_guides": [{"section_id": "sec:0", "title": "Section 0", "main_content": "Guide"}],
+                })
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+                )
+
+        model = RecordingModel()
+        result = _build_llm_reading_map(
+            paper={"title": "Compact map", "abstract": "Abstract", "sections": sections[:2]},
+            fallback=fallback,
+            model=model,
+            skill_registry=None,
+        )
+
+        self.assertEqual(result["status"], "llm_done")
+        self.assertEqual(model.kwargs["timeout"], 120.0)
+        self.assertEqual(model.kwargs["max_tokens"], 5000)
 
     def test_survey_text_chunks_cover_full_long_sections(self) -> None:
         long_text = " ".join(f"Sentence {index} describes a survey fact." for index in range(900))

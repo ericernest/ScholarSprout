@@ -247,11 +247,12 @@ class DomainOnboardingPipeline:
                         "stage_planning", 0.0
                     )
                     self._record_generation_model_stats(trace, error.stats)
-                    return self._result(
-                        status="generation_failed",
-                        query=request.query,
-                        error=f"development stage planning failed: {error}",
-                    )
+                    # Stage planning improves the development timeline, but it is
+                    # optional. A malformed JSON response must not fail the whole
+                    # onboarding task; the generator can produce the standard
+                    # development section when no stage plans are present.
+                    plan.development_stage_plans = []
+                    trace.development_stage_count = 0
 
             self._emit(
                 progress_callback,

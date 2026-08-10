@@ -7,6 +7,7 @@ const STORAGE = {
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
   copilotWidth: "paper_reading_copilot_width",
+  noteHeight: "paper_reading_note_height_ratio",
   pdfMarks: "paper_reading_pdf_marks",
 };
 
@@ -57,7 +58,6 @@ function boot() {
   if (isDedicatedWorkspace) {
     $("paper-intake").hidden = true;
     $("paper-workbench").hidden = true;
-    $("new-paper-button").hidden = false;
     $("workspace-status").textContent = "正在恢复论文…";
   }
   renderSkillControls();
@@ -105,7 +105,6 @@ function bindIntake() {
 }
 
 function bindWorkbench() {
-  $("new-paper-button").addEventListener("click", showIntake);
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
@@ -286,7 +285,9 @@ function bindResizeHandle() {
   const handle = $("copilot-resize-handle");
   const grid = $("workbench-grid");
   const saved = Number(localStorage.getItem(STORAGE.copilotWidth));
-  if (saved >= 300 && saved <= 760) grid.style.setProperty("--copilot-width", `${saved}px`);
+  if (saved >= 300) setCopilotWidth(saved, false);
+  $("copilot-narrow-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width - 80));
+  $("copilot-wide-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width + 80));
 
   let dragging = false;
   let startX = 0;
@@ -304,8 +305,7 @@ function bindResizeHandle() {
 
   document.addEventListener("mousemove", (event) => {
     if (!dragging) return;
-    const next = Math.min(760, Math.max(300, startWidth + (startX - event.clientX)));
-    grid.style.setProperty("--copilot-width", `${next}px`);
+    setCopilotWidth(startWidth + (startX - event.clientX), false);
   });
 
   document.addEventListener("mouseup", () => {
@@ -609,7 +609,6 @@ async function enterWorkbench() {
   }
   $("paper-intake").hidden = true;
   $("paper-workbench").hidden = false;
-  $("new-paper-button").hidden = false;
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
@@ -621,13 +620,11 @@ async function enterWorkbench() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
-function showIntake() {
-  closePaperNoteDrawer();
-  window.location.href = "/app?mode=paper_reading";
-}
-
 function bindPaperNote() {
   const input = $("paper-note-input");
+  const reader = document.querySelector(".reader-panel");
+  const drawer = $("paper-note-drawer");
+  if (reader && drawer.parentElement !== reader) reader.append(drawer);
   state.paperNoteEditor = new window.PaperMarkdownEditor({
     source: input,
     normal: $("paper-note-normal"),
@@ -636,7 +633,7 @@ function bindPaperNote() {
   });
   $("paper-note-button").addEventListener("click", togglePaperNoteDrawer);
   $("paper-note-close-button").addEventListener("click", closePaperNoteDrawer);
-  $("paper-note-drag-handle").addEventListener("click", closePaperNoteDrawer);
+  bindPaperNoteResize();
   $("paper-note-save-button").addEventListener("click", () => savePaperNote());
   $("paper-note-mode").addEventListener("click", (event) => {
     const button = event.target.closest("[data-paper-note-mode]");
@@ -780,9 +777,52 @@ function syncPaperNoteDrawerBounds() {
   const reader = document.querySelector(".reader-panel");
   const drawer = $("paper-note-drawer");
   if (!reader || !drawer) return;
-  const rect = reader.getBoundingClientRect();
-  drawer.style.setProperty("--paper-note-left", `${Math.max(0, rect.left)}px`);
-  drawer.style.setProperty("--paper-note-width", `${Math.min(window.innerWidth, rect.width)}px`);
+  const savedRatio = Number(localStorage.getItem(STORAGE.noteHeight));
+  const ratio = savedRatio >= 0.25 && savedRatio <= 0.75 ? savedRatio : 1 / 3;
+  drawer.style.setProperty("--paper-note-height", `${ratio * 100}%`);
+}
+
+function setCopilotWidth(width, persist = true) {
+  const grid = $("workbench-grid");
+  const maxWidth = Math.max(360, Math.min(960, window.innerWidth - 810));
+  const next = Math.min(maxWidth, Math.max(300, Number(width) || 400));
+  grid.style.setProperty("--copilot-width", `${Math.round(next)}px`);
+  if (persist) localStorage.setItem(STORAGE.copilotWidth, String(Math.round(next)));
+}
+
+function bindPaperNoteResize() {
+  const handle = $("paper-note-drag-handle");
+  const drawer = $("paper-note-drawer");
+  const reader = document.querySelector(".reader-panel");
+  if (!handle || !drawer || !reader) return;
+  let startY = 0;
+  let startHeight = 0;
+
+  const finish = (event) => {
+    if (!handle.classList.contains("is-dragging")) return;
+    handle.classList.remove("is-dragging");
+    if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    const readerHeight = reader.getBoundingClientRect().height || 1;
+    const ratio = drawer.getBoundingClientRect().height / readerHeight;
+    localStorage.setItem(STORAGE.noteHeight, String(Math.min(0.75, Math.max(0.25, ratio))));
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (!drawer.classList.contains("is-open")) return;
+    startY = event.clientY;
+    startHeight = drawer.getBoundingClientRect().height;
+    handle.classList.add("is-dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!handle.classList.contains("is-dragging")) return;
+    const readerHeight = reader.getBoundingClientRect().height;
+    const next = Math.min(readerHeight * 0.75, Math.max(readerHeight * 0.25, startHeight + startY - event.clientY));
+    drawer.style.setProperty("--paper-note-height", `${next}px`);
+  });
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
 }
 
 async function fetchResearchJson(url, options = {}) {
@@ -1840,8 +1880,12 @@ async function startReading(content, sessionId = state.sessionId, options = {}) 
       (delta) => streaming.append(delta),
       (delta) => streaming.appendReasoning(delta),
     );
-    streaming.finish(payload?.data?.agent_response || "", payload?.data?.reasoning || "");
-    applyReadingPayload(payload, { appendAgent: false });
+    const responseText = payload?.data?.agent_response || "";
+    streaming.finish(responseText, payload?.data?.reasoning || "");
+    applyReadingPayload(payload, {
+      appendAgent: false,
+      appendSkills: !parseStructuredAgentResponse(responseText),
+    });
     toast("章节分析已更新。");
     return payload;
   } catch (error) {
@@ -1905,7 +1949,7 @@ function showStreamingAnalysisCard(detail, target = $("analysis-feed")) {
     } else if (streaming && !inline.answer) {
       body.append(create("p", "thinking-status", detail || "正在思考…"));
     }
-    if (inline.answer) body.append(renderMarkdown(inline.answer));
+    if (inline.answer) body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
     target.scrollTop = target.scrollHeight;
   };
   return {
@@ -1951,7 +1995,7 @@ function applyReadingPayload(payload, options = {}) {
   state.skillOutputs = payload.skill_outputs || [];
   persistState();
   if (options.appendAgent !== false) appendAnalysis(data.agent_response || "后端已完成本次阅读操作。", data);
-  renderSkillOutputs(state.skillOutputs, $("analysis-feed"));
+  if (options.appendSkills !== false) renderSkillOutputs(state.skillOutputs, $("analysis-feed"));
   renderProgress();
   renderOutline();
   syncSkillControls();
@@ -1963,7 +2007,7 @@ function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   const card = create("article", "analysis-card");
   const header = create("header");
   header.append(create("strong", "", "Synapse Copilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
-  card.append(header, renderMarkdown(text));
+  card.append(header, renderAgentResponse(text));
   target.append(card);
   target.scrollTop = target.scrollHeight;
 }
@@ -1983,8 +2027,9 @@ function renderSkillOutputs(outputs, target) {
 }
 
 function renderSkillContent(output) {
-  if (output.output_type === "math_derivation") return renderMathTabs(output.content);
-  return renderStructuredValue(output.content);
+  const content = output.output_type === "math_derivation" ? renderMathTabs(output.content) : renderStructuredValue(output.content);
+  typesetResponseMath(content);
+  return content;
 }
 
 function renderMathTabs(content) {
@@ -2042,7 +2087,7 @@ function renderTabBody(value) {
 function renderStructuredValue(value, depth = 0) {
   const container = create("div", "structured-output");
   if (depth > 4) {
-    container.append(create("pre", "analysis-text", JSON.stringify(value, null, 2)));
+    container.append(create("p", "analysis-text", structuredValueText(value)));
     return container;
   }
   Object.entries(value || {}).forEach(([key, item]) => {
@@ -2091,7 +2136,7 @@ function renderCompactObject(value, depth = 0, hiddenKeys = new Set()) {
     if (Array.isArray(item)) {
       dd.append(item.length ? renderStructuredArray(item, depth + 1) : create("span", "", "暂无"));
     } else if (item && typeof item === "object") {
-      dd.append(depth > 3 ? create("pre", "analysis-text", JSON.stringify(item, null, 2)) : renderCompactObject(item, depth + 1));
+      dd.append(depth > 3 ? create("p", "analysis-text", structuredValueText(item)) : renderCompactObject(item, depth + 1));
     } else {
       dd.textContent = item == null || item === "" ? "暂无" : String(item);
     }
@@ -2100,11 +2145,88 @@ function renderCompactObject(value, depth = 0, hiddenKeys = new Set()) {
   return grid;
 }
 
-function renderMarkdown(source) {
-  if (typeof window.renderSafeMarkdown === "function") {
-    return window.renderSafeMarkdown(source, "markdown-content");
+function structuredValueText(value) {
+  if (Array.isArray(value)) return value.map(structuredValueText).filter(Boolean).join("；");
+  if (value && typeof value === "object") {
+    return Object.values(value).map(structuredValueText).filter(Boolean).join("；");
   }
-  return create("div", "markdown-content", String(source || "暂无内容。"));
+  return value == null ? "" : String(value);
+}
+
+function renderMarkdown(source) {
+  let content;
+  if (typeof window.renderSafeMarkdown === "function") {
+    content = window.renderSafeMarkdown(source, "markdown-content");
+  } else {
+    content = create("div", "markdown-content", String(source || "暂无内容。"));
+  }
+  typesetResponseMath(content);
+  return content;
+}
+
+function typesetResponseMath(root) {
+  if (!root || !window.katex?.render || typeof document.createTreeWalker !== "function") return root;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (!node.parentElement?.closest("code,pre,script,style,textarea,.katex")) nodes.push(node);
+  }
+  const pattern = /(\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+?)\$)/g;
+  nodes.forEach((node) => {
+    const text = node.nodeValue || "";
+    pattern.lastIndex = 0;
+    let match;
+    let cursor = 0;
+    const fragment = document.createDocumentFragment();
+    let changed = false;
+    while ((match = pattern.exec(text))) {
+      if (match.index > 0 && text[match.index - 1] === "\\") continue;
+      changed = true;
+      if (match.index > cursor) fragment.append(document.createTextNode(text.slice(cursor, match.index)));
+      const displayMode = Boolean(match[2] != null || match[3] != null);
+      const latex = match[2] ?? match[3] ?? match[4] ?? match[5] ?? "";
+      const span = create("span", displayMode ? "response-math-block" : "response-math-inline");
+      window.katex.render(latex.trim(), span, { displayMode, throwOnError: false, strict: "ignore", trust: false });
+      fragment.append(span);
+      cursor = pattern.lastIndex;
+    }
+    if (!changed) return;
+    if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
+    node.replaceWith(fragment);
+  });
+  return root;
+}
+
+function parseStructuredAgentResponse(source) {
+  const raw = String(source || "").trim();
+  if (!raw) return null;
+  const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1] : raw;
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return null;
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderAgentResponse(source, options = {}) {
+  const structured = options.allowStructured === false
+    ? null
+    : parseStructuredAgentResponse(source);
+  if (Array.isArray(structured)) {
+    const content = renderStructuredArray(structured);
+    typesetResponseMath(content);
+    return content;
+  }
+  if (structured) {
+    const content = renderStructuredValue(structured);
+    typesetResponseMath(content);
+    return content;
+  }
+  return renderMarkdown(source);
 }
 
 function renderSkillControls() {
@@ -2524,7 +2646,9 @@ async function createFork() {
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
     }, fork.feedEl, `正在分析 ${fork.label}…`);
     if (!result) return;
-    renderSkillOutputs(result.skill_outputs || [], fork.feedEl);
+    if (!parseStructuredAgentResponse(result.data?.agent_response || "")) {
+      renderSkillOutputs(result.skill_outputs || [], fork.feedEl);
+    }
     toast("Fork 分支已创建，可在此选项卡继续追问。");
   } catch (error) {
     thinking.remove();
@@ -2538,7 +2662,9 @@ async function runForkTurn(fork, question) {
     action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
     target_section: state.currentSection, content: question,
   }, fork.feedEl, `正在追问 ${fork.label}…`);
-  if (payload) renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+  if (payload && !parseStructuredAgentResponse(payload.data?.agent_response || "")) {
+    renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
+  }
 }
 
 async function streamPaperTurn(body, target, detail) {

@@ -96,6 +96,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertIn('id="paper-intake" class="intake-view" hidden', html)
         self.assertIn('class="paper-reading-body is-booting"', html)
+        self.assertNotIn('id="new-paper-button"', html)
 
     def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -125,13 +126,27 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("if (/^[0-6]$/.test(event.key)", editor)
         self.assertIn("function syncPaperNoteDrawerBounds", javascript)
         self.assertIn('setPaperNoteMode("normal")', javascript)
-        self.assertIn("--paper-note-left", styles)
+        self.assertIn("--paper-note-height", styles)
         self.assertIn("#paper-note-save-button", styles)
         self.assertIn("background: #0b6b57", styles)
         self.assertNotIn(
             "使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。",
             html,
         )
+
+    def test_paper_note_stays_inside_reader_and_has_resizable_one_third_height(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("if (reader && drawer.parentElement !== reader) reader.append(drawer)", javascript)
+        self.assertIn("function bindPaperNoteResize", javascript)
+        self.assertIn('handle.addEventListener("pointermove"', javascript)
+        self.assertIn("paper_reading_note_height_ratio", javascript)
+        self.assertIn("height: var(--paper-note-height,33.333%)", styles)
+        self.assertIn("position: absolute", styles)
+        self.assertIn("cursor: ns-resize", styles)
+        self.assertIn("拖动调整论文笔记高度", html)
 
     def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:
         html = (STATIC / "chat.html").read_text(encoding="utf-8")
@@ -183,7 +198,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
 
         self.assertIn("function renderMarkdown(source)", javascript)
-        self.assertIn("card.append(header, renderMarkdown(text))", javascript)
+        self.assertIn("card.append(header, renderAgentResponse(text))", javascript)
         self.assertIn("window.renderSafeMarkdown", shared_javascript)
         self.assertIn("isMarkdownTableDivider", shared_javascript)
         self.assertIn('bubble.append(renderSafeMarkdown(content))', shared_javascript)
@@ -204,6 +219,29 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('warning.classList.add("is-info")', javascript)
         self.assertNotIn("<dialog", html)
         self.assertNotIn(".showModal()", javascript)
+
+    def test_agent_answers_render_latex_and_have_width_controls(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function typesetResponseMath", javascript)
+        self.assertIn("window.katex.render", javascript)
+        self.assertIn('closest("code,pre,script,style,textarea,.katex")', javascript)
+        self.assertIn('id="copilot-narrow-button"', html)
+        self.assertIn('id="copilot-wide-button"', html)
+        self.assertIn("function setCopilotWidth", javascript)
+        self.assertIn(".response-math-block", styles)
+
+    def test_structured_agent_answers_do_not_render_raw_json(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function parseStructuredAgentResponse", javascript)
+        self.assertIn("function renderAgentResponse", javascript)
+        self.assertIn("renderAgentResponse(inline.answer", javascript)
+        self.assertIn("card.append(header, renderAgentResponse(text))", javascript)
+        self.assertIn("structuredValueText(item)", javascript)
+        self.assertNotIn('create("pre", "analysis-text", JSON.stringify', javascript)
 
     def test_low_value_manual_session_controls_are_not_rendered(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")

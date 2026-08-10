@@ -226,7 +226,11 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     paper_id = request.paper_id or matched_by_hash or matched_by_identity or str(uuid4())
     if matched_by_hash:
         existing = storage.load_paper(paper_id)
-        if existing:
+        if (
+            existing
+            and existing.get("parse_status") != "failed"
+            and storage.get_upload_path(paper_id) is not None
+        ):
             research_store.ensure_library_item(paper_id, reading_status="unread")
             return _ok(
                 "upload_paper",
@@ -293,7 +297,14 @@ def _build_quick_paper_payload(
 ) -> dict[str, Any]:
     """Create a minimal paper record so the PDF reader can open immediately."""
     metadata = metadata or {}
-    title = str(metadata.get("original_filename") or "Parsing paper").removesuffix(".pdf")
+    metadata_title = str(metadata.get("title") or "").strip()
+    title = str(
+        metadata_title
+        or metadata.get("original_filename")
+        or "Parsing paper"
+    ).removesuffix(".pdf")
+    authors = _author_names(metadata.get("authors", []))
+    abstract = str(metadata.get("abstract") or "").strip()
     first_text = ""
     page_count = 0
     year = _optional_year(metadata.get("year"))
@@ -305,11 +316,11 @@ def _build_quick_paper_payload(
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             page_count = doc.page_count
             doc_title = str(doc.metadata.get("title") or "").strip()
-            if doc_title:
+            if doc_title and not metadata_title:
                 title = doc_title
             if doc.page_count:
                 first_text = doc[0].get_text("text")[:2500]
-                if not doc_title:
+                if not doc_title and not metadata_title:
                     for line in first_text.splitlines():
                         cleaned = line.strip()
                         if len(cleaned) >= 8:
@@ -320,6 +331,8 @@ def _build_quick_paper_payload(
                 document_metadata=doc.metadata,
                 source_hint=f"{pdf_url} {metadata.get('original_filename', '')}",
             )
+            if not abstract:
+                abstract = PDFParser().extract_abstract(first_text)
     except Exception as error:
         logger.warning("Quick PDF metadata extraction failed for %s: %s", paper_id, error)
 
@@ -329,14 +342,14 @@ def _build_quick_paper_payload(
         "source": source,
         "source_id": arxiv_id,
         "title": title or "Parsing paper",
-        "authors": [],
-        "abstract": "",
+        "authors": authors,
+        "abstract": abstract,
         "year": year,
         "categories": [],
         "keywords": [],
         "arxiv_id": arxiv_id,
         "doi": "",
-        "url": pdf_url,
+        "url": str(metadata.get("source_url") or pdf_url),
         "pdf_url": pdf_url,
         "citation_count": None,
         "venue": "",
@@ -406,7 +419,9 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
     try:
         metadata = pipeline.parse_pdf_bytes(pdf_bytes)
         metadata.paper_id = paper_id
-        payload = metadata.model_dump(mode="json")
+        payload = _preserve_imported_paper_metadata(
+            metadata.model_dump(mode="json"), paper
+        )
         payload["paper_id"] = paper_id
         payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
         payload["page_count"] = paper.get("page_count", 0)
@@ -474,6 +489,17 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         paper["reading_map_progress"] = 0
         paper["reading_map_error"] = str(error)
         storage.save_paper(paper_id, paper)
+
+
+def _preserve_imported_paper_metadata(
+    parsed: dict[str, Any], existing: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep trusted import metadata when PDF extraction leaves a field empty."""
+    merged = dict(parsed)
+    for field in ("title", "authors", "abstract"):
+        if not merged.get(field) and existing.get(field):
+            merged[field] = existing[field]
+    return merged
 
 
 def _schedule_reading_map_generation(
@@ -1452,6 +1478,8 @@ def _build_llm_reading_map(
                 },
                 {"role": "user", "content": prompt},
             ],
+            max_tokens=5000,
+            timeout=120.0,
         )
         content = response.choices[0].message.content or ""
         parsed = extract_json_object(content)
@@ -3232,7 +3260,12 @@ def _build_reading_map_prompt(
     skill_instructions = _reading_map_skill_instructions(skill_registry)
 
     sections_payload = []
-    for section in (paper.get("sections", []) or [])[:80]:
+    source_sections = [
+        section
+        for section in (paper.get("sections", []) or [])
+        if _section_role(section, fallback.get("paper_type", "unknown")) != "references"
+    ]
+    for section in source_sections[:28]:
         text = " ".join(str(section.get("content") or "").split())
         sections_payload.append({
             "section_id": section.get("section_id", ""),
@@ -3241,7 +3274,7 @@ def _build_reading_map_prompt(
             "start_page": section.get("start_page"),
             "end_page": section.get("end_page"),
             "section_role_hint": _section_role(section, fallback.get("paper_type", "unknown")),
-            "text": text[:900],
+            "text": text[:560],
         })
 
     prompt_payload = {
@@ -3251,7 +3284,13 @@ def _build_reading_map_prompt(
             "paper_type_hint": fallback.get("paper_type", "unknown"),
         },
         "sections": sections_payload,
-        "heuristic_fallback": fallback,
+        "heuristic_seed": {
+            "paper_type": fallback.get("paper_type", "unknown"),
+            "map_variant": fallback.get("map_variant", "research"),
+            "research_problem": fallback.get("research_problem", {}),
+            "core_method": fallback.get("core_method", {}),
+            "input_section_count": len(paper.get("sections", []) or []),
+        },
     }
     return (
         f"{skill_instructions}\n\n"

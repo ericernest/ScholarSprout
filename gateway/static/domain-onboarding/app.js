@@ -39,7 +39,7 @@ const STREAM_STAGE_LABELS = {
   landscape: "正在梳理核心问题与研究方向",
   learning_path: "正在生成标准学习路线",
   generation: "正在生成领域学习地图",
-  repair: "正在修复内容质量问题",
+  repair: "正在完善生成结果",
 };
 const STAGE_LABELS = {
   accepted: "任务已接收",
@@ -51,9 +51,9 @@ const STAGE_LABELS = {
   development_ready: "发展脉络已完成",
   landscape_ready: "概念全景已完成",
   learning_path_ready: "学习路线已完成",
-  quality_ready: "质量评估已完成",
-  final_quality_ready: "最终质量结论已生成",
-  repair_started: "正在修复质量问题",
+  quality_ready: "结果校验已完成",
+  final_quality_ready: "最终结果已生成",
+  repair_started: "正在完善生成结果",
   section_replaced: "已更新问题分区",
   completed: "学习地图已生成",
   failed: "生成失败，可重试",
@@ -65,17 +65,6 @@ const PRIORITY_LABELS = {
   optional: "选读",
   extended: "拓展",
 };
-const QUALITY_LABELS = {
-  structure: "结构完整性",
-  paper_validity: "论文真实性",
-  paper_relevance: "论文相关性",
-  evidence_grounding: "证据支撑",
-  topic_coverage: "主题覆盖",
-  development_coherence: "发展连贯性",
-  learning_path: "路线可执行性",
-  language_alignment: "语言一致性",
-};
-
 const state = {
   taskId: "",
   accessToken: "",
@@ -423,7 +412,6 @@ function render() {
   renderLandscape(data);
   renderLearningPath(data);
   renderPapers(data);
-  renderQuality(data);
   renderGraph(data);
   if (state.selected) showDetail(state.selected.kind, state.selected.id);
 }
@@ -456,15 +444,8 @@ function renderStatus() {
 }
 
 function renderOverview(data) {
-  const qualityState = data.quality?.state || data.status || "";
-  const qualityClass = qualityState === "failed" || data.status === "quality_failed"
-    ? "error"
-    : qualityState === "warning" || data.status === "quality_warning"
-      ? "warning"
-      : "";
   const tags = [
     data.schema_version ? `<span class="tag">${escapeHtml(data.schema_version)}</span>` : "",
-    qualityState ? `<span class="tag ${qualityClass}">${escapeHtml(qualityStatusLabel(qualityState))}</span>` : "",
   ].join("");
   $("overview-content").classList.remove("loading-section");
   $("overview-content").innerHTML = `
@@ -654,90 +635,6 @@ function renderPapers(data) {
     : emptyCopy("当前筛选下没有论文。");
 }
 
-function renderQuality(data) {
-  const quality = data.quality;
-  if (!quality || typeof quality !== "object") {
-    const container = $("quality-content");
-    container.classList.remove("loading-grid");
-    container.innerHTML = sectionStatusCopy("质量评估", data);
-    return;
-  }
-  const dimensions = Object.entries(quality.dimensions || {});
-  const gates = quality.hard_gates || [];
-  const issues = quality.issues || [];
-  const finalQuality = data.final_quality || null;
-  const attempts = data.quality_attempts || [];
-  const stateClass = quality.state === "failed" ? "error" : quality.state === "warning" ? "warning" : "";
-  const container = $("quality-content");
-  container.classList.remove("loading-grid");
-  container.innerHTML = `
-    <div class="quality-summary">
-      <div class="score-card">
-        <b>${Math.round((Number(quality.score) || 0) * 100)}</b>
-        <span>质量分 / 100</span>
-        <span class="tag ${stateClass}">${escapeHtml(qualityStatusLabel(quality.state))}</span>
-      </div>
-      ${finalQuality ? `
-        <div class="quality-box final-quality-card">
-          <h3>最终结论 · ${escapeHtml(qualityStatusLabel(finalQuality.verdict))}</h3>
-          <p>初始 ${formatPercentScore(finalQuality.initial_score)} → 最终 ${formatPercentScore(finalQuality.final_score)}
-            · 变化 ${formatSignedPercent(finalQuality.score_delta)}</p>
-          <p>选择第 ${escapeHtml(finalQuality.selected_attempt)} 次结果
-            · 硬门槛 ${escapeHtml(finalQuality.hard_gate_pass_count)}/${escapeHtml(finalQuality.hard_gate_total)}
-            · 未解决问题 ${escapeHtml(finalQuality.unresolved_issue_count)}</p>
-          <small>选择依据 · ${escapeHtml(finalQuality.selection_reason)}</small>
-        </div>
-      ` : ""}
-      <div class="dimension-list">
-        ${dimensions.map(([name, score]) => `
-          <div class="dimension-row">
-            <span>${escapeHtml(QUALITY_LABELS[name] || name)}</span>
-            <span class="mini-track"><span style="width:${Math.round(Number(score) * 100)}%"></span></span>
-            <b>${Math.round(Number(score) * 100)}</b>
-          </div>
-        `).join("") || emptyCopy("暂无维度评分。")}
-      </div>
-    </div>
-    <div class="quality-detail-grid">
-      ${attempts.length ? `
-        <div class="quality-box">
-          <h3>质量尝试 · ${attempts.length}</h3>
-          <div class="gate-list">
-            ${attempts.map((attempt) => `
-              <div class="gate-row">
-                <strong>第 ${escapeHtml(attempt.attempt_number)} 次 · ${escapeHtml(attempt.source)}</strong>
-                <span>${formatPercentScore(attempt.quality?.score)} / 100 · ${escapeHtml(qualityStatusLabel(attempt.quality?.state))}</span>
-              </div>
-            `).join("")}
-          </div>
-        </div>
-      ` : ""}
-      <div class="quality-box">
-        <h3>硬门槛 · ${quality.passed_hard_gates ? "全部通过" : "存在失败"}</h3>
-        <div class="gate-list">
-          ${gates.map((gate) => `
-            <div class="gate-row">
-              <strong>${escapeHtml(gate.gate)}</strong>
-              <span>${escapeHtml(gate.status)}${gate.score != null ? ` · ${formatScore(gate.score)} / ${formatScore(gate.threshold)}` : ""}</span>
-            </div>
-          `).join("") || "<div class=\"gate-row\">后端未返回硬门槛明细。</div>"}
-        </div>
-      </div>
-      <div class="quality-box">
-        <h3>质量问题 · ${issues.length}</h3>
-        <div class="issue-list">
-          ${issues.map((issue) => `
-            <div class="issue-row">
-              <strong>${escapeHtml(issue.message)}</strong>
-              <span>${escapeHtml(issue.target_path)} · ${escapeHtml(issue.recommended_action)}</span>
-            </div>
-          `).join("") || "<div class=\"issue-row\">没有发现需要处理的问题。</div>"}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function renderGraph(data) {
   const graph = data.knowledge_graph;
   const section = $("knowledge-graph");
@@ -911,6 +808,7 @@ function renderPaperDetail(paper) {
     paper.arxiv_id ? `arXiv：${paper.arxiv_id}` : "",
     (paper.publication_types || []).length ? `类型：${paper.publication_types.join("、")}` : "",
   ].filter(Boolean);
+  const pdfUrl = paperPdfUrl(paper);
   state.selected = { kind: "paper", id: String(paper.paper_id) };
   $("inspector-title").textContent = paper.title || "论文详情";
   $("inspector-subtitle").textContent = `${paper.year || "年份未知"} · ${paper.paper_role || "论文"}`;
@@ -943,18 +841,26 @@ function renderPaperDetail(paper) {
         <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
       </div>
       ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
-      ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
+      ${pdfUrl ? `<a class="source-link" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">查看 PDF 原文 ↗</a>` : ""}
       <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
-      <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
-        ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
+      <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}" ${pdfUrl ? "" : "disabled"}>
+        ${pdfUrl ? "下载并开始论文精读" : "暂未找到 PDF"}
       </button>
     </div>
   `;
 }
 
 async function addPaperToLibrary(paperId, button) {
+  const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
+  if (!paper) return;
   button.disabled = true;
   try {
+    if (paperPdfUrl(paper)) {
+      await downloadDomainPaper(paper);
+      button.textContent = "已下载并加入论文管理";
+      toast("PDF 已保存到论文管理。可稍后从资料库开始精读。");
+      return;
+    }
     const response = await fetch(`/api/research/papers/${encodeURIComponent(paperId)}/library`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -962,7 +868,7 @@ async function addPaperToLibrary(paperId, button) {
     });
     if (!response.ok) throw new Error(await response.text());
     button.textContent = "已加入论文管理";
-    toast("论文已加入资料库。精读与收藏状态彼此独立。")
+    toast("论文信息已加入资料库；当前来源没有可下载的 PDF。")
   } catch (error) {
     button.disabled = false;
     toast(`加入论文库失败：${error.message}`, true);
@@ -972,42 +878,61 @@ async function addPaperToLibrary(paperId, button) {
 async function importPaper(paperId) {
   const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
   if (!paper) return;
-  if (!paper.arxiv_id) {
-    if (paper.url) window.open(paper.url, "_blank", "noopener,noreferrer");
-    return;
-  }
   try {
-    toast("正在导入论文精读…");
-    const response = await fetch("/paper_reading", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "upload_paper",
-        session_id: "",
-        paper_id: "",
-        content: "",
-        pdf_url: `https://arxiv.org/pdf/${encodeURIComponent(paper.arxiv_id)}.pdf`,
-        metadata: {
-          source: "domain_onboarding",
-          domain: currentData()?.domain || "",
-          source_paper_id: paper.paper_id,
-        },
-      }),
-    });
-    const envelope = await readJson(response);
-    let payload = envelope?.content ?? envelope;
-    if (typeof payload === "string") payload = JSON.parse(payload);
-    if (!response.ok || payload?.status === "error") {
-      throw new Error(readError(payload, `导入失败（HTTP ${response.status}）`));
-    }
-    const importedId = payload?.data?.paper_id;
-    if (!importedId) throw new Error("导入响应缺少 paper_id。");
+    toast("正在下载 PDF 并导入论文精读…");
+    const importedId = await downloadDomainPaper(paper);
     localStorage.setItem("paper_reading_paper_id", importedId);
     localStorage.removeItem("paper_reading_session_id");
     window.location.href = "/app/paper-reading";
   } catch (error) {
     toast(`论文导入失败：${error.message}`, true);
   }
+}
+
+function paperPdfUrl(paper) {
+  const explicit = String(paper?.pdf_url || "").trim();
+  if (explicit) return explicit;
+  const arxivId = String(paper?.arxiv_id || "").trim();
+  if (arxivId) return `https://arxiv.org/pdf/${encodeURIComponent(arxivId)}.pdf`;
+  const source = String(paper?.url || "").trim();
+  const arxivMatch = source.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/i);
+  if (arxivMatch) return `https://arxiv.org/pdf/${encodeURIComponent(arxivMatch[1])}.pdf`;
+  return /\.pdf(?:$|[?#])/i.test(source) ? source : "";
+}
+
+async function downloadDomainPaper(paper) {
+  const pdfUrl = paperPdfUrl(paper);
+  if (!pdfUrl) throw new Error("当前论文没有可下载的 PDF 地址。");
+  const response = await fetch("/paper_reading", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "upload_paper",
+      session_id: "",
+      paper_id: "",
+      content: "",
+      pdf_url: pdfUrl,
+      metadata: {
+        source: "domain_onboarding",
+        domain: currentData()?.domain || "",
+        source_paper_id: paper.paper_id,
+        title: paper.title || "",
+        authors: paper.authors || [],
+        abstract: paper.abstract || "",
+        year: paper.year || null,
+        source_url: paper.url || pdfUrl,
+      },
+    }),
+  });
+  const envelope = await readJson(response);
+  let payload = envelope?.content ?? envelope;
+  if (typeof payload === "string") payload = JSON.parse(payload);
+  if (!response.ok || payload?.status === "error") {
+    throw new Error(readError(payload, `导入失败（HTTP ${response.status}）`));
+  }
+  const importedId = payload?.data?.paper_id;
+  if (!importedId) throw new Error("导入响应缺少 paper_id。");
+  return importedId;
 }
 
 async function cancelTask() {
@@ -1250,33 +1175,10 @@ function weekLabel(item) {
   return start === end ? `第 ${start} 周` : `第 ${start}–${end} 周`;
 }
 
-function qualityStatusLabel(value) {
-  return {
-    passed: "质量通过",
-    warning: "建议复核",
-    failed: "硬门槛未通过",
-    ok: "质量通过",
-    quality_warning: "建议复核",
-    quality_failed: "硬门槛未通过",
-  }[value] || value || "质量检查中";
-}
-
-function formatScore(value) {
-  const score = Number(value);
-  return Number.isFinite(score) ? score.toFixed(2) : "—";
-}
-
 function formatPercentScore(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
-}
-
-function formatSignedPercent(value) {
-  const score = Number(value);
-  if (!Number.isFinite(score)) return "—";
-  const percent = Math.round(score * 100);
-  return `${percent > 0 ? "+" : ""}${percent}`;
 }
 
 function escapeHtml(value) {

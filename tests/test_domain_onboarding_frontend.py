@@ -82,14 +82,29 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn('domain_onboarding_workspace_v1_9', script)
         self.assertIn('domain_onboarding_workspace_v1_5', script)
         self.assertIn("pendingRequestId", script)
-        self.assertIn("data.final_quality", script)
-        self.assertIn("data.quality_attempts", script)
         self.assertIn("development_stage_plans", script)
-        self.assertIn("formatSignedPercent", script)
         self.assertIn("STANDARD ROUTE", html)
         self.assertNotIn("PERSONAL ROUTE", html)
+        self.assertNotIn("新建领域", html)
         self.assertNotIn("正在生成个性化学习路线", script)
         self.assertNotIn("学习者画像已完成", script)
+
+    def test_paper_actions_download_pdf_without_opening_metadata_page(self) -> None:
+        html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        script = (STATIC_DIR / "domain-onboarding" / "app.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function paperPdfUrl", script)
+        self.assertIn("async function downloadDomainPaper", script)
+        self.assertIn('abstract: paper.abstract || ""', script)
+        self.assertIn('source_url: paper.url || pdfUrl', script)
+        self.assertIn("查看 PDF 原文", script)
+        self.assertNotIn('window.open(paper.url', script)
+        self.assertNotIn('id="quality"', html)
+        self.assertNotIn("renderQuality(data)", script)
 
     def test_protected_job_requests_propagate_access_token(self) -> None:
         chat_script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")

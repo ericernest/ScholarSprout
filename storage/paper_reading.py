@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -148,9 +149,15 @@ class PaperReadingStorage:
 
     @staticmethod
     def _safe_component(value: str) -> str:
-        safe = Path(value).name
-        if not safe or safe != value or safe in {".", ".."}:
+        raw = str(value or "")
+        if not raw or raw in {".", ".."} or "/" in raw or "\\" in raw:
             raise ValueError("Invalid storage path component.")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip(" ._")
+        if not safe:
+            safe = "paper"
+        if safe != raw:
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+            safe = f"{safe[:80]}-{digest}"
         return safe
 
     @staticmethod
