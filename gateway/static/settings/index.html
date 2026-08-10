@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>配置 · NoviceSynapse</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/settings/styles.css" />
+  </head>
+  <body>
+    <main class="settings-page">
+      <header class="topbar">
+        <a class="brand" href="/">NoviceSynapse</a>
+        <div><a class="back-link" href="/library">资料库</a> <a class="back-link" href="/app">返回聊天</a></div>
+      </header>
+
+      <section class="settings-shell">
+        <aside class="guide-card">
+          <p class="eyebrow">FIRST RUN GUIDE</p>
+          <h1 id="guide-title">三步完成配置</h1>
+          <p class="guide-copy">这些设置只保存在运行 NoviceSynapse 的电脑上。</p>
+          <ol class="steps">
+            <li>
+              <span>1</span>
+              <div><strong>准备模型信息</strong><p>从模型服务商获取 API Key、Base URL 和模型名称。</p></div>
+            </li>
+            <li>
+              <span>2</span>
+              <div><strong>选择数据目录</strong><p>会话、论文记录和上传的 PDF 都会放在这里。</p></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><strong>保存并重启</strong><p>重启后，三个模式会统一使用新配置。</p></div>
+            </li>
+          </ol>
+          <div class="privacy-note">API Key 不会在页面加载时回传；这里只显示是否已经配置。</div>
+        </aside>
+
+        <section class="form-card">
+          <div class="form-heading">
+            <div>
+              <p class="eyebrow">LOCAL CONFIGURATION</p>
+              <h2>模型与数据</h2>
+            </div>
+            <span id="setup-badge" class="status-badge">正在读取…</span>
+          </div>
+
+          <form id="settings-form">
+            <label>
+              <span>Base URL</span>
+              <input id="base-url" name="base_url" type="url" placeholder="https://你的服务商地址/v1" />
+              <small>填写 OpenAI 兼容接口的完整地址；使用服务商默认地址时也建议明确填写。</small>
+            </label>
+
+            <label>
+              <span>API Key</span>
+              <div class="secret-field">
+                <input id="api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空会保留已经保存的密钥" />
+                <button id="toggle-secret" type="button">显示</button>
+              </div>
+              <small id="api-key-state">尚未读取密钥状态。</small>
+            </label>
+
+            <label>
+              <span>模型名称</span>
+              <input id="model-name" name="model_name" type="text" required placeholder="填写服务商支持的模型 ID" />
+              <small>必须与服务商接口接受的 model 参数完全一致。</small>
+            </label>
+
+            <label>
+              <span>数据目录</span>
+              <input id="data-dir" name="data_dir" type="text" required placeholder="例如 D:\NoviceSynapseData" />
+              <small id="data-dir-help">支持绝对路径和 ~/ 开头的用户目录路径。</small>
+            </label>
+
+            <div id="message" class="message" hidden></div>
+            <button id="save-button" class="save-button" type="submit">保存配置</button>
+          </form>
+          <p id="config-location" class="config-location"></p>
+        </section>
+      </section>
+    </main>
+    <script src="/static/settings/app.js"></script>
+  </body>
+</html>

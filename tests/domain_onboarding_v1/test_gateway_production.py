@@ -47,6 +47,7 @@ class GatewayProductionTests(unittest.TestCase):
         app.state.domain_onboarding_metrics = DomainOnboardingMetrics()
         app.state.domain_onboarding_audit_sink = object()
         app.state.domain_onboarding_job_manager = object()
+        app.state.research_storage = object()
 
         response = TestClient(app).get("/ready")
 

@@ -39,6 +39,7 @@ const state = {
   pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
+  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "normal", paperNoteEditor: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,6 +65,7 @@ function boot() {
   renderCopilotTabs();
   bindIntake();
   bindWorkbench();
+  bindPaperNote();
   bindReader();
   bindFork();
   bindResizeHandle();
@@ -115,8 +117,19 @@ function bindWorkbench() {
     if (!question) return;
     input.value = "";
     const fork = state.forks.find((item) => item.id === state.activeFeedId);
-    if (fork) runForkTurn(fork, question);
-    else startReading(question);
+    if (fork) {
+      appendUserQuestion(question, fork.feedEl);
+      runForkTurn(fork, question);
+    } else {
+      appendUserQuestion(question);
+      startReading(question);
+    }
+  });
+  $("reading-chat-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("reading-chat-form").requestSubmit();
+    }
   });
   $("reading-stop-button").addEventListener("click", interruptReadingResponse);
   window.addEventListener("beforeunload", saveBeforeUnload);
@@ -489,7 +502,7 @@ async function loadPaperDetail() {
   state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
-  loadPdfMarks();
+  await loadPdfMarks();
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
 }
@@ -600,13 +613,183 @@ async function enterWorkbench() {
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
+  syncPaperNoteDrawerBounds();
+  $("paper-note-button").hidden = !state.paperId;
+  if (state.paperId && state.paperNoteLoadedFor !== state.paperId) void loadPaperNote();
   $("paper-boot").hidden = true;
   document.body.classList.remove("is-booting");
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function showIntake() {
+  closePaperNoteDrawer();
   window.location.href = "/app?mode=paper_reading";
+}
+
+function bindPaperNote() {
+  const input = $("paper-note-input");
+  state.paperNoteEditor = new window.PaperMarkdownEditor({
+    source: input,
+    normal: $("paper-note-normal"),
+    onChange: markPaperNoteChanged,
+    onModeChange: syncPaperNoteModeButtons,
+  });
+  $("paper-note-button").addEventListener("click", togglePaperNoteDrawer);
+  $("paper-note-close-button").addEventListener("click", closePaperNoteDrawer);
+  $("paper-note-drag-handle").addEventListener("click", closePaperNoteDrawer);
+  $("paper-note-save-button").addEventListener("click", () => savePaperNote());
+  $("paper-note-mode").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-paper-note-mode]");
+    if (button) setPaperNoteMode(button.dataset.paperNoteMode);
+  });
+  $("paper-note-toolbar").addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-markdown-action]")) event.preventDefault();
+  });
+  $("paper-note-toolbar").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-markdown-action]");
+    if (button) applyMarkdownAction(button.dataset.markdownAction);
+  });
+  [input, $("paper-note-normal")].forEach((editor) => editor.addEventListener("blur", () => {
+    if (state.paperNoteDirty) void savePaperNote({ quiet: true });
+  }));
+  window.addEventListener("resize", syncPaperNoteDrawerBounds);
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(syncPaperNoteDrawerBounds);
+    observer.observe(document.querySelector(".reader-panel"));
+  }
+  document.addEventListener("keydown", (event) => {
+    const drawerOpen = $("paper-note-drawer").classList.contains("is-open");
+    if (event.key === "Escape" && drawerOpen) {
+      event.preventDefault();
+      closePaperNoteDrawer();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && drawerOpen) {
+      event.preventDefault();
+      void savePaperNote();
+    }
+  });
+}
+
+async function loadPaperNote() {
+  if (!state.paperId) return;
+  const paperId = state.paperId;
+  setPaperNoteStatus("正在读取…");
+  try {
+    const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`);
+    if (paperId !== state.paperId) return;
+    state.paperNoteEditor.setMarkdown(note.content_markdown || "");
+    $("paper-note-title").textContent = `${state.paper?.title || note.paper_title || "论文"} · 笔记`;
+    state.paperNoteLoadedFor = paperId;
+    state.paperNoteDirty = false;
+    updatePaperNoteCount();
+    setPaperNoteStatus(note.updated_at ? "已保存" : "空白笔记");
+  } catch (error) {
+    setPaperNoteStatus("读取失败", true);
+    toast(error.message || "论文笔记读取失败。", true);
+  }
+}
+
+async function savePaperNote({ quiet = false } = {}) {
+  if (!state.paperId || state.paperNoteLoadedFor !== state.paperId) return;
+  if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
+  state.paperNoteSaveTimer = null;
+  const paperId = state.paperId;
+  const content = state.paperNoteEditor.getMarkdown();
+  setPaperNoteStatus("正在保存…");
+  try {
+    const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_markdown: content }),
+    });
+    if (paperId !== state.paperId || content !== state.paperNoteEditor.getMarkdown()) return;
+    state.paperNoteDirty = false;
+    const savedAt = note.updated_at ? new Date(note.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    setPaperNoteStatus(savedAt ? `已保存 ${savedAt}` : "已保存");
+    if (!quiet) toast("论文笔记已保存。");
+  } catch (error) {
+    state.paperNoteDirty = true;
+    setPaperNoteStatus("保存失败", true);
+    if (!quiet) toast(error.message || "论文笔记保存失败。", true);
+  }
+}
+
+async function openPaperNoteDrawer() {
+  if (!state.paperId) return;
+  if (state.paperNoteLoadedFor !== state.paperId) await loadPaperNote();
+  if (state.paperNoteLoadedFor !== state.paperId) return;
+  setPaperNoteMode("normal");
+  const drawer = $("paper-note-drawer");
+  syncPaperNoteDrawerBounds();
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  $("paper-note-button").classList.add("is-active");
+  window.setTimeout(() => state.paperNoteEditor.focus(), 180);
+}
+
+function closePaperNoteDrawer() {
+  const drawer = $("paper-note-drawer");
+  drawer.classList.remove("is-open");
+  drawer.setAttribute("aria-hidden", "true");
+  $("paper-note-button").classList.remove("is-active");
+  if (state.paperNoteDirty) void savePaperNote({ quiet: true });
+}
+
+function togglePaperNoteDrawer() {
+  if ($("paper-note-drawer").classList.contains("is-open")) closePaperNoteDrawer();
+  else void openPaperNoteDrawer();
+}
+
+function updatePaperNoteCount() {
+  const content = state.paperNoteEditor?.getMarkdown() || "";
+  const characters = Array.from(content).length;
+  const lines = content ? content.split(/\r?\n/).length : 0;
+  $("paper-note-count").textContent = `${characters} 字 · ${lines} 行`;
+}
+
+function setPaperNoteStatus(message, isError = false) {
+  const status = $("paper-note-save-status");
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+}
+
+function setPaperNoteMode(mode) {
+  state.paperNoteEditor?.setMode(mode);
+}
+
+function syncPaperNoteModeButtons(mode) {
+  state.paperNoteMode = mode;
+  $("paper-note-mode").querySelectorAll("[data-paper-note-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.paperNoteMode === mode);
+  });
+}
+
+function markPaperNoteChanged() {
+  state.paperNoteDirty = true;
+  updatePaperNoteCount();
+  setPaperNoteStatus("等待保存…");
+  if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
+  state.paperNoteSaveTimer = window.setTimeout(() => savePaperNote({ quiet: true }), 700);
+}
+
+function applyMarkdownAction(action) {
+  state.paperNoteEditor?.apply(action);
+}
+
+function syncPaperNoteDrawerBounds() {
+  const reader = document.querySelector(".reader-panel");
+  const drawer = $("paper-note-drawer");
+  if (!reader || !drawer) return;
+  const rect = reader.getBoundingClientRect();
+  drawer.style.setProperty("--paper-note-left", `${Math.max(0, rect.left)}px`);
+  drawer.style.setProperty("--paper-note-width", `${Math.min(window.innerWidth, rect.width)}px`);
+}
+
+async function fetchResearchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || `请求失败（HTTP ${response.status}）`);
+  return data;
 }
 
 function toggleFullscreen() {
@@ -716,7 +899,7 @@ function renderOutlineSourceWarning() {
   const status = state.sectionExtractionStatus || state.paper?.section_extraction_status || "";
   const source = state.sectionExtractionSource || state.paper?.section_extraction_source || "";
   const message = state.sectionExtractionMessage || state.paper?.section_extraction_message || "";
-  warning.classList.remove("is-error", "is-ok", "is-pending");
+  warning.classList.remove("is-error", "is-ok", "is-info", "is-pending");
   if (["queued", "pending", "parsing"].includes(state.parseStatus)) {
     warning.textContent = "正在检测 PDF 内置目录…";
     warning.classList.add("is-pending");
@@ -730,8 +913,8 @@ function renderOutlineSourceWarning() {
     return;
   }
   if (source === "heuristic" || status.includes("fallback")) {
-    warning.textContent = message || "未找到 PDF 内置目录，已回退启发式识别；索引可能不等于论文真实目录。";
-    warning.classList.add("is-error");
+    warning.textContent = message || "PDF 未提供内置目录，已根据正文标题生成章节索引。";
+    warning.classList.add("is-info");
     warning.hidden = false;
     return;
   }
@@ -2096,6 +2279,7 @@ function commitPdfMark(mark, editingId = "") {
     state.pdfMarkHistory.push(mark.id);
   }
   persistPdfMarks();
+  void savePdfMarkRemote(mark);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
   renderPdfMarks(page, mark.page);
   window.getSelection()?.removeAllRanges();
@@ -2145,6 +2329,7 @@ function undoLastPdfMark() {
   }
   if (!removed) removed = state.pdfMarks.pop();
   persistPdfMarks();
+  void deletePdfMarkRemote(removed.id);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
   if (page) renderPdfMarks(page, removed.page);
   toast("已撤销最近一次标注。");
@@ -2180,10 +2365,81 @@ function persistPdfMarks() {
   localStorage.setItem(STORAGE.pdfMarks, JSON.stringify(all));
 }
 
-function loadPdfMarks() {
+async function loadPdfMarks() {
   const all = loadAllPdfMarks();
-  state.pdfMarks = Array.isArray(all[state.paperId]) ? all[state.paperId] : [];
+  const cached = Array.isArray(all[state.paperId]) ? all[state.paperId] : [];
+  try {
+    const query = state.sessionId ? `?reading_session_id=${encodeURIComponent(state.sessionId)}` : "";
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations${query}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const remote = (await response.json()).map(annotationToPdfMark);
+    const merged = new Map(cached.map((mark) => [mark.id, mark]));
+    remote.forEach((mark) => merged.set(mark.id, mark));
+    state.pdfMarks = [...merged.values()];
+    const remoteIds = new Set(remote.map((mark) => mark.id));
+    cached.filter((mark) => !remoteIds.has(mark.id)).forEach((mark) => void savePdfMarkRemote(mark));
+    persistPdfMarks();
+  } catch {
+    state.pdfMarks = cached;
+  }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
+}
+
+function appendUserQuestion(text, target = $("analysis-feed")) {
+  const card = create("article", "user-question-card");
+  const header = create("header");
+  header.append(create("strong", "", "你"), create("span", "", "提问"));
+  card.append(header, create("p", "", text));
+  target.append(card);
+  target.scrollTop = target.scrollHeight;
+}
+
+function annotationToPdfMark(annotation) {
+  return {
+    id: annotation.annotation_id,
+    type: annotation.annotation_type,
+    color: annotation.color,
+    page: annotation.page_number,
+    rects: annotation.rects || [],
+    text: annotation.selected_text || "",
+    note: annotation.note_text || "",
+    section_id: annotation.section_id || "",
+    created_at: annotation.created_at,
+    updated_at: annotation.updated_at,
+  };
+}
+
+async function savePdfMarkRemote(mark) {
+  if (!state.paperId || !mark?.id) return;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations/${encodeURIComponent(mark.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reading_session_id: state.sessionId || null,
+        annotation_type: mark.type,
+        color: mark.color || "yellow",
+        page_number: Number(mark.page) || 1,
+        section_id: mark.section_id || null,
+        selected_text: mark.text || "未记录原文",
+        rects: mark.rects || [],
+        note_text: mark.note || "",
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    toast("标注已保存在本机缓存，暂未同步到资料库。", true);
+  }
+}
+
+async function deletePdfMarkRemote(markId) {
+  if (!state.paperId || !markId) return;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/annotations/${encodeURIComponent(markId)}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    toast("本机标注已撤销，但资料库同步失败。", true);
+  }
 }
 
 function loadAllPdfMarks() {
@@ -2802,8 +3058,13 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
-  state.sessionId = localStorage.getItem(STORAGE.session) || "";
-  state.paperId = localStorage.getItem(STORAGE.paper) || "";
+  const params = new URLSearchParams(window.location.search);
+  const requestedPaper = params.get("paper_id");
+  const requestedSession = params.get("session_id");
+  state.paperId = requestedPaper || localStorage.getItem(STORAGE.paper) || "";
+  state.sessionId = requestedSession !== null
+    ? requestedSession
+    : (requestedPaper ? "" : localStorage.getItem(STORAGE.session) || "");
   state.currentSection = localStorage.getItem(STORAGE.section) || "";
   if (!state.paperId && !state.sessionId) {
     if (isDedicatedWorkspace) window.location.replace("/app?mode=paper_reading");
@@ -2844,6 +3105,14 @@ function persistState() {
 
 function saveBeforeUnload() {
   persistState();
+  if (state.paperNoteDirty && state.paperId && state.paperNoteLoadedFor === state.paperId) {
+    fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/note`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_markdown: state.paperNoteEditor?.getMarkdown() || "" }),
+      keepalive: true,
+    }).catch(() => {});
+  }
 }
 
 function setBusy(active, title = "", detail = "") {

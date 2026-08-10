@@ -77,6 +77,7 @@ class SessionManager:
         user_id: str = "default",
         parent_session_id: str | None = None,
         fork_context: str = "",
+        session_id: str | None = None,
     ) -> ReadingSession:
         """创建新会话。
 
@@ -91,6 +92,7 @@ class SessionManager:
             新创建的 ReadingSession 实例
         """
         session = ReadingSession(
+            session_id=session_id or str(uuid4()),
             paper_id=paper_id,
             paper_title=paper_title,
             user_id=user_id,

@@ -18,10 +18,17 @@ class OpenAIClientConfig:
     output_cost_per_million_tokens: float | None = None
 
 
+# 描述本地持久化数据的目录配置。
+@dataclass(slots=True)
+class StorageConfig:
+    data_dir: str = "~/.novicesynapse"
+
+
 # 描述当前应用配置。
 @dataclass(slots=True)
 class AppConfig:
     client: OpenAIClientConfig = field(default_factory=OpenAIClientConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
 
 # 将配置对象转换为可写入 JSON 的字典。

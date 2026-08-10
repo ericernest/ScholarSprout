@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bus.events import OUTBOUND
 from channels.base import BaseChannel, ChannelMessage
+from storage.message_recorder import record_inbound, record_outbound
 
 MessageHandler = Callable[[ChannelMessage, Any], Any]
 
@@ -37,8 +38,10 @@ def process_channel_message(
     app_state: Any,
 ) -> ChannelMessage:
     channel.publish_inbound(message)
+    record_inbound(app_state, message)
     content = handler(message, app_state)
     outbound_message = build_channel_output(message, content)
+    record_outbound(app_state, outbound_message)
     channel.send_outbound(outbound_message)
 
     return outbound_message

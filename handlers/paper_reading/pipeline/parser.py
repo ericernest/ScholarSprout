@@ -99,6 +99,7 @@ class PDFParser:
             for page in doc
         ]
         full_text = "\n\n".join(text for text in page_texts if text)
+        front_matter_text = doc[0].get_text("text") if doc.page_count else full_text
         sections, section_meta = self._sections_from_outline_or_heuristic(
             doc=doc,
             page_texts=page_texts,
@@ -113,13 +114,19 @@ class PDFParser:
             table_elements=table_elements,
         )
 
+        abstract = self.extract_abstract(full_text)
+        if not abstract:
+            subject = str((doc.metadata or {}).get("subject") or "").strip()
+            if len(subject) >= 80:
+                abstract = re.sub(r"\s+", " ", subject)[:3000]
+
         return PaperMetadata(
             paper_id=str(uuid4()),
             source="upload",
             source_id="",
-            title=self.extract_title(full_text),
-            authors=self.extract_authors(full_text),
-            abstract=self.extract_abstract(full_text),
+            title=self.extract_title(front_matter_text),
+            authors=self.extract_authors(front_matter_text),
+            abstract=abstract,
             year=self.extract_year(full_text, document_metadata=doc.metadata),
             sections=sections,
             figures=figures,
@@ -155,7 +162,7 @@ class PDFParser:
         return sections, {
             "source": "heuristic",
             "status": "outline_missing_fallback_heuristic",
-            "message": "未找到 PDF 内置 outline/bookmark，已回退到启发式章节识别；目录可能不等于论文真实目录。",
+            "message": "PDF 未提供内置目录，已根据正文标题生成章节索引。",
             "outline_entries_count": 0,
         }
 
@@ -1364,6 +1371,7 @@ class PDFParser:
             if candidates and (
                 "," in line
                 or re.search(r"[∗†]|\b(?:University|Institute|Equal Contribution|Corresponding author)\b", line)
+                or re.search(r"\d[∗†‡*]?\s*$", line)
             ):
                 break
             if 5 < len(line) < 220:
@@ -1378,13 +1386,49 @@ class PDFParser:
     def extract_authors(self, text: str) -> list[Author]:
         """从文本中提取作者信息。
 
-        启发式: 标题后的几行中，寻找包含逗号分隔或 "and" 连接的作者行。
+        支持逗号分隔作者，也支持首页逐行排列并带单位编号的作者。
         """
         lines = [line.strip() for line in text.split("\n") if line.strip()]
-        for line in lines[1:18]:
+        title = self.extract_title(text)
+        joined_title = ""
+        author_start = 1
+        for index, line in enumerate(lines[:20]):
+            joined_title = f"{joined_title} {line}".strip()
+            if joined_title == title:
+                author_start = index + 1
+                break
+
+        numbered_authors: list[Author] = []
+        seen_names: set[str] = set()
+        organization_words = re.compile(
+            r"\b(?:University|Institute|Laboratory|Lab|Researcher|Language|Intelligence|Tencent|Email)\b",
+            re.IGNORECASE,
+        )
+        marked_name = re.compile(
+            r"([A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){1,3})"
+            r"[∗†‡*]*\d(?:,\d+)*[∗†‡*]*"
+        )
+        for line in lines[author_start:20]:
+            if line.lower() in {"abstract", "摘要"} or organization_words.search(line):
+                break
+            for match in marked_name.finditer(line):
+                name = match.group(1).strip()
+                if name not in seen_names:
+                    numbered_authors.append(Author(name=name))
+                    seen_names.add(name)
+        if len(numbered_authors) >= 2:
+            return numbered_authors
+
+        front_lines = lines[:next(
+            (index for index, line in enumerate(lines) if line.lower() in {"abstract", "摘要"}),
+            min(len(lines), 18),
+        )]
+        for line in front_lines[1:]:
             if not ("," in line or re.search(r"\s+and\s+|\s+&\s+", line)):
                 continue
-            if "@" in line or re.search(r"\b(?:University|Institute|Contribution|author)\b", line, re.IGNORECASE):
+            if "@" in line or organization_words.search(line) or re.search(
+                r"\b(?:Contribution|author)\b", line, re.IGNORECASE
+            ):
                 continue
             cleaned = re.sub(r"[∗†*]?\d+[∗†*]?", "", line)
             cleaned = re.sub(r"[∗†*]", "", cleaned)
@@ -1406,9 +1450,15 @@ class PDFParser:
         lines = self._normalize_section_lines(text)
         for index, raw_line in enumerate(lines):
             line = raw_line.strip()
-            if not re.fullmatch(r"(Abstract|摘要)", line, re.IGNORECASE):
+            label = re.match(
+                r"^(?:Abstract|摘要)\s*[:：.\-—–]?\s*(.*)$",
+                line,
+                re.IGNORECASE,
+            )
+            if not label:
                 continue
-            body: list[str] = []
+            inline_body = label.group(1).strip()
+            body: list[str] = [inline_body] if inline_body else []
             for candidate_index, candidate in enumerate(lines[index + 1:], start=index + 1):
                 value = candidate.strip()
                 if not value:
@@ -1429,7 +1479,7 @@ class PDFParser:
                 return abstract[:3000]
 
         inline = re.search(
-            r"\b(?:Abstract|摘要)\b\s*[:：.\-]?\s+(.{80,}?)(?=\n\s*(?:1(?:\.|\s)|Introduction\b|引言\b|References\b|Bibliography\b))",
+            r"(?:\bAbstract\b|摘要)\s*[:：.\-—–]?\s+(.{80,}?)(?=\n\s*(?:1(?:\.|\s)|Introduction\b|引言\b|References\b|Bibliography\b))",
             text,
             re.DOTALL | re.IGNORECASE,
         )
@@ -1438,10 +1488,20 @@ class PDFParser:
             if len(abstract) > 50:
                 return abstract[:3000]
 
-        # 回退：取前 2000 字符中较长的段落
-        first_chunk = text[:2000]
-        paragraphs = [p.strip() for p in first_chunk.split("\n\n") if len(p.strip()) > 100]
-        return paragraphs[0][:2000] if paragraphs else ""
+        # 回退：部分出版 PDF 没有独立 Abstract 标签，或标签在版面提取时丢失。
+        # 这时选首页正文中的第一个长段落，而不是直接返回空字符串。
+        lead_lines = self._normalize_section_lines(text[:5000])
+        paragraphs = self._lines_to_paragraphs(lead_lines)
+        for paragraph in paragraphs:
+            compact = re.sub(r"\s+", " ", paragraph).strip()
+            if len(compact) < 120:
+                continue
+            if "@" in compact or self._looks_like_running_header(compact):
+                continue
+            if re.match(r"^(?:doi|arxiv|keywords?|index terms?)\b", compact, re.IGNORECASE):
+                continue
+            return compact[:2000]
+        return ""
 
     def _looks_like_abstract_boundary(
         self,

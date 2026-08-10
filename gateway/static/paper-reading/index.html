@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#07120f" />
     <title>论文精读 · NoviceSynapse</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/vendor/katex/katex.min.css" />
     <link rel="stylesheet" href="/static/paper-reading/styles.css" />
   </head>
   <body class="paper-reading-body is-booting">
@@ -16,8 +17,10 @@
       <a class="pr-brand" href="/"><span class="brand-mark">N</span><span>NoviceSynapse</span></a>
       <div class="topbar-center"><span class="status-dot"></span><span id="workspace-status">论文精读工作台</span></div>
       <nav class="topbar-actions" aria-label="页面导航">
+        <button id="paper-note-button" class="ghost-button" type="button" hidden>论文笔记</button>
         <button id="fullscreen-button" class="ghost-button" type="button">全屏阅读</button>
         <button id="new-paper-button" class="ghost-button" type="button" hidden>换一篇论文</button>
+        <a class="ghost-button" href="/library?view=paper-readings">精读列表</a>
         <a class="ghost-button" href="/app">返回对话</a>
       </nav>
     </header>
@@ -140,7 +143,7 @@
             </div>
             <form id="reading-chat-form" class="reading-composer">
               <textarea id="reading-chat-input" rows="3" placeholder="针对当前章节提问，或让专家继续分析…" required></textarea>
-              <div class="composer-row"><span id="composer-context">当前：全文</span><button id="reading-stop-button" class="mini-button is-stop" type="button" hidden>中断</button><button class="accent-button" type="submit">发送</button></div>
+              <div class="composer-row"><span id="composer-context">当前：全文 · Enter 发送，Shift+Enter 换行</span><button id="reading-stop-button" class="mini-button is-stop" type="button" hidden>中断</button><button class="accent-button" type="submit">发送</button></div>
             </form>
           </aside>
         </div>
@@ -162,6 +165,19 @@
         </section>
       </section>
     </main>
+
+    <section id="paper-note-drawer" class="paper-note-drawer" aria-hidden="true" aria-label="论文 Markdown 笔记">
+      <button id="paper-note-drag-handle" class="paper-note-drag-handle" type="button" aria-label="收起论文笔记"><span></span></button>
+      <header>
+        <div><p class="panel-label">Paper note · Markdown</p><h2 id="paper-note-title">论文笔记</h2></div>
+        <div class="paper-note-actions"><span id="paper-note-save-status">尚未修改</span><div id="paper-note-mode" class="paper-note-mode" role="group" aria-label="笔记编辑模式"><button class="is-active" type="button" data-paper-note-mode="normal">正常模式</button><button type="button" data-paper-note-mode="source">源码模式</button></div><button id="paper-note-save-button" class="mini-button is-accent" type="button">保存</button><button id="paper-note-close-button" class="dialog-close" type="button" aria-label="收起论文笔记">×</button></div>
+      </header>
+      <div id="paper-note-toolbar" class="paper-note-toolbar" role="toolbar" aria-label="Markdown 格式工具">
+        <button type="button" data-markdown-action="heading1" title="一级标题（Ctrl+1）">H1</button><button type="button" data-markdown-action="heading2" title="二级标题（Ctrl+2）">H2</button><button type="button" data-markdown-action="heading3" title="三级标题（Ctrl+3）">H3</button><button type="button" data-markdown-action="bold" title="加粗（Ctrl+B）"><strong>B</strong></button><button type="button" data-markdown-action="italic" title="斜体（Ctrl+I）"><em>I</em></button><span></span><button type="button" data-markdown-action="quote" title="引用">❝</button><button type="button" data-markdown-action="bullet" title="无序列表（Ctrl+Shift+8）">• 列表</button><button type="button" data-markdown-action="ordered" title="有序列表（Ctrl+Shift+7）">1. 列表</button><button type="button" data-markdown-action="task" title="任务列表">☐ 任务</button><button type="button" data-markdown-action="table" title="插入表格">表格</button><span></span><button type="button" data-markdown-action="code" title="行内代码">&lt;/&gt;</button><button type="button" data-markdown-action="link" title="链接（Ctrl+K）">链接</button><button type="button" data-markdown-action="inline_math" title="行内公式（$...$）">∑ 公式</button><button type="button" data-markdown-action="block_math" title="块公式（$$...$$）">∫ 公式块</button>
+      </div>
+      <div class="paper-note-editor-body"><div id="paper-note-normal" class="paper-note-normal" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="开始记录论文笔记……"></div><textarea id="paper-note-input" spellcheck="false" placeholder="# 阅读笔记&#10;&#10;记录核心问题、方法、证据、疑问与后续想法……" hidden></textarea></div>
+      <footer><span id="paper-note-shortcuts">Ctrl+1~6 标题 · Ctrl+0 正文 · Ctrl+B 加粗 · Ctrl+I 斜体 · Ctrl+K 链接 · Ctrl+S 保存</span><span id="paper-note-count">0 字</span></footer>
+    </section>
 
     <div id="fork-modal" class="fork-modal" hidden>
       <div class="fork-modal-backdrop" data-fork-close></div>
@@ -194,6 +210,8 @@
     <div id="global-loading" class="global-loading" hidden><span class="loading-orb"></span><div><strong id="loading-title">正在处理</strong><p id="loading-detail">请稍候…</p></div></div>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="/static/app.js"></script>
+    <script src="/static/vendor/katex/katex.min.js"></script>
+    <script src="/static/paper-reading/note-editor.js"></script>
     <script type="module" src="/static/paper-reading/app.js"></script>
   </body>
 </html>

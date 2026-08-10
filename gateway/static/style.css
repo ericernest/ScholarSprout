@@ -247,6 +247,22 @@ h1 {
   font-size: 0.88rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.settings-link {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid rgba(135, 167, 255, 0.24);
+  border-radius: 999px;
+  color: #e8edff;
+  background: rgba(135, 167, 255, 0.08);
+  font-size: 0.88rem;
+  text-decoration: none;
+}
+
 .messages {
   width: min(920px, 100%);
   margin: 0 auto;
@@ -754,6 +770,8 @@ textarea::placeholder {
   background: rgba(102, 245, 214, 0.12);
 }
 
+.primary-button,.secondary-button,.send-button{justify-content:center;line-height:1}.send-button{display:inline-flex;align-items:center}
+
 @media (max-width: 640px) {
   .hero-card {
     padding: 2rem;
@@ -763,6 +781,10 @@ textarea::placeholder {
     align-items: flex-start;
     flex-direction: column;
     gap: 0.7rem;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
   }
 
   .paper-mode-input {

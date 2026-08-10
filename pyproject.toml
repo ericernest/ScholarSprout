@@ -32,9 +32,9 @@ embeddings = [
 novicesynapse = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "models*", "runtime*", "skills*", "tools*"]
+include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "models*", "runtime*", "skills*", "storage*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
-gateway = ["static/*", "static/paper-reading/*", "static/domain-onboarding/*"]
+gateway = ["static/*", "static/paper-reading/*", "static/domain-onboarding/*", "static/settings/*", "static/library/*", "static/vendor/katex/*", "static/vendor/katex/fonts/*"]
 skills = ["builtin/*/*/SKILL.md", "builtin/*/*/*/SKILL.md"]

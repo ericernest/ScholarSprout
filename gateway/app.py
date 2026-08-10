@@ -17,7 +17,9 @@ from agents.agent import create_agent
 from bus.message_bus import MessageBus
 from channels.base import ChannelMessage
 from channels.web import WebChannel
-from config.manager import load_config
+from config.manager import is_setup_complete, load_config, resolve_data_dir
+from config.web import router as config_router
+from gateway.research_library import router as research_library_router
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
 from handlers.domain_onboarding.pipeline import create_default_pipeline
@@ -34,9 +36,9 @@ from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
 from handlers.paper_reading_handler import handle_paper_reading_message
 from gateway.message_flow import process_channel_input, process_channel_stream
-from models.client import OpenAIClient
+from models.client import OpenAIClient, SetupRequiredModel
 from handlers.paper_reading.harness.session import SessionManager
-from handlers.paper_reading.harness.storage import PaperReadingStorage
+from storage import LocalResearchStore, PaperReadingStorage
 from handlers.paper_reading.harness.fork_merge import ForkMergeManager
 from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
@@ -52,6 +54,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="NoviceSynapse Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(config_router)
+app.include_router(research_library_router)
 
 
 # 返回最小健康检查结果。
@@ -63,7 +67,10 @@ def health() -> dict[str, str]:
 @app.get("/ready")
 def readiness(request: Request) -> dict[str, object]:
     components = {
-        "model": getattr(request.app.state, "model", None) is not None,
+        "model": (
+            getattr(request.app.state, "model", None) is not None
+            and getattr(request.app.state, "setup_complete", True)
+        ),
         "domain_onboarding_pipeline": (
             getattr(request.app.state, "domain_onboarding_pipeline", None) is not None
         ),
@@ -75,6 +82,9 @@ def readiness(request: Request) -> dict[str, object]:
         ),
         "domain_onboarding_jobs": (
             getattr(request.app.state, "domain_onboarding_job_manager", None) is not None
+        ),
+        "research_storage": (
+            getattr(request.app.state, "research_storage", None) is not None
         ),
     }
     if not all(components.values()):
@@ -95,6 +105,18 @@ def home_page() -> FileResponse:
 @app.get("/app")
 def chat_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "chat.html")
+
+
+# 返回首次运行与后续修改共用的配置向导。
+@app.get("/settings")
+def settings_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "settings" / "index.html")
+
+
+# 返回会话、模式产物和论文的统一资料库。
+@app.get("/library")
+def library_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "library" / "index.html")
 
 
 # 返回嵌入应用层级的论文精读工作台。
@@ -433,12 +455,18 @@ def close_domain_onboarding_resources() -> None:
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
-    model = OpenAIClient(config.client)
+    setup_complete = is_setup_complete(config)
+    model = OpenAIClient(config.client) if setup_complete else SetupRequiredModel(config.client)
     chat_agent = create_agent(model, "chat")
     domain_onboarding_agent = create_agent(model, "domain_onboarding")
     paper_reading_agent = create_agent(model, "paper_reading")
 
-    paper_storage = PaperReadingStorage()
+    data_root = resolve_data_dir(config)
+    research_storage = LocalResearchStore(data_root / "research.sqlite3")
+    research_storage.initialize()
+    paper_storage = PaperReadingStorage(
+        data_root / "paper_reading", research_store=research_storage
+    )
     kg_engine = KnowledgeGraphEngine()
     kg_builder = ProgressiveKGBuilder(kg_engine)
     kg_query_engine = KGQueryEngine(kg_engine, model)
@@ -457,10 +485,14 @@ def start_gateway_server(host: str, port: int) -> None:
     input_channel.start()
 
     app.state.model = model
+    app.state.setup_complete = setup_complete
     app.state.chat_agent = chat_agent
     app.state.domain_onboarding_agent = domain_onboarding_agent
     app.state.paper_reading_agent = paper_reading_agent
-    configure_domain_onboarding_runtime(app.state, model, config.client)
+    app.state.research_storage = research_storage
+    configure_domain_onboarding_runtime(
+        app.state, model, config.client, research_storage=research_storage
+    )
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
     app.state.capability_selector = capability_selector
@@ -479,7 +511,12 @@ def start_gateway_server(host: str, port: int) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
-def configure_domain_onboarding_runtime(app_state: object, model: object, client_config: object) -> None:
+def configure_domain_onboarding_runtime(
+    app_state: object,
+    model: object,
+    client_config: object,
+    research_storage: LocalResearchStore | None = None,
+) -> None:
     """Wire the V1 pipeline and its observability dependencies into the gateway."""
     app_state.domain_onboarding_pipeline = create_default_pipeline(model)
     app_state.domain_onboarding_metrics = DomainOnboardingMetrics(
@@ -491,7 +528,9 @@ def configure_domain_onboarding_runtime(app_state: object, model: object, client
         ),
     )
     app_state.domain_onboarding_audit_sink = create_audit_sink_from_env()
-    app_state.domain_onboarding_job_store = create_job_store_from_env()
+    app_state.domain_onboarding_job_store = create_job_store_from_env(
+        research_storage.database_path if research_storage is not None else None
+    )
     app_state.domain_onboarding_job_manager = DomainOnboardingJobManager(
         app_state.domain_onboarding_pipeline,
         app_state.domain_onboarding_job_store,
@@ -511,4 +550,5 @@ def configure_domain_onboarding_runtime(app_state: object, model: object, client
         recovery_stale_seconds=int(
             os.getenv("DOMAIN_ONBOARDING_JOB_RECOVERY_STALE_SECONDS", "900")
         ),
+        result_store=research_storage,
     )

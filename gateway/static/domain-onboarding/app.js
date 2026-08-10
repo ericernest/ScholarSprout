@@ -101,12 +101,23 @@ async function initialize() {
   const saved = readWorkspace();
   const requestedTaskId = params.get("task_id") || "";
   const query = (params.get("query") || "").trim();
+  let loadedWorkspace = false;
 
   if (requestedTaskId) {
     state.taskId = requestedTaskId;
-    if (saved?.task_id === requestedTaskId) {
-      state.accessToken = saved.access_token || saved.snapshot?.access_token || "";
-      consumeSnapshot(saved.snapshot, false);
+    try {
+      const workspace = await loadResearchWorkspace(requestedTaskId);
+      state.accessToken = workspace.access_token || "";
+      consumeSnapshot(workspace, false);
+      loadedWorkspace = true;
+    } catch (error) {
+      if (saved?.task_id === requestedTaskId) {
+        state.accessToken = saved.access_token || saved.snapshot?.access_token || "";
+        consumeSnapshot(saved.snapshot, false);
+      } else {
+        showEmpty("无法读取任务", error.message, false);
+        return;
+      }
     }
   } else if (query) {
     try {
@@ -135,19 +146,33 @@ async function initialize() {
     return;
   }
 
-  try {
-    await refreshSnapshot();
-  } catch (error) {
-    if (!state.snapshot) {
-      showEmpty("无法读取任务", error.message, false);
-      return;
+  if (!loadedWorkspace) {
+    try {
+      await refreshSnapshot();
+    } catch (error) {
+      if (!state.snapshot) {
+        showEmpty("无法读取任务", error.message, false);
+        return;
+      }
+      toast("暂时无法连接后端，已展示浏览器中的最近快照。", true);
     }
-    toast("暂时无法连接后端，已展示浏览器中的最近快照。", true);
   }
 
-  if (state.snapshot && !TERMINAL_STATES.has(state.snapshot.state)) {
+  if (state.snapshot && !TERMINAL_STATES.has(state.snapshot.state) && state.snapshot.workspace_source !== "catalog") {
     connectEvents();
   }
+}
+
+async function loadResearchWorkspace(taskId) {
+  const response = await fetch(
+    `/api/research/domain-onboardings/${encodeURIComponent(taskId)}/workspace`,
+    { headers: { Accept: "application/json" } },
+  );
+  const workspace = await readJson(response);
+  if (!response.ok) {
+    throw new Error(readError(workspace, `读取领域记录失败（HTTP ${response.status}）`));
+  }
+  return workspace;
 }
 
 function bindInteractions() {
@@ -181,6 +206,11 @@ function bindInteractions() {
     const importButton = event.target.closest("[data-import-paper]");
     if (importButton) {
       await importPaper(importButton.dataset.importPaper);
+      return;
+    }
+    const libraryButton = event.target.closest("[data-add-paper-library]");
+    if (libraryButton) {
+      await addPaperToLibrary(libraryButton.dataset.addPaperLibrary, libraryButton);
     }
   });
 
@@ -914,11 +944,29 @@ function renderPaperDetail(paper) {
       </div>
       ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${paper.url ? `<a class="source-link" href="${escapeHtml(paper.url)}" target="_blank" rel="noreferrer">查看论文来源 ↗</a>` : ""}
+      <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">
         ${paper.arxiv_id ? "导入论文精读" : "打开论文来源"}
       </button>
     </div>
   `;
+}
+
+async function addPaperToLibrary(paperId, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/research/papers/${encodeURIComponent(paperId)}/library`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reading_status: "unread", note: "" }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    button.textContent = "已加入论文管理";
+    toast("论文已加入资料库。精读与收藏状态彼此独立。")
+  } catch (error) {
+    button.disabled = false;
+    toast(`加入论文库失败：${error.message}`, true);
+  }
 }
 
 async function importPaper(paperId) {

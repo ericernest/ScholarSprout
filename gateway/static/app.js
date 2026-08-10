@@ -125,6 +125,22 @@ function bindChatPage() {
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
   restoreDomainOnboardingCard();
+  void restoreConversationHistory();
+}
+
+async function restoreConversationHistory() {
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const conversation = await response.json();
+    if (!Array.isArray(conversation.messages) || !conversation.messages.length) return;
+    messages.replaceChildren();
+    conversation.messages.forEach((message) => {
+      if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
+    });
+  } catch {
+    // Keep the welcome message when history is temporarily unavailable.
+  }
 }
 
 // Close mode menu and sync accessibility state.
@@ -188,7 +204,7 @@ async function sendMessage() {
       const job = await submitDomainOnboardingJob(content);
       appendDomainOnboardingCard(job, content);
       updateDomainOnboardingCard(job.task_id, job);
-      window.location.assign(`/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`);
+      watchDomainOnboardingCard(job.task_id, job.access_token || "");
       return;
     }
 
@@ -1100,6 +1116,20 @@ function setLoading(isLoading, interruptible = false) {
 // Get persistent local session id.
 function getSessionId() {
   const key = "novicesynapse_session_id";
+  const query = new URLSearchParams(window.location.search);
+  const requested = query.get("conversation_id");
+  if (requested) {
+    window.localStorage.setItem(key, requested);
+    return requested;
+  }
+  if (query.get("new") === "1") {
+    const created = `web-${crypto.randomUUID()}`;
+    window.localStorage.setItem(key, created);
+    query.delete("new");
+    query.set("conversation_id", created);
+    window.history.replaceState(null, "", `${window.location.pathname}?${query}`);
+    return created;
+  }
   const existing = window.localStorage.getItem(key);
   if (existing) {
     return existing;
