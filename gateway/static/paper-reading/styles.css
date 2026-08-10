@@ -622,6 +622,19 @@ select option { color: #07120f; }
 .paper-note-actions { display: flex; align-items: center; gap: .55rem; }
 .paper-note-actions > span { min-width: 72px; color: #71817c; font-size: .7rem; text-align: right; }
 .paper-note-actions > span.is-error { color: #ff9ba4; }
+#paper-note-save-button {
+  border-color: #075746;
+  color: #fff;
+  background: #0b6b57;
+  box-shadow: 0 5px 14px rgba(7,87,70,.2);
+  font-weight: 800;
+}
+#paper-note-save-button:hover {
+  border-color: #043f33;
+  color: #fff;
+  background: #075746;
+}
+#paper-note-save-button:disabled { opacity: .55; box-shadow: none; cursor: not-allowed; }
 .paper-note-mode { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid rgba(30,70,60,.16); border-radius: 8px; background: rgba(26,74,62,.05); }
 .paper-note-mode button { min-height: 29px; padding: 0 .55rem; border: 0; border-radius: 6px; color: #65756f; background: transparent; cursor: pointer; font-size: .68rem; }
 .paper-note-mode button.is-active { color: #064f40; background: rgba(48,199,166,.17); font-weight: 800; }

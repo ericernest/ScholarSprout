@@ -124,6 +124,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("if (/^[0-6]$/.test(event.key)", editor)
         self.assertIn("function syncPaperNoteDrawerBounds", javascript)
         self.assertIn("--paper-note-left", styles)
+        self.assertIn("#paper-note-save-button", styles)
+        self.assertIn("background: #0b6b57", styles)
         self.assertNotIn(
             "使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。",
             html,
