@@ -592,6 +592,46 @@ select option { color: #07120f; }
   max-height: 110px; margin: 0; padding: .65rem .75rem; overflow-y: auto; border-left: 3px solid rgba(102,245,214,.55);
   border-radius: 8px; color: #a9cbc2; background: rgba(102,245,214,.055); font-size: .74rem; line-height: 1.55;
 }
+.paper-note-drawer {
+  position: fixed; left: 50%; bottom: 0; z-index: 88;
+  display: grid; grid-template-rows: auto auto minmax(0,1fr) auto;
+  width: min(940px,calc(100vw - 2rem)); height: clamp(320px,48vh,560px);
+  border: 1px solid rgba(102,245,214,.28); border-bottom: 0; border-radius: 22px 22px 0 0;
+  overflow: hidden; pointer-events: none;
+  background: linear-gradient(180deg,rgba(12,37,32,.99),rgba(5,18,16,.995));
+  box-shadow: 0 -20px 70px rgba(0,0,0,.5);
+  transform: translate(-50%,calc(100% + 24px));
+  transition: transform .28s cubic-bezier(.22,.8,.26,1);
+}
+.paper-note-drawer.is-open { pointer-events: auto; transform: translate(-50%,0); }
+.paper-note-drag-handle {
+  display: grid; place-items: center; min-height: 25px; padding: 0; border: 0;
+  background: transparent; cursor: pointer;
+}
+.paper-note-drag-handle span { width: 54px; height: 4px; border-radius: 99px; background: rgba(189,226,216,.38); }
+.paper-note-drag-handle:hover span { background: var(--accent); }
+.paper-note-drawer > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .2rem 1rem .75rem; border-bottom: 1px solid var(--line);
+}
+.paper-note-drawer h2 {
+  max-width: min(520px,50vw); margin: .12rem 0 0; overflow: hidden; color: #f2fffb;
+  font: 700 1rem Georgia,"Noto Serif CJK SC",serif; text-overflow: ellipsis; white-space: nowrap;
+}
+.paper-note-actions { display: flex; align-items: center; gap: .55rem; }
+.paper-note-actions > span { min-width: 72px; color: #8fb8ad; font-size: .7rem; text-align: right; }
+.paper-note-actions > span.is-error { color: #ff9ba4; }
+.paper-note-drawer textarea {
+  width: 100%; min-height: 0; padding: 1rem 1.1rem; border: 0; border-radius: 0; outline: 0;
+  resize: none; color: #eafff9; background: rgba(1,10,8,.42);
+  font: 400 .86rem/1.72 "Cascadia Code","SFMono-Regular",Consolas,"Noto Sans CJK SC",sans-serif;
+}
+.paper-note-drawer textarea:focus { box-shadow: inset 0 0 0 1px rgba(102,245,214,.22); }
+.paper-note-drawer > footer {
+  display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 1rem;
+  border-top: 1px solid var(--line); color: #759d93; font-size: .68rem;
+}
+.ghost-button.is-active { border-color: rgba(102,245,214,.6); color: #dcfff6; background: rgba(102,245,214,.12); }
 .global-loading {
   position: fixed; left: 50%; bottom: 1.4rem; z-index: 100; display: flex; align-items: center; gap: .8rem; min-width: 280px;
   padding: .8rem 1rem; border: 1px solid var(--line-strong); border-radius: 16px; background: rgba(5,18,16,.96); box-shadow: var(--shadow); transform: translateX(-50%);
@@ -633,6 +673,11 @@ select option { color: #07120f; }
   .reading-map-shell { border-right: 0; border-bottom: 1px solid var(--line); }
   .reader-actions .mini-button:not(.is-accent) { display: none; }
   .ready-capabilities { flex-wrap: wrap; }
+  .paper-note-drawer { width: 100vw; height: 56vh; border-radius: 18px 18px 0 0; }
+  .paper-note-drawer > header { align-items: flex-start; }
+  .paper-note-drawer h2 { max-width: 44vw; }
+  .paper-note-actions > span { display: none; }
+  .paper-note-drawer > footer span:first-child { display: none; }
 }
 .accent-button{display:inline-flex;align-items:center;justify-content:center;line-height:1}
 

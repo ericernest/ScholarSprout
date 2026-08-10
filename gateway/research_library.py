@@ -35,6 +35,10 @@ class PaperFolderAssignment(BaseModel):
     folder_id: str | None = Field(default=None, max_length=180)
 
 
+class PaperNoteUpdate(BaseModel):
+    content_markdown: str = Field(default="", max_length=1_000_000)
+
+
 class PdfRect(BaseModel):
     left: float = Field(ge=0, le=1)
     top: float = Field(ge=0, le=1)
@@ -158,10 +162,15 @@ def papers(
     search: Search = "",
     library_only: bool = True,
     folder_id: str | None = Query(default=None, max_length=180),
+    reading_scope: Literal["all", "reviewed", "unreviewed"] = "all",
     limit: Limit = 100,
 ) -> list[dict]:
     return _catalog(request).list_papers(
-        search=search, library_only=library_only, folder_id=folder_id, limit=limit
+        search=search,
+        library_only=library_only,
+        folder_id=folder_id,
+        reading_scope=reading_scope,
+        limit=limit,
     )
 
 
@@ -277,6 +286,22 @@ def move_paper_to_folder(
     if not moved:
         raise HTTPException(status_code=404, detail="论文不在论文管理中。")
     return {"paper_id": paper_id, "folder_id": payload.folder_id, "moved": True}
+
+
+@router.get("/papers/{paper_id}/note")
+def paper_note(paper_id: str, request: Request) -> dict:
+    item = _catalog(request).get_paper_note(paper_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="论文不存在。")
+    return item
+
+
+@router.put("/papers/{paper_id}/note")
+def save_paper_note(paper_id: str, payload: PaperNoteUpdate, request: Request) -> dict:
+    item = _catalog(request).set_paper_note(paper_id, payload.content_markdown)
+    if item is None:
+        raise HTTPException(status_code=404, detail="论文不存在。")
+    return item
 
 
 @router.get("/papers/{paper_id}/annotations")

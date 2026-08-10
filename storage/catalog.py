@@ -268,6 +268,7 @@ class ResearchCatalog:
         search: str = "",
         library_only: bool = False,
         folder_id: str | None = None,
+        reading_scope: str = "all",
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         pattern = f"%{search.strip()}%"
@@ -286,6 +287,18 @@ class ResearchCatalog:
             )"""
         else:
             folder_clause = ""
+        if reading_scope == "reviewed":
+            reading_clause = """AND EXISTS (
+                SELECT 1 FROM paper_reading_sessions reviewed
+                WHERE reviewed.paper_id = p.paper_id
+            )"""
+        elif reading_scope == "unreviewed":
+            reading_clause = """AND NOT EXISTS (
+                SELECT 1 FROM paper_reading_sessions reviewed
+                WHERE reviewed.paper_id = p.paper_id
+            )"""
+        else:
+            reading_clause = ""
         parameters: list[Any] = [pattern, pattern, pattern]
         if folder_id and folder_id != "__unfiled__":
             parameters.append(folder_id)
@@ -310,6 +323,7 @@ class ResearchCatalog:
                     WHERE (p.title LIKE ? OR p.abstract LIKE ? OR p.authors_json LIKE ?)
                     {library_clause}
                     {folder_clause}
+                    {reading_clause}
                     GROUP BY p.paper_id ORDER BY COALESCE(l.updated_at, p.updated_at) DESC LIMIT ?""",
                 parameters,
             ).fetchall()
@@ -365,6 +379,44 @@ class ResearchCatalog:
             paper_id, reading_status=reading_status, note=note, folder_id=folder_id
         )
         return True
+
+    def get_paper_note(self, paper_id: str) -> dict[str, Any] | None:
+        with self.store._connection() as connection:
+            paper = connection.execute(
+                "SELECT title FROM papers WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if paper is None:
+                return None
+            note = connection.execute(
+                "SELECT content_markdown, created_at, updated_at FROM paper_notes WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+        return {
+            "paper_id": paper_id,
+            "paper_title": paper["title"],
+            "format": "markdown",
+            "content_markdown": note["content_markdown"] if note else "",
+            "created_at": note["created_at"] if note else None,
+            "updated_at": note["updated_at"] if note else None,
+        }
+
+    def set_paper_note(self, paper_id: str, content_markdown: str) -> dict[str, Any] | None:
+        now = _now()
+        with self.store._connection() as connection:
+            paper = connection.execute(
+                "SELECT title FROM papers WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if paper is None:
+                return None
+            connection.execute(
+                """INSERT INTO paper_notes(paper_id, content_markdown, created_at, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(paper_id) DO UPDATE SET
+                   content_markdown = excluded.content_markdown,
+                   updated_at = excluded.updated_at""",
+                (paper_id, content_markdown, now, now),
+            )
+        return self.get_paper_note(paper_id)
 
     def list_folders(self) -> list[dict[str, Any]]:
         with self.store._connection() as connection:

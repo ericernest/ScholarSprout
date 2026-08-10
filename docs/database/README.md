@@ -34,6 +34,7 @@
 | `paper_folders` | `folder_id`, `name`, `parent_folder_id`, 时间 | 论文管理中的多层文件夹树；同一父目录下名称唯一，不同分支允许同名。父目录筛选会包含全部后代文件夹。 |
 | `library_items` | `paper_id`, `reading_status`, `note`, `folder_id`, `added_at`, `updated_at` | 进入论文管理的论文及其阅读状态、备注和分类。阅读状态仅为 `unread / reading / read / archived`。 |
 | `paper_annotations` | `annotation_id`, `paper_id`, `reading_session_id`, `annotation_type`, `color`, `page_number`, `section_id`, `selected_text`, `anchor_schema_version`, `anchor_json`, `note_text`, 时间 | PDF 高亮与注释。`anchor_json` 使用 `pdf-rects-v1`，保存页面内归一化矩形，因此缩放后仍能准确恢复；会话字段只记录来源，标注归属于论文并在该论文的 Fork/精读会话间共享。 |
+| `paper_notes` | `paper_id`, `content_markdown`, `created_at`, `updated_at` | 每篇论文唯一的一份 Markdown 笔记。笔记归属于论文，不归属于某次精读会话，因此从任意精读会话进入都会读取同一内容。 |
 
 领域入门推荐论文后：
 
@@ -97,10 +98,11 @@ v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。
 - `GET /api/research/domain-onboardings/{artifact_id}`：提供领域结果的稳定持久化字段及推荐论文信息。
 - `GET /api/research/domain-onboardings/{artifact_id}/workspace`：优先恢复仍在 job store 中的实时任务；任务记录已过期时，从正式持久化内容重建只读工作台快照。
 - `GET /api/research/paper-readings`：论文、阅读进度、分析块及标注数。
-- `GET /api/research/papers`：论文管理状态、备注、文件夹、最新精读会话、精读及标注数；可按 `folder_id` 筛选。
+- `GET /api/research/papers`：论文管理状态、备注、文件夹、最新精读会话、精读及标注数；可按 `folder_id` 筛选，也可用 `reading_scope=reviewed/unreviewed` 区分是否已经创建过精读会话。
 - `GET/POST/PATCH/DELETE /api/research/paper-folders`：读取、新建、重命名、移动和删除文件夹；为防误删，仅空文件夹可以删除。
 - `PATCH /api/research/papers/{paper_id}/folder`：只移动论文归属，不覆盖阅读状态或备注。
 - `POST /api/research/papers/{paper_id}/reading-session`：在进入工作台前创建精读会话并把论文推进为“阅读中”，因此论文精读列表可以立即看到记录。
+- `GET/PUT /api/research/papers/{paper_id}/note`：读取或保存该论文唯一的 Markdown 笔记；精读页底部笔记抽屉使用此接口自动保存和手动保存。
 - `PUT/DELETE /api/research/papers/{paper_id}/library`：加入、更新或移出论文管理，更新体包含状态、备注和文件夹；移出不会删除论文、精读记录或标注。
 - `GET/PUT/DELETE /api/research/papers/{paper_id}/annotations/...`：恢复、保存和删除高亮/注释。
 

@@ -16,6 +16,7 @@
       <a class="pr-brand" href="/"><span class="brand-mark">N</span><span>NoviceSynapse</span></a>
       <div class="topbar-center"><span class="status-dot"></span><span id="workspace-status">论文精读工作台</span></div>
       <nav class="topbar-actions" aria-label="页面导航">
+        <button id="paper-note-button" class="ghost-button" type="button" hidden>论文笔记</button>
         <button id="fullscreen-button" class="ghost-button" type="button">全屏阅读</button>
         <button id="new-paper-button" class="ghost-button" type="button" hidden>换一篇论文</button>
         <a class="ghost-button" href="/library?view=paper-readings">精读列表</a>
@@ -163,6 +164,16 @@
         </section>
       </section>
     </main>
+
+    <section id="paper-note-drawer" class="paper-note-drawer" aria-hidden="true" aria-label="论文 Markdown 笔记">
+      <button id="paper-note-drag-handle" class="paper-note-drag-handle" type="button" aria-label="收起论文笔记"><span></span></button>
+      <header>
+        <div><p class="panel-label">Paper note · Markdown</p><h2 id="paper-note-title">论文笔记</h2></div>
+        <div class="paper-note-actions"><span id="paper-note-save-status">尚未修改</span><button id="paper-note-save-button" class="mini-button is-accent" type="button">保存</button><button id="paper-note-close-button" class="dialog-close" type="button" aria-label="收起论文笔记">×</button></div>
+      </header>
+      <textarea id="paper-note-input" spellcheck="true" placeholder="# 阅读笔记&#10;&#10;记录核心问题、方法、证据、疑问与后续想法……"></textarea>
+      <footer><span>使用 Markdown 记录；笔记归属于论文，在所有精读会话间共享。</span><span id="paper-note-count">0 字</span></footer>
+    </section>
 
     <div id="fork-modal" class="fork-modal" hidden>
       <div class="fork-modal-backdrop" data-fork-close></div>

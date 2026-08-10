@@ -20,6 +20,7 @@ class LocalResearchStoreTests(unittest.TestCase):
                 {
                     "papers",
                     "library_items",
+                    "paper_notes",
                     "work_artifacts",
                     "domain_onboardings",
                     "domain_recommendations",

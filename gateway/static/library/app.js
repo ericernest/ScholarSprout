@@ -8,7 +8,7 @@ const VIEWS = {
 const state = {
   view: new URLSearchParams(location.search).get("view") || "conversations",
   searchByView: { conversations: "", "domain-onboardings": "", "paper-readings": "", papers: "" },
-  allPapers: false, items: [], folders: [], folderId: "",
+  allPapers: false, readingFilter: "all", importFile: null, items: [], folders: [], folderId: "",
   expandedFolders: new Set(), importFolderId: "", folderForm: null, folderPicker: null,
   deleteFolderId: "", counts: {},
 };
@@ -32,6 +32,8 @@ function boot() {
     state.allPapers = event.target.checked;
     loadItems();
   });
+  bindReadingFilter();
+  bindPaperFilePicker();
   document.querySelector("#create-folder-button").addEventListener("click", () => openFolderForm({ parentId: null }));
   document.querySelector("#folder-root-create").addEventListener("click", () => openFolderForm({ parentId: null }));
   document.querySelector("#folder-tree").addEventListener("click", handleFolderTreeAction);
@@ -101,6 +103,7 @@ async function loadItems() {
     if (search) url.searchParams.set("search", search);
     if (state.view === "papers") url.searchParams.set("library_only", String(!state.allPapers));
     if (state.view === "papers" && state.folderId) url.searchParams.set("folder_id", state.folderId);
+    if (state.view === "papers" && state.readingFilter !== "all") url.searchParams.set("reading_scope", state.readingFilter);
     state.items = await fetchJson(url);
     renderItems();
   } catch (error) {
@@ -112,7 +115,8 @@ async function loadItems() {
 function renderItems() {
   items.replaceChildren();
   const search = state.searchByView[state.view];
-  document.querySelector("#result-summary").textContent = `${state.items.length} 条记录${search ? ` · 搜索“${search}”` : ""}`;
+  const readingLabel = state.view === "papers" ? ({ reviewed: " · 已精读", unreviewed: " · 未精读" })[state.readingFilter] || "" : "";
+  document.querySelector("#result-summary").textContent = `${state.items.length} 条记录${readingLabel}${search ? ` · 搜索“${search}”` : ""}`;
   if (!state.items.length) {
     showEmpty("这里还没有内容", VIEWS[state.view].empty);
     return;
@@ -500,7 +504,7 @@ function syncFolderLabels() {
 
 async function importPaper() {
   const button = document.querySelector("#paper-import-button");
-  const file = document.querySelector("#paper-file-input").files[0];
+  const file = state.importFile || document.querySelector("#paper-file-input").files[0];
   const pdfUrl = document.querySelector("#paper-url-input").value.trim();
   if (!file && !pdfUrl) return toast("请选择 PDF 文件或填写链接。", true);
   button.disabled = true;
@@ -517,12 +521,101 @@ async function importPaper() {
         body: JSON.stringify({ folder_id: state.importFolderId }),
       });
     }
+    setSelectedLibraryPaperFile(null);
     document.querySelector("#paper-file-input").value = "";
     document.querySelector("#paper-url-input").value = "";
     await Promise.all([loadCounts(), loadFolders(), loadItems()]);
     toast("论文已添加到论文管理，可直接开始精读。");
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.textContent = "添加到论文管理"; }
+}
+
+function bindPaperFilePicker() {
+  const input = document.querySelector("#paper-file-input");
+  const button = document.querySelector("#paper-file-button");
+  const area = document.querySelector("#paper-import");
+  button.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => {
+    if (!setSelectedLibraryPaperFile(input.files?.[0] || null)) input.value = "";
+  });
+  ["dragenter", "dragover"].forEach((eventName) => area.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    button.classList.add("is-dragging");
+    event.dataTransfer.dropEffect = "copy";
+  }));
+  ["dragleave", "dragend"].forEach((eventName) => area.addEventListener(eventName, () => button.classList.remove("is-dragging")));
+  area.addEventListener("drop", (event) => {
+    event.preventDefault();
+    button.classList.remove("is-dragging");
+    const file = event.dataTransfer.files?.[0] || null;
+    if (!setSelectedLibraryPaperFile(file)) return;
+  });
+}
+
+function setSelectedLibraryPaperFile(file) {
+  const button = document.querySelector("#paper-file-button");
+  const label = document.querySelector("#paper-file-label");
+  if (file && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    state.importFile = null;
+    toast("请选择 PDF 文件。", true);
+    return false;
+  }
+  state.importFile = file;
+  label.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : "选择 PDF";
+  button.classList.toggle("has-file", Boolean(file));
+  return true;
+}
+
+function bindReadingFilter() {
+  const control = document.querySelector("#reading-filter");
+  const values = ["all", "reviewed", "unreviewed"];
+  let dragging = false;
+  const valueAt = (clientX) => {
+    const rect = control.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(.999, (clientX - rect.left) / rect.width));
+    return values[Math.floor(ratio * values.length)];
+  };
+  control.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-reading-filter]");
+    if (button) selectReadingFilter(button.dataset.readingFilter);
+  });
+  control.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    dragging = true;
+    control.setPointerCapture(event.pointerId);
+    previewReadingFilter(valueAt(event.clientX));
+  });
+  control.addEventListener("pointermove", (event) => {
+    if (dragging) previewReadingFilter(valueAt(event.clientX));
+  });
+  control.addEventListener("pointerup", (event) => {
+    if (!dragging) return;
+    dragging = false;
+    selectReadingFilter(valueAt(event.clientX));
+  });
+  control.addEventListener("pointercancel", () => {
+    dragging = false;
+    previewReadingFilter(state.readingFilter);
+  });
+}
+
+function previewReadingFilter(value) {
+  const values = ["all", "reviewed", "unreviewed"];
+  const control = document.querySelector("#reading-filter");
+  control.style.setProperty("--reading-filter-index", String(Math.max(0, values.indexOf(value))));
+  control.querySelectorAll("[data-reading-filter]").forEach((button) => {
+    const active = button.dataset.readingFilter === value;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+}
+
+function selectReadingFilter(value) {
+  if (!["all", "reviewed", "unreviewed"].includes(value)) return;
+  previewReadingFilter(value);
+  if (state.readingFilter === value) return;
+  state.readingFilter = value;
+  loadItems();
 }
 
 async function uploadPaperPayload(payload) {
@@ -621,6 +714,7 @@ function conversationActionLabel(item) {
 function element(tag, className = "", text = "") { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node; }
 function link(href, text, accent = false) { const item = element("a", accent ? "accent" : "", text); item.href = href; return item; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "" : new Intl.DateTimeFormat("zh-CN", { month:"short",day:"numeric",hour:"2-digit",minute:"2-digit" }).format(date); }
+function formatBytes(bytes) { if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"; const units = ["B","KB","MB","GB"]; const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / (1024 ** index)).toFixed(index ? 1 : 0)} ${units[index]}`; }
 function modeLabel(mode) { return ({ chat:"日常聊天",domain_onboarding:"领域入门",paper_reading:"论文精读" })[mode] || mode; }
 function stateLabel(value) { return ({ queued:"排队中",running:"进行中",paused:"已暂停",completed:"已完成",failed:"失败",cancelled:"已取消" })[value] || value; }
 function readingState(value) { return ({ active:"阅读中",paused:"已暂停",completed:"已完成" })[value] || value; }

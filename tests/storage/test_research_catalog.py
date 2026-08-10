@@ -99,6 +99,36 @@ class ResearchCatalogTests(unittest.TestCase):
     def test_paper_annotations_are_in_schema(self) -> None:
         self.assertIn("paper_annotations", self.store.list_table_names())
 
+    def test_paper_markdown_note_round_trip(self) -> None:
+        empty = self.catalog.get_paper_note(self.paper_id)
+        saved = self.catalog.set_paper_note(
+            self.paper_id,
+            "# Core idea\n\n- Verify the robust objective.",
+        )
+
+        self.assertEqual(empty["content_markdown"], "")
+        self.assertEqual(saved["format"], "markdown")
+        self.assertEqual(
+            self.catalog.get_paper_note(self.paper_id)["content_markdown"],
+            "# Core idea\n\n- Verify the robust objective.",
+        )
+        self.assertIsNotNone(saved["updated_at"])
+
+    def test_papers_filter_by_whether_precision_reading_exists(self) -> None:
+        unread_id = self.store.upsert_paper(
+            paper_id="paper-not-reviewed",
+            title="Queued Control Paper",
+            authors=[],
+        )
+        self.store.add_to_library(self.paper_id)
+        self.store.add_to_library(unread_id)
+
+        reviewed = self.catalog.list_papers(library_only=True, reading_scope="reviewed")
+        unreviewed = self.catalog.list_papers(library_only=True, reading_scope="unreviewed")
+
+        self.assertEqual({item["paper_id"] for item in reviewed}, {self.paper_id})
+        self.assertEqual({item["paper_id"] for item in unreviewed}, {unread_id})
+
     def test_folder_and_note_round_trip_without_pipeline_overwrite(self) -> None:
         folder = self.catalog.create_folder("量子控制")
         saved = self.catalog.set_library_item(
@@ -157,6 +187,8 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("研究资料库", response.text)
         self.assertIn('id="paper-import"', response.text)
+        self.assertIn('id="paper-file-button"', response.text)
+        self.assertIn('id="reading-filter"', response.text)
         self.assertIn('id="folder-tree"', response.text)
         self.assertIn('id="folder-form-dialog"', response.text)
         self.assertIn('id="folder-picker-dialog"', response.text)
@@ -195,11 +227,23 @@ class ResearchLibraryApiTests(unittest.TestCase):
                 },
             )
             listed = client.get(f"/api/research/papers/{paper_id}/annotations")
+            empty_note = client.get(f"/api/research/papers/{paper_id}/note")
+            saved_note = client.put(
+                f"/api/research/papers/{paper_id}/note",
+                json={"content_markdown": "# API note\n\nPersistent markdown."},
+            )
+            loaded_note = client.get(f"/api/research/papers/{paper_id}/note")
 
             self.assertEqual(library.status_code, 200)
             self.assertEqual(annotation.status_code, 200)
             self.assertEqual(listed.json()[0]["selected_text"], "important result")
             self.assertNotIn("anchor_json", listed.text)
+            self.assertEqual(empty_note.json()["content_markdown"], "")
+            self.assertEqual(saved_note.status_code, 200)
+            self.assertEqual(
+                loaded_note.json()["content_markdown"],
+                "# API note\n\nPersistent markdown.",
+            )
 
     def test_domain_workspace_restores_persisted_artifact_without_browser_cache(self) -> None:
         with TemporaryDirectory() as directory:

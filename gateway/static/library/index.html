@@ -31,6 +31,11 @@
           <div id="paper-scope" class="paper-scope" hidden>
             <label class="scope-switch"><input id="show-all-papers" type="checkbox" /><span>显示全部论文</span></label>
             <span id="folder-breadcrumb" class="folder-breadcrumb">全部论文</span>
+            <div id="reading-filter" class="reading-filter" role="radiogroup" aria-label="精读状态筛选">
+              <button class="is-active" type="button" role="radio" aria-checked="true" data-reading-filter="all">全部</button>
+              <button type="button" role="radio" aria-checked="false" data-reading-filter="reviewed">已精读</button>
+              <button type="button" role="radio" aria-checked="false" data-reading-filter="unreviewed">未精读</button>
+            </div>
             <button id="create-folder-button" class="folder-create-button" type="button"><span>＋</span> 新建文件夹</button>
           </div>
         </div>
@@ -42,7 +47,8 @@
           <div class="records-content">
             <section id="paper-import" class="paper-import" hidden>
               <div><strong>添加论文</strong><span>上传 PDF 或粘贴 PDF 链接，导入后自动进入论文管理。</span></div>
-              <input id="paper-file-input" type="file" accept="application/pdf,.pdf" />
+              <input id="paper-file-input" type="file" accept="application/pdf,.pdf" hidden />
+              <button id="paper-file-button" class="paper-file-button" type="button"><span>↥</span><span id="paper-file-label">选择 PDF</span></button>
               <input id="paper-url-input" type="url" placeholder="https://…/paper.pdf" />
               <button id="import-folder-button" class="folder-dropzone" type="button">
                 <span class="folder-drop-icon">↥</span>

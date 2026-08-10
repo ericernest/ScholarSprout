@@ -17,7 +17,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _now() -> str:
@@ -134,6 +134,13 @@ class LocalResearchStore:
                     anchor_schema_version TEXT NOT NULL,
                     anchor_json TEXT NOT NULL,
                     note_text TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_notes (
+                    paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    content_markdown TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );

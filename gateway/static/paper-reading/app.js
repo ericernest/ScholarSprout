@@ -39,6 +39,7 @@ const state = {
   pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
+  paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,6 +65,7 @@ function boot() {
   renderCopilotTabs();
   bindIntake();
   bindWorkbench();
+  bindPaperNote();
   bindReader();
   bindFork();
   bindResizeHandle();
@@ -611,13 +613,133 @@ async function enterWorkbench() {
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
+  $("paper-note-button").hidden = !state.paperId;
+  if (state.paperId && state.paperNoteLoadedFor !== state.paperId) void loadPaperNote();
   $("paper-boot").hidden = true;
   document.body.classList.remove("is-booting");
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function showIntake() {
+  closePaperNoteDrawer();
   window.location.href = "/app?mode=paper_reading";
+}
+
+function bindPaperNote() {
+  const input = $("paper-note-input");
+  $("paper-note-button").addEventListener("click", togglePaperNoteDrawer);
+  $("paper-note-close-button").addEventListener("click", closePaperNoteDrawer);
+  $("paper-note-drag-handle").addEventListener("click", closePaperNoteDrawer);
+  $("paper-note-save-button").addEventListener("click", () => savePaperNote());
+  input.addEventListener("input", () => {
+    state.paperNoteDirty = true;
+    updatePaperNoteCount();
+    setPaperNoteStatus("等待保存…");
+    if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
+    state.paperNoteSaveTimer = window.setTimeout(() => savePaperNote({ quiet: true }), 700);
+  });
+  input.addEventListener("blur", () => {
+    if (state.paperNoteDirty) void savePaperNote({ quiet: true });
+  });
+  document.addEventListener("keydown", (event) => {
+    const drawerOpen = $("paper-note-drawer").classList.contains("is-open");
+    if (event.key === "Escape" && drawerOpen) {
+      event.preventDefault();
+      closePaperNoteDrawer();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && drawerOpen) {
+      event.preventDefault();
+      void savePaperNote();
+    }
+  });
+}
+
+async function loadPaperNote() {
+  if (!state.paperId) return;
+  const paperId = state.paperId;
+  setPaperNoteStatus("正在读取…");
+  try {
+    const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`);
+    if (paperId !== state.paperId) return;
+    $("paper-note-input").value = note.content_markdown || "";
+    $("paper-note-title").textContent = `${state.paper?.title || note.paper_title || "论文"} · 笔记`;
+    state.paperNoteLoadedFor = paperId;
+    state.paperNoteDirty = false;
+    updatePaperNoteCount();
+    setPaperNoteStatus(note.updated_at ? "已保存" : "空白笔记");
+  } catch (error) {
+    setPaperNoteStatus("读取失败", true);
+    toast(error.message || "论文笔记读取失败。", true);
+  }
+}
+
+async function savePaperNote({ quiet = false } = {}) {
+  if (!state.paperId || state.paperNoteLoadedFor !== state.paperId) return;
+  if (state.paperNoteSaveTimer) window.clearTimeout(state.paperNoteSaveTimer);
+  state.paperNoteSaveTimer = null;
+  const paperId = state.paperId;
+  const content = $("paper-note-input").value;
+  setPaperNoteStatus("正在保存…");
+  try {
+    const note = await fetchResearchJson(`/api/research/papers/${encodeURIComponent(paperId)}/note`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_markdown: content }),
+    });
+    if (paperId !== state.paperId || content !== $("paper-note-input").value) return;
+    state.paperNoteDirty = false;
+    const savedAt = note.updated_at ? new Date(note.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    setPaperNoteStatus(savedAt ? `已保存 ${savedAt}` : "已保存");
+    if (!quiet) toast("论文笔记已保存。");
+  } catch (error) {
+    state.paperNoteDirty = true;
+    setPaperNoteStatus("保存失败", true);
+    if (!quiet) toast(error.message || "论文笔记保存失败。", true);
+  }
+}
+
+async function openPaperNoteDrawer() {
+  if (!state.paperId) return;
+  if (state.paperNoteLoadedFor !== state.paperId) await loadPaperNote();
+  if (state.paperNoteLoadedFor !== state.paperId) return;
+  const drawer = $("paper-note-drawer");
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  $("paper-note-button").classList.add("is-active");
+  window.setTimeout(() => $("paper-note-input").focus(), 180);
+}
+
+function closePaperNoteDrawer() {
+  const drawer = $("paper-note-drawer");
+  drawer.classList.remove("is-open");
+  drawer.setAttribute("aria-hidden", "true");
+  $("paper-note-button").classList.remove("is-active");
+  if (state.paperNoteDirty) void savePaperNote({ quiet: true });
+}
+
+function togglePaperNoteDrawer() {
+  if ($("paper-note-drawer").classList.contains("is-open")) closePaperNoteDrawer();
+  else void openPaperNoteDrawer();
+}
+
+function updatePaperNoteCount() {
+  const content = $("paper-note-input").value;
+  const characters = Array.from(content).length;
+  const lines = content ? content.split(/\r?\n/).length : 0;
+  $("paper-note-count").textContent = `${characters} 字 · ${lines} 行`;
+}
+
+function setPaperNoteStatus(message, isError = false) {
+  const status = $("paper-note-save-status");
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+}
+
+async function fetchResearchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || `请求失败（HTTP ${response.status}）`);
+  return data;
 }
 
 function toggleFullscreen() {
@@ -2899,6 +3021,14 @@ function persistState() {
 
 function saveBeforeUnload() {
   persistState();
+  if (state.paperNoteDirty && state.paperId && state.paperNoteLoadedFor === state.paperId) {
+    fetch(`/api/research/papers/${encodeURIComponent(state.paperId)}/note`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_markdown: $("paper-note-input").value }),
+      keepalive: true,
+    }).catch(() => {});
+  }
 }
 
 function setBusy(active, title = "", detail = "") {

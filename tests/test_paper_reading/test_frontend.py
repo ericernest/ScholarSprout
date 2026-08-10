@@ -78,12 +78,25 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "fork-panel",
             "pdf-fit-select",
             "paper-boot",
+            "paper-note-button",
+            "paper-note-drawer",
+            "paper-note-input",
+            "paper-note-save-button",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
 
         self.assertIn('id="paper-intake" class="intake-view" hidden', html)
         self.assertIn('class="paper-reading-body is-booting"', html)
+
+    def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("function loadPaperNote", javascript)
+        self.assertIn("function savePaperNote", javascript)
+        self.assertIn("content_markdown", javascript)
+        self.assertIn(".paper-note-drawer.is-open", styles)
 
     def test_chat_mode_exposes_pdf_or_link_composer(self) -> None:
         html = (STATIC / "chat.html").read_text(encoding="utf-8")
