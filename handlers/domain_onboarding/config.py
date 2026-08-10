@@ -100,15 +100,15 @@ class DomainOnboardingConfig(BaseModel):
     embedding_batch_size: int = Field(default=32, ge=1, le=128)
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
     planning_max_tokens: int = Field(default=1000, ge=256, le=4096)
-    generation_max_tokens: int = Field(default=6000, ge=1024, le=12000)
-    generation_development_max_tokens: int = Field(default=3200, ge=800, le=5000)
+    generation_max_tokens: int = Field(default=8000, ge=1024, le=12000)
+    generation_development_max_tokens: int = Field(default=8000, ge=800, le=12000)
     generation_development_foundation_max_tokens: int = Field(
-        default=2200, ge=600, le=3000
+        default=5000, ge=600, le=8000
     )
     generation_development_stage_max_tokens: int = Field(
-        default=2600, ge=800, le=3000
+        default=6000, ge=800, le=8000
     )
-    development_stage_planning_max_tokens: int = Field(default=1400, ge=400, le=2400)
+    development_stage_planning_max_tokens: int = Field(default=4000, ge=400, le=8000)
     development_stage_planning_timeout_seconds: float = Field(
         default=65.0, gt=0.0, le=120.0
     )
@@ -116,8 +116,8 @@ class DomainOnboardingConfig(BaseModel):
     staged_development_enabled: bool = True
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
     stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
-    generation_landscape_max_tokens: int = Field(default=3600, ge=600, le=4000)
-    generation_learning_path_max_tokens: int = Field(default=3400, ge=800, le=4000)
+    generation_landscape_max_tokens: int = Field(default=7000, ge=600, le=12000)
+    generation_learning_path_max_tokens: int = Field(default=6500, ge=800, le=12000)
     # Incremental generation runs development first, then landscape/path in
     # parallel. The default deadline fits two full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)

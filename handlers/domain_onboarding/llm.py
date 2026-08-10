@@ -108,6 +108,7 @@ def invoke_json(
                 max_tokens=max_tokens,
                 timeout=timeout_seconds,
                 response_format={"type": "json_object"},
+                disable_thinking=True,
             )
             parts: list[str] = []
             pending_parts: list[str] = []
@@ -188,6 +189,7 @@ def invoke_json(
                 max_tokens=max_tokens,
                 timeout=timeout_seconds,
                 response_format={"type": "json_object"},
+                disable_thinking=True,
             )
     except Exception as error:
         attempt_count = int(getattr(model, "last_attempt_count", 1))

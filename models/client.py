@@ -53,6 +53,7 @@ class OpenAIClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         model_name: str | None = None,
+        disable_thinking: bool = False,
     ) -> Any:
         kwargs = self._chat_kwargs(
             messages=messages,
@@ -61,6 +62,7 @@ class OpenAIClient:
             max_tokens=max_tokens,
             response_format=response_format,
             model_name=model_name,
+            disable_thinking=disable_thinking,
         )
         client = (
             self.client.with_options(timeout=timeout, max_retries=0)
@@ -78,6 +80,7 @@ class OpenAIClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         model_name: str | None = None,
+        disable_thinking: bool = False,
     ) -> Any:
         """Yield native Chat Completions chunks from OpenAI-compatible providers."""
         kwargs = self._chat_kwargs(
@@ -87,6 +90,7 @@ class OpenAIClient:
             max_tokens=max_tokens,
             response_format=response_format,
             model_name=model_name,
+            disable_thinking=disable_thinking,
         )
         kwargs["stream"] = True
         client = (
@@ -105,6 +109,7 @@ class OpenAIClient:
         max_tokens: int | None,
         response_format: dict[str, Any] | None,
         model_name: str | None,
+        disable_thinking: bool,
     ) -> dict[str, Any]:
         selected_model = (model_name or self.config.model_name).strip()
         if not selected_model:
@@ -122,6 +127,11 @@ class OpenAIClient:
             kwargs["max_tokens"] = max_tokens
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if disable_thinking and selected_model.lower().startswith("deepseek-v4-"):
+            # DeepSeek V4 enables thinking by default. Structured JSON calls
+            # should spend their output budget on the requested object rather
+            # than an internal reasoning trace.
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         return kwargs
 

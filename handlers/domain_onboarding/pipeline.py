@@ -1009,14 +1009,6 @@ def create_default_pipeline(
         route_name="planning",
     )
     configured_generation = os.getenv("DOMAIN_ONBOARDING_GENERATION_MODELS")
-    if not configured_generation:
-        primary = getattr(getattr(model, "config", None), "model_name", "")
-        # The client uses one base URL for the whole route. Keep the built-in
-        # fallbacks compatible with the DeepSeek endpoint instead of silently
-        # sending third-party model IDs to it. Cross-provider routes remain
-        # available through DOMAIN_ONBOARDING_GENERATION_MODELS.
-        backups = ["deepseek-v4-pro", "deepseek-v4-flash"]
-        configured_generation = ",".join([primary, *backups]) if primary else ",".join(backups)
     generation_model = routed_model_from_env(
         model,
         configured_generation,
