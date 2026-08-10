@@ -770,6 +770,8 @@ textarea::placeholder {
   background: rgba(102, 245, 214, 0.12);
 }
 
+.primary-button,.secondary-button,.send-button{justify-content:center;line-height:1}.send-button{display:inline-flex;align-items:center}
+
 @media (max-width: 640px) {
   .hero-card {
     padding: 2rem;

@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 
 def record_inbound(app_state: Any, message: ChannelMessage) -> None:
     store = getattr(app_state, "research_storage", None)
-    if store is None:
+    # Paper-reading HTTP actions include parsing/status utilities whose temporary
+    # transport ids are not user-opened conversations. The reading handler records
+    # actual Agent Q&A after it has resolved the persistent reading session id.
+    if store is None or message.mode == "paper_reading":
         return
     try:
         text = message_text(message.mode, message.content, outbound=False)
@@ -36,7 +39,7 @@ def record_inbound(app_state: Any, message: ChannelMessage) -> None:
 
 def record_outbound(app_state: Any, message: ChannelMessage) -> None:
     store = getattr(app_state, "research_storage", None)
-    if store is None:
+    if store is None or message.mode == "paper_reading":
         return
     try:
         store.append_message(
@@ -92,10 +95,5 @@ def message_text(mode: str, content: Any, *, outbound: bool) -> str:
 
 
 def _conversation_title(mode: str, text: str) -> str:
-    prefix = {
-        "chat": "日常聊天",
-        "domain_onboarding": "领域入门",
-        "paper_reading": "论文精读",
-    }.get(mode, mode)
     compact = " ".join(text.split())
-    return f"{prefix}：{compact[:60]}" if compact else prefix
+    return compact[:60] or "新会话"

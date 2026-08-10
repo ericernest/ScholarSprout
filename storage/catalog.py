@@ -47,9 +47,15 @@ class ResearchCatalog:
                            ORDER BY latest.sequence_number DESC LIMIT 1) AS latest_message
                    FROM conversations c
                    LEFT JOIN messages m ON m.conversation_id = c.conversation_id
-                   WHERE c.title LIKE ? OR EXISTS (
+                   WHERE NOT (
+                       c.conversation_id LIKE 'paper-reading-%'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM paper_reading_sessions prs
+                           WHERE prs.conversation_id = c.conversation_id
+                       )
+                   ) AND (c.title LIKE ? OR EXISTS (
                        SELECT 1 FROM messages found
-                       WHERE found.conversation_id = c.conversation_id AND found.content LIKE ?)
+                       WHERE found.conversation_id = c.conversation_id AND found.content LIKE ?))
                    GROUP BY c.conversation_id ORDER BY c.last_active_at DESC LIMIT ?""",
                 (pattern, pattern, limit),
             ).fetchall()
@@ -186,19 +192,28 @@ class ResearchCatalog:
         with self.store._connection() as connection:
             rows = connection.execute(
                 """SELECT s.*, w.title, p.title AS paper_title, p.authors_json,
+                          p.publication_year, p.venue, d.document_json,
                           COUNT(DISTINCT a.annotation_id) AS annotation_count,
                           COUNT(DISTINCT b.reading_block_id) AS block_count
                    FROM paper_reading_sessions s
                    JOIN work_artifacts w ON w.artifact_id = s.artifact_id
                    JOIN papers p ON p.paper_id = s.paper_id
+                   LEFT JOIN paper_documents d ON d.paper_id = p.paper_id
                    LEFT JOIN paper_annotations a ON a.reading_session_id = s.reading_session_id
                    LEFT JOIN paper_reading_blocks b ON b.reading_session_id = s.reading_session_id
                    WHERE w.title LIKE ? OR p.title LIKE ?
                    GROUP BY s.reading_session_id ORDER BY s.updated_at DESC LIMIT ?""",
                 (pattern, pattern, limit),
             ).fetchall()
-        return [
-            {
+        items = []
+        for row in rows:
+            document = _loads(row["document_json"], {})
+            current_section_title = ""
+            for section in document.get("sections", []) if isinstance(document, dict) else []:
+                if str(section.get("section_id") or "") == str(row["current_section_id"] or ""):
+                    current_section_title = str(section.get("title") or "")
+                    break
+            items.append({
                 "reading_session_id": row["reading_session_id"],
                 "paper_id": row["paper_id"],
                 "conversation_id": row["conversation_id"],
@@ -206,16 +221,18 @@ class ResearchCatalog:
                 "title": row["title"],
                 "paper_title": row["paper_title"],
                 "authors": _loads(row["authors_json"], []),
+                "publication_year": row["publication_year"],
+                "venue": row["venue"] or "",
                 "state": row["state"],
                 "current_section_id": row["current_section_id"],
+                "current_section_title": current_section_title,
                 "progress": _loads(row["progress_json"], {}),
                 "annotation_count": int(row["annotation_count"]),
                 "block_count": int(row["block_count"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
+            })
+        return items
 
     def list_papers(
         self,

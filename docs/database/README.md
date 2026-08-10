@@ -4,9 +4,9 @@
 
 ## 运行时接入
 
-- 日常聊天：`gateway/message_flow.py` 在 handler 前后分别保存用户消息和可见的助手回复。
+- 日常聊天：`gateway/message_flow.py` 在 handler 前后分别保存用户消息和可见的助手回复；同一页面会话始终复用一个 `conversation_id`，只有显式点击“新会话”才生成新 ID，标题取第一次提问。
 - 领域入门：同步 handler 保存完整分块结果；异步 job 在提交、阶段推进和完成/失败时更新同一个 artifact。
-- 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。
+- 论文精读：现有 `SessionManager` API 保持不变，但 `PaperReadingStorage` 已改由 SQLite 保存论文、阅读状态、checkpoint 和知识图谱；PDF/图片仍作为本地文件保存。上传、解析状态和详情查询不会创建会话，只有真实 Agent 问答写入对应的精读会话。
 - 默认数据目录为 `~/.novicesynapse/`，可在 `/settings` 配置向导或 `~/.novicesynapse/config.json` 的 `storage.data_dir` 修改。`NOVICESYNAPSE_DATA_DIR` 仍作为部署环境的最高优先级覆盖项。领域入门 job 默认也使用同一个 `research.sqlite3`；只有显式配置 `DOMAIN_ONBOARDING_JOB_DB` 时才使用独立文件。
 
 数据目录修改后需要重启服务。新目录承接重启后的新读写，不会自动搬迁旧目录的数据；这样可以避免一次普通配置修改暗中移动或覆盖用户文件。
@@ -43,6 +43,10 @@
 3. 论文管理页也可直接上传 PDF 或粘贴 PDF 链接，导入完成即进入管理列表，并提供相同的精读入口。
 
 推荐论文已经有 `paper_id` 时，精读导入会把 PDF 附着到该论文实体，而不是另建一条同名记录；没有可下载链接时，论文卡片会要求用户选择本地 PDF。
+
+用户重复上传文件时先按 PDF 的 SHA-256 去重；在线论文还会按 arXiv ID/来源链接复用已有论文。命中后返回原 `paper_id`，不会新增论文管理条目。
+
+PDF 的 outline/bookmark 是可选能力，并非所有出版平台都会写入。存在时直接作为目录；不存在时根据正文标题生成章节索引，此状态属于普通信息提示而不是解析错误。摘要依次尝试独立标签、同行 `Abstract—...`、PDF Subject 元数据和首页长段落回退。
 
 ### 领域入门
 

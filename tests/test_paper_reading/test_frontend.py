@@ -152,7 +152,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function readingMapPhaseText()", javascript)
         self.assertIn("extracting_sections", javascript)
         self.assertIn("readingMapProgress", javascript)
-        self.assertIn("未找到 PDF 内置目录", javascript)
+        self.assertIn("PDF 未提供内置目录", javascript)
+        self.assertIn('warning.classList.add("is-info")', javascript)
         self.assertNotIn("<dialog", html)
         self.assertNotIn(".showModal()", javascript)
 

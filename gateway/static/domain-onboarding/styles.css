@@ -310,6 +310,8 @@ button { color: inherit; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .section-heading p { text-align: left; }
 }
+.primary-button,.ghost-button,.detail-action{align-items:center;justify-content:center;line-height:1}.detail-action{display:inline-flex}
+
 @media (max-width: 520px) {
   .topbar-actions .ghost-button { display: none; }
   .topbar { padding-inline: 0.7rem; }

@@ -52,6 +52,23 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(papers[0]["reading_status"], "reading")
         self.assertEqual(papers[0]["library_note"], "重点看方法")
 
+    def test_transient_paper_transport_conversations_are_hidden(self) -> None:
+        transient = "paper-reading-transport-only"
+        self.store.ensure_conversation(transient, title="论文精读：upload_paper")
+        self.store.append_message(
+            transient,
+            role="user",
+            mode="paper_reading",
+            content='{"action":"upload_paper"}',
+        )
+
+        conversation_ids = {
+            item["conversation_id"] for item in self.catalog.list_conversations()
+        }
+
+        self.assertNotIn(transient, conversation_ids)
+        self.assertIn(self.conversation_id, conversation_ids)
+
     def test_annotation_round_trip_keeps_pdf_anchor_and_note(self) -> None:
         saved = self.catalog.upsert_annotation(
             annotation_id="mark-1",
@@ -105,11 +122,13 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn("研究资料库", response.text)
         self.assertIn('id="paper-import"', response.text)
         self.assertIn('id="folder-filter"', response.text)
+        self.assertIn('href="/app?new=1"', response.text)
 
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)
         self.assertIn("function openDomainDetail", script)
         self.assertIn("function attachManagedPaper", script)
+        self.assertIn("paper-record-card", script)
 
     def test_library_and_annotation_endpoints(self) -> None:
         with TemporaryDirectory() as directory:

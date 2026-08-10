@@ -177,6 +177,7 @@ select option { color: #07120f; }
   line-height: 1.45;
 }
 .outline-source-warning.is-ok { border-color: rgba(102,245,214,.28); color: var(--accent); background: rgba(102,245,214,.08); }
+.outline-source-warning.is-info { border-color: rgba(135,167,255,.3); color: #cbd6ff; background: rgba(135,167,255,.08); }
 .outline-source-warning.is-error { border-color: rgba(255,127,136,.38); color: #ffc1c6; background: rgba(255,127,136,.09); }
 .outline-source-warning.is-pending { border-color: rgba(255,224,130,.28); color: #ffe6a5; background: rgba(255,224,130,.07); }
 .paper-outline { display: grid; gap: .25rem; margin-top: .7rem; }
@@ -633,6 +634,8 @@ select option { color: #07120f; }
   .reader-actions .mini-button:not(.is-accent) { display: none; }
   .ready-capabilities { flex-wrap: wrap; }
 }
+.accent-button{display:inline-flex;align-items:center;justify-content:center;line-height:1}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }

@@ -108,6 +108,8 @@ function renderItems() {
 
 function renderCard(item) {
   const card = element("article", "item-card");
+  const paperView = state.view === "paper-readings" || state.view === "papers";
+  if (paperView) card.classList.add("paper-record-card");
   card.tabIndex = 0;
   card.setAttribute("role", "link");
   card.dataset.id = item.conversation_id || item.artifact_id || item.reading_session_id || item.paper_id;
@@ -116,13 +118,28 @@ function renderCard(item) {
   if (state.view === "papers") card.dataset.href = item.has_document || item.reading_count ? paperWorkspace(item.paper_id, "") : (item.source_url || "");
   if (state.view === "domain-onboardings") card.dataset.domainId = item.artifact_id;
   const head = element("div", "item-head");
-  head.append(element("h2", "item-title", item.paper_title || item.title || item.query || "未命名记录"), element("time", "item-time", formatDate(item.updated_at)));
+  const heading = element("div", paperView ? "paper-heading" : "");
+  if (paperView) heading.append(element("span", "paper-kind", state.view === "paper-readings" ? "PAPER READING" : "PAPER LIBRARY"));
+  heading.append(element("h2", "item-title", item.paper_title || item.title || item.query || "未命名记录"));
+  head.append(heading, element("time", "item-time", formatDate(item.updated_at)));
   card.append(head);
   const preview = previewFor(item);
   if (preview) card.append(element("p", "item-preview", preview));
   const meta = element("div", "item-meta");
   meta.append(...metaFor(item).map(([text, blue]) => element("span", `chip${blue ? " is-blue" : ""}`, text)));
   card.append(meta);
+  if (state.view === "paper-readings") {
+    const percentage = Math.max(0, Math.min(100, Math.round(Number(item.progress?.percentage || 0))));
+    const progress = element("div", "paper-progress");
+    const label = element("div", "paper-progress-label");
+    label.append(element("span", "", item.current_section_title ? `当前章节 · ${item.current_section_title}` : "尚未选择章节"), element("strong", "", `${percentage}%`));
+    const track = element("span", "paper-progress-track");
+    const fill = element("i");
+    fill.style.width = `${percentage}%`;
+    track.append(fill);
+    progress.append(label, track);
+    card.append(progress);
+  }
   const actions = element("div", "item-actions");
   if (state.view === "conversations") {
     actions.append(link(`/app?conversation_id=${encodeURIComponent(item.conversation_id)}`, "继续会话", true));
@@ -132,10 +149,10 @@ function renderCard(item) {
     open.dataset.domainId = item.artifact_id;
     actions.append(open);
   } else if (state.view === "paper-readings") {
-    actions.append(link(paperWorkspace(item.paper_id, item.reading_session_id), "继续精读", true));
+    actions.append(link(paperWorkspace(item.paper_id, item.reading_session_id), "继续论文精读  ↗", true));
   } else {
     if (item.has_document || item.reading_count) {
-      actions.append(link(paperWorkspace(item.paper_id, ""), item.reading_count ? "打开论文" : "开始精读", true));
+      actions.append(link(paperWorkspace(item.paper_id, ""), item.reading_count ? "继续论文精读  ↗" : "开始论文精读  ↗", true));
     } else {
       const start = element("button", "accent", paperPdfUrl(item) ? "导入 PDF 并精读" : "上传 PDF 并精读");
       start.dataset.action = "attach-paper";
@@ -150,6 +167,10 @@ function renderCard(item) {
 }
 
 function renderPaperControls(item) {
+  const editor = document.createElement("details");
+  editor.className = "paper-management-editor";
+  const summary = document.createElement("summary");
+  summary.textContent = "管理分类、标签与备注";
   const wrap = element("div", "paper-controls");
   const select = document.createElement("select");
   select.dataset.paperStatus = item.paper_id;
@@ -176,13 +197,14 @@ function renderPaperControls(item) {
     remove.dataset.paperId = item.paper_id;
     wrap.append(remove);
   }
-  return wrap;
+  editor.append(summary, wrap);
+  return editor;
 }
 
 async function handleItemAction(event) {
   const button = event.target.closest("[data-action]");
   if (!button) {
-    if (!event.target.closest("a,button,input,select,textarea")) openCard(event.target.closest(".item-card"));
+    if (!event.target.closest("a,button,input,select,textarea,summary,details")) openCard(event.target.closest(".item-card"));
     return;
   }
   event.stopPropagation();
@@ -357,7 +379,7 @@ async function attachManagedPaper(paperId, pdfUrl, button) {
 }
 
 function previewFor(item) {
-  if (state.view === "paper-readings") return [item.authors?.join("、"), item.current_section_id ? `当前：${item.current_section_id}` : ""].filter(Boolean).join(" · ");
+  if (state.view === "paper-readings") return [item.authors?.join("、"), item.venue, item.publication_year].filter(Boolean).join(" · ");
   if (state.view === "papers") return item.abstract || item.authors?.join("、") || "暂无摘要";
   return item.preview || item.query || "";
 }

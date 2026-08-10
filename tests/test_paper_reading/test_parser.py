@@ -140,6 +140,19 @@ class PDFParserTests(unittest.TestCase):
             2025,
         )
 
+    def test_extract_abstract_accepts_inline_em_dash_label(self) -> None:
+        text = (
+            "Paper title\nAlice Example\n"
+            "Abstract—This paper presents a reliable approach for extracting inline abstracts "
+            "from scientific PDF text while preserving enough content for a useful paper card.\n"
+            "1 Introduction\nThe rest of the paper starts here."
+        )
+
+        abstract = self.parser.extract_abstract(text)
+
+        self.assertTrue(abstract.startswith("This paper presents"))
+        self.assertNotIn("Introduction", abstract)
+
     def test_extract_year_uses_pdf_creation_metadata_as_fallback(self) -> None:
         self.assertEqual(
             self.parser.extract_year(

@@ -206,9 +206,31 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     except Exception as e:
         return _error(f"PDF 获取失败: {e}", action="upload_paper")
 
-    # Passing an existing paper_id attaches a PDF to a catalog/recommendation item
-    # instead of creating a duplicate paper record.
-    paper_id = request.paper_id or str(uuid4())
+    research_store = getattr(storage, "research_store", None)
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    matched_by_hash = (
+        research_store.find_paper_by_file_hash(file_hash)
+        if research_store is not None and not request.paper_id
+        else None
+    )
+    matched_by_identity = (
+        research_store.find_paper_by_identity(
+            arxiv_id=_arxiv_id_from_url(request.pdf_url) or None,
+            source_url=request.pdf_url or None,
+        )
+        if research_store is not None and not request.paper_id and not matched_by_hash
+        else None
+    )
+    # Explicit attachments win; otherwise reuse a binary/identity match.
+    paper_id = request.paper_id or matched_by_hash or matched_by_identity or str(uuid4())
+    if matched_by_hash:
+        existing = storage.load_paper(paper_id)
+        if existing:
+            research_store.ensure_library_item(paper_id, reading_status="unread")
+            return _ok(
+                "upload_paper",
+                _upload_response_data(paper_id, existing, deduplicated=True),
+            )
     quick_payload = _build_quick_paper_payload(
         paper_id=paper_id,
         pdf_bytes=pdf_bytes,
@@ -217,33 +239,48 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     )
     storage.save_upload(paper_id, pdf_bytes)
     storage.save_paper(paper_id, quick_payload)
-    research_store = getattr(storage, "research_store", None)
     if research_store is not None:
         research_store.ensure_library_item(paper_id, reading_status="unread")
     _schedule_background_parse(app_state, paper_id, pdf_bytes)
 
-    response_data = {
+    return _ok(
+        "upload_paper",
+        _upload_response_data(
+            paper_id,
+            quick_payload,
+            deduplicated=bool(matched_by_identity),
+        ),
+    )
+
+
+def _upload_response_data(
+    paper_id: str,
+    paper: dict[str, Any],
+    *,
+    deduplicated: bool,
+) -> dict[str, Any]:
+    sections = paper.get("sections", []) or []
+    return {
         "paper_id": paper_id,
-        "title": quick_payload.get("title", ""),
-        "authors": quick_payload.get("authors", []),
-        "abstract": quick_payload.get("abstract", ""),
-        "sections_count": 0,
-        "sections": [],
-        "figures_count": 0,
-        "tables_count": 0,
-        "layout_elements_count": 0,
-        "parse_status": quick_payload.get("parse_status", "queued"),
-        "section_extraction_source": quick_payload.get("section_extraction_source", "pending"),
-        "section_extraction_status": quick_payload.get("section_extraction_status", "pending"),
-        "section_extraction_message": quick_payload.get("section_extraction_message", ""),
-        "outline_entries_count": quick_payload.get("outline_entries_count", 0),
+        "title": paper.get("title", ""),
+        "authors": paper.get("authors", []),
+        "abstract": paper.get("abstract", ""),
+        "sections_count": len(sections),
+        "sections": sections,
+        "figures_count": len(paper.get("figures", []) or []),
+        "tables_count": len(paper.get("tables", []) or []),
+        "layout_elements_count": len(paper.get("layout_elements", []) or []),
+        "parse_status": paper.get("parse_status", "queued"),
+        "section_extraction_source": paper.get("section_extraction_source", "pending"),
+        "section_extraction_status": paper.get("section_extraction_status", "pending"),
+        "section_extraction_message": paper.get("section_extraction_message", ""),
+        "outline_entries_count": paper.get("outline_entries_count", 0),
         "pdf_url": f"/paper_reading/uploads/{paper_id}.pdf",
         "has_pdf": True,
-        "page_count": quick_payload.get("page_count", 0),
-        "text_layer_available": bool(quick_payload.get("full_text", "").strip()),
+        "page_count": paper.get("page_count", 0),
+        "text_layer_available": bool(str(paper.get("full_text", "")).strip()),
+        "deduplicated": deduplicated,
     }
-
-    return _ok("upload_paper", response_data)
 
 
 def _build_quick_paper_payload(
@@ -568,6 +605,12 @@ def _handle_start_reading(
         paper_data=paper_data,
         current_section=current_section,
     )
+    _record_reading_message(
+        storage,
+        session.session_id,
+        role="user",
+        content=request.content,
+    )
 
     # 3. 执行 Agent
     result: AgentRunResult = run_agent_detailed(
@@ -641,6 +684,13 @@ def _handle_start_reading(
         },
     }
 
+    _record_reading_message(
+        storage,
+        session.session_id,
+        role="assistant",
+        content=result.text,
+    )
+
     return _ok("start_reading", data,
         session={
             "session_id": session.session_id,
@@ -678,6 +728,27 @@ def _persist_skill_outputs(app_state: Any, result: dict[str, Any]) -> None:
             content=content,
             rendered_text=str(output.get("rendered") or ""),
         )
+
+
+def _record_reading_message(
+    storage: Any,
+    session_id: str,
+    *,
+    role: str,
+    content: str,
+) -> None:
+    """Persist only visible Agent Q&A under the resolved reading session."""
+    text = str(content or "").strip()
+    research_store = getattr(storage, "research_store", None)
+    if research_store is None or not session_id or not text:
+        return
+    research_store.append_message(
+        session_id,
+        role=role,
+        content=text,
+        mode="paper_reading",
+        channel="web",
+    )
 
 
 def _handle_pause_reading(request: PaperReadingRequest, app_state: Any) -> dict:

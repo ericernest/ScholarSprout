@@ -1116,10 +1116,19 @@ function setLoading(isLoading, interruptible = false) {
 // Get persistent local session id.
 function getSessionId() {
   const key = "novicesynapse_session_id";
-  const requested = new URLSearchParams(window.location.search).get("conversation_id");
+  const query = new URLSearchParams(window.location.search);
+  const requested = query.get("conversation_id");
   if (requested) {
     window.localStorage.setItem(key, requested);
     return requested;
+  }
+  if (query.get("new") === "1") {
+    const created = `web-${crypto.randomUUID()}`;
+    window.localStorage.setItem(key, created);
+    query.delete("new");
+    query.set("conversation_id", created);
+    window.history.replaceState(null, "", `${window.location.pathname}?${query}`);
+    return created;
   }
   const existing = window.localStorage.getItem(key);
   if (existing) {

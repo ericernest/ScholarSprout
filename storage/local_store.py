@@ -480,6 +480,39 @@ class LocalResearchStore:
                 (_id("paper_file"), paper_id, file_kind, storage_uri, sha256, _now()),
             )
 
+    def find_paper_by_file_hash(self, sha256: str, *, file_kind: str = "pdf") -> str | None:
+        """Return the canonical paper already backed by the same binary file."""
+        if not sha256.strip():
+            return None
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT paper_id FROM paper_files
+                   WHERE file_kind = ? AND sha256 = ? ORDER BY created_at LIMIT 1""",
+                (file_kind, sha256),
+            ).fetchone()
+        return str(row["paper_id"]) if row else None
+
+    def find_paper_by_identity(
+        self,
+        *,
+        arxiv_id: str | None = None,
+        doi: str | None = None,
+        source_url: str | None = None,
+    ) -> str | None:
+        """Resolve stable external identities before importing another PDF copy."""
+        if not any((arxiv_id, doi, source_url)):
+            return None
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT paper_id FROM papers WHERE
+                   (? IS NOT NULL AND arxiv_id = ?) OR
+                   (? IS NOT NULL AND doi = ?) OR
+                   (? IS NOT NULL AND source_url = ?)
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (arxiv_id, arxiv_id, doi, doi, source_url, source_url),
+            ).fetchone()
+        return str(row["paper_id"]) if row else None
+
     def save_paper_knowledge_graph(
         self,
         graph: dict[str, Any],
@@ -628,7 +661,7 @@ class LocalResearchStore:
         if conversation_id:
             self.ensure_conversation(
                 conversation_id,
-                title=f"领域入门：{query[:60]}",
+                title=query[:60] or "新会话",
                 user_id=user_id,
             )
         if artifact_id is None:

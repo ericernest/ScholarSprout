@@ -727,7 +727,7 @@ function renderOutlineSourceWarning() {
   const status = state.sectionExtractionStatus || state.paper?.section_extraction_status || "";
   const source = state.sectionExtractionSource || state.paper?.section_extraction_source || "";
   const message = state.sectionExtractionMessage || state.paper?.section_extraction_message || "";
-  warning.classList.remove("is-error", "is-ok", "is-pending");
+  warning.classList.remove("is-error", "is-ok", "is-info", "is-pending");
   if (["queued", "pending", "parsing"].includes(state.parseStatus)) {
     warning.textContent = "正在检测 PDF 内置目录…";
     warning.classList.add("is-pending");
@@ -741,8 +741,8 @@ function renderOutlineSourceWarning() {
     return;
   }
   if (source === "heuristic" || status.includes("fallback")) {
-    warning.textContent = message || "未找到 PDF 内置目录，已回退启发式识别；索引可能不等于论文真实目录。";
-    warning.classList.add("is-error");
+    warning.textContent = message || "PDF 未提供内置目录，已根据正文标题生成章节索引。";
+    warning.classList.add("is-info");
     warning.hidden = false;
     return;
   }

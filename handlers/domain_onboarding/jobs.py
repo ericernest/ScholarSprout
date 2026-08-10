@@ -671,7 +671,7 @@ class DomainOnboardingJobManager:
             if request.session_id:
                 self.result_store.ensure_conversation(
                     request.session_id,
-                    title=f"领域入门：{request.query[:60]}",
+                    title=request.query[:60] or "新会话",
                     user_id=request.user_id,
                 )
                 self.result_store.append_message(

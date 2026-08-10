@@ -113,13 +113,19 @@ class PDFParser:
             table_elements=table_elements,
         )
 
+        abstract = self.extract_abstract(full_text)
+        if not abstract:
+            subject = str((doc.metadata or {}).get("subject") or "").strip()
+            if len(subject) >= 80:
+                abstract = re.sub(r"\s+", " ", subject)[:3000]
+
         return PaperMetadata(
             paper_id=str(uuid4()),
             source="upload",
             source_id="",
             title=self.extract_title(full_text),
             authors=self.extract_authors(full_text),
-            abstract=self.extract_abstract(full_text),
+            abstract=abstract,
             year=self.extract_year(full_text, document_metadata=doc.metadata),
             sections=sections,
             figures=figures,
@@ -155,7 +161,7 @@ class PDFParser:
         return sections, {
             "source": "heuristic",
             "status": "outline_missing_fallback_heuristic",
-            "message": "未找到 PDF 内置 outline/bookmark，已回退到启发式章节识别；目录可能不等于论文真实目录。",
+            "message": "PDF 未提供内置目录，已根据正文标题生成章节索引。",
             "outline_entries_count": 0,
         }
 
@@ -1406,9 +1412,15 @@ class PDFParser:
         lines = self._normalize_section_lines(text)
         for index, raw_line in enumerate(lines):
             line = raw_line.strip()
-            if not re.fullmatch(r"(Abstract|摘要)", line, re.IGNORECASE):
+            label = re.match(
+                r"^(?:Abstract|摘要)\s*[:：.\-—–]?\s*(.*)$",
+                line,
+                re.IGNORECASE,
+            )
+            if not label:
                 continue
-            body: list[str] = []
+            inline_body = label.group(1).strip()
+            body: list[str] = [inline_body] if inline_body else []
             for candidate_index, candidate in enumerate(lines[index + 1:], start=index + 1):
                 value = candidate.strip()
                 if not value:
@@ -1429,7 +1441,7 @@ class PDFParser:
                 return abstract[:3000]
 
         inline = re.search(
-            r"\b(?:Abstract|摘要)\b\s*[:：.\-]?\s+(.{80,}?)(?=\n\s*(?:1(?:\.|\s)|Introduction\b|引言\b|References\b|Bibliography\b))",
+            r"(?:\bAbstract\b|摘要)\s*[:：.\-—–]?\s+(.{80,}?)(?=\n\s*(?:1(?:\.|\s)|Introduction\b|引言\b|References\b|Bibliography\b))",
             text,
             re.DOTALL | re.IGNORECASE,
         )
@@ -1438,10 +1450,20 @@ class PDFParser:
             if len(abstract) > 50:
                 return abstract[:3000]
 
-        # 回退：取前 2000 字符中较长的段落
-        first_chunk = text[:2000]
-        paragraphs = [p.strip() for p in first_chunk.split("\n\n") if len(p.strip()) > 100]
-        return paragraphs[0][:2000] if paragraphs else ""
+        # 回退：部分出版 PDF 没有独立 Abstract 标签，或标签在版面提取时丢失。
+        # 这时选首页正文中的第一个长段落，而不是直接返回空字符串。
+        lead_lines = self._normalize_section_lines(text[:5000])
+        paragraphs = self._lines_to_paragraphs(lead_lines)
+        for paragraph in paragraphs:
+            compact = re.sub(r"\s+", " ", paragraph).strip()
+            if len(compact) < 120:
+                continue
+            if "@" in compact or self._looks_like_running_header(compact):
+                continue
+            if re.match(r"^(?:doi|arxiv|keywords?|index terms?)\b", compact, re.IGNORECASE):
+                continue
+            return compact[:2000]
+        return ""
 
     def _looks_like_abstract_boundary(
         self,

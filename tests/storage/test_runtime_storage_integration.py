@@ -16,7 +16,7 @@ from handlers.domain_onboarding.jobs import DomainOnboardingJobManager, SQLiteJo
 from handlers.domain_onboarding.metrics import DomainOnboardingMetrics
 from handlers.domain_onboarding.schemas import DomainOnboardingRequest, PipelineResult
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
-from handlers.paper_reading.handler import _handle_upload_paper
+from handlers.paper_reading.handler import _handle_upload_paper, _record_reading_message
 from handlers.paper_reading.schemas import PaperReadingRequest
 from storage import LocalResearchStore, PaperReadingStorage, ResearchCatalog
 
@@ -61,7 +61,11 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
                 rows = connection.execute(
                     "SELECT role, mode, content FROM messages ORDER BY sequence_number"
                 ).fetchall()
+                title = connection.execute(
+                    "SELECT title FROM conversations WHERE conversation_id = 'chat-session'"
+                ).fetchone()[0]
             self.assertEqual(rows, [("user", "chat", "今天讨论数据库"), ("assistant", "chat", "好的。")])
+            self.assertEqual(title, "今天讨论数据库")
 
     def test_paper_message_does_not_persist_uploaded_base64(self) -> None:
         with TemporaryDirectory() as directory:
@@ -82,11 +86,12 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             )
 
             with closing(sqlite3.connect(database)) as connection:
-                content = "\n".join(
-                    row[0] for row in connection.execute("SELECT content FROM messages").fetchall()
-                )
-            self.assertNotIn("SECRET_BASE64", content)
-            self.assertIn("upload_paper", content)
+                conversation_count = connection.execute(
+                    "SELECT COUNT(*) FROM conversations"
+                ).fetchone()[0]
+                message_count = connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            self.assertEqual(conversation_count, 0)
+            self.assertEqual(message_count, 0)
 
     def test_domain_job_updates_shared_artifact_and_conversation(self) -> None:
         with TemporaryDirectory() as directory:
@@ -166,6 +171,25 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
                 ).fetchone()[0]
             self.assertEqual(file_count, 1)
 
+    def test_reading_questions_share_one_persistent_conversation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = LocalResearchStore(root / "research.sqlite3")
+            store.initialize()
+            paper_storage = PaperReadingStorage(root / "paper_reading", store)
+            store.ensure_conversation("reading-session", title="论文精读")
+
+            _record_reading_message(
+                paper_storage, "reading-session", role="user", content="方法部分的核心假设是什么？"
+            )
+            _record_reading_message(
+                paper_storage, "reading-session", role="assistant", content="核心假设是……"
+            )
+
+            detail = ResearchCatalog(store).get_conversation("reading-session")
+            self.assertEqual(len(detail["messages"]), 2)
+            self.assertEqual({message["role"] for message in detail["messages"]}, {"user", "assistant"})
+
     def test_upload_attaches_to_existing_paper_and_enters_library(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -190,6 +214,27 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             library = ResearchCatalog(store).list_papers(library_only=True)
             self.assertEqual(library[0]["paper_id"], paper_id)
             self.assertEqual(library[0]["reading_status"], "unread")
+
+    def test_uploading_same_pdf_reuses_binary_match(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = LocalResearchStore(root / "research.sqlite3")
+            store.initialize()
+            paper_storage = PaperReadingStorage(root / "paper_reading", store)
+            state = SimpleNamespace(paper_pipeline=object(), paper_storage=paper_storage)
+            request = PaperReadingRequest(
+                action="upload_paper",
+                pdf_data=b64encode(b"%PDF-1.4\nsame-paper\n%%EOF").decode("ascii"),
+                metadata={"original_filename": "same-paper.pdf"},
+            )
+
+            with patch("handlers.paper_reading.handler._schedule_background_parse"):
+                first = _handle_upload_paper(request, state)
+                second = _handle_upload_paper(request, state)
+
+            self.assertEqual(first["data"]["paper_id"], second["data"]["paper_id"])
+            self.assertTrue(second["data"]["deduplicated"])
+            self.assertEqual(len(ResearchCatalog(store).list_papers()), 1)
 
 
 if __name__ == "__main__":
