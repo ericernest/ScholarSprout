@@ -78,6 +78,8 @@ class GeneratorTests(unittest.TestCase):
                         ],
                         "evidence_claims": [],
                     }
+                    if sequence == 1:
+                        payload = stage
                 return {
                     "choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},

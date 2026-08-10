@@ -18,6 +18,61 @@ class StructuredLLMError(RuntimeError):
         self.stats = stats
 
 
+def _escape_unquoted_inner_quotes(text: str) -> str:
+    """Repair quotes inside an otherwise JSON-style string.
+
+    Models occasionally copy a paper title such as ``for "Mind" Exploration``
+    without escaping the inner pair. A quote can only close a JSON string when
+    the next non-whitespace character is a structural delimiter. Preserve those
+    closing quotes and escape the others; parsing still rejects truncated JSON
+    because this function never invents missing brackets or closing quotes.
+    """
+
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(text)
+    for index, character in enumerate(text):
+        if not in_string:
+            repaired.append(character)
+            if character == '"':
+                in_string = True
+            continue
+        if escaped:
+            repaired.append(character)
+            escaped = False
+            continue
+        if character == "\\":
+            repaired.append(character)
+            escaped = True
+            continue
+        if character != '"':
+            repaired.append(character)
+            continue
+
+        next_index = index + 1
+        while next_index < length and text[next_index].isspace():
+            next_index += 1
+        next_character = text[next_index] if next_index < length else ""
+        if not next_character or next_character in ":,}]":
+            repaired.append(character)
+            in_string = False
+        else:
+            repaired.append('\\"')
+    return "".join(repaired)
+
+
+def _load_json_object(candidate: str) -> dict[str, Any] | None:
+    for text in (candidate, _escape_unquoted_inner_quotes(candidate)):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def _get_finish_reason(response: Any) -> str:
     choices = getattr(response, "choices", None) or (
         response.get("choices", []) if isinstance(response, dict) else []
@@ -35,11 +90,8 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     text = raw_text.strip()
     if not text:
         return None
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
+    parsed = _load_json_object(text)
+    if parsed is not None:
         return parsed
 
     # Only inspect balanced top-level object candidates. Advancing from a
@@ -73,12 +125,8 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
         elif character == "}" and array_depth == 0 and depth:
             depth -= 1
             if depth == 0 and start is not None:
-                try:
-                    candidate = json.loads(text[start : index + 1])
-                except json.JSONDecodeError:
-                    start = None
-                    continue
-                if isinstance(candidate, dict):
+                candidate = _load_json_object(text[start : index + 1])
+                if candidate is not None:
                     return candidate
                 start = None
     return None
