@@ -72,9 +72,9 @@ class DomainOnboardingConfig(BaseModel):
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
-    planning_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
+    planning_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     planning_model_timeout_seconds: float = Field(
-        default=110.0, gt=0.0, le=115.0
+        default=280.0, gt=0.0, le=590.0
     )
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     # Remote qwen3 embeddings can legitimately take longer than a lexical

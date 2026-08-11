@@ -64,7 +64,9 @@ class PlannerTests(unittest.TestCase):
             )
         )
         self.assertTrue(all(query.path_id for query in plan.paper_queries))
-        self.assertEqual(model.calls[0]["timeout"], 110.0)
+        self.assertEqual(
+            model.calls[0]["timeout"], planner.config.planning_model_timeout_seconds
+        )
         user_payload = model.calls[0]["messages"][1]["content"]
         self.assertNotIn("learner_profile", user_payload)
         self.assertNotIn("time_budget", user_payload)

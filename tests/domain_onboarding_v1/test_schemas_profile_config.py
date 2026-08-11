@@ -63,6 +63,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_model_timeout_seconds,
             config.planning_timeout_seconds,
         )
+        self.assertEqual(config.planning_timeout_seconds, 300.0)
+        self.assertEqual(config.planning_model_timeout_seconds, 280.0)
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
         self.assertEqual(config.request_timeout_seconds, 4800.0)
         self.assertEqual(config.generation_timeout_seconds, 3600.0)

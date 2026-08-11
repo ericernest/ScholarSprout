@@ -353,7 +353,10 @@ def is_transient_infrastructure_failure(run: ModelBenchmarkRun) -> bool:
         run.status == "timeout"
         and not run.generation_succeeded
         and run.generation_ms == 0
-        and "deadline exceeded during ranking" in error
+        and any(
+            f"deadline exceeded during {stage}" in error
+            for stage in ("planning", "retrieval", "ranking")
+        )
     ):
         return True
     if (
