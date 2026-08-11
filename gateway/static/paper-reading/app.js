@@ -108,6 +108,9 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
+  $("research-overview-button")?.addEventListener("click", () => {
+    $("reading-map-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -2864,13 +2867,18 @@ function renderReadingMap() {
   const grid = $("reading-map-grid");
   const empty = $("reading-map-empty");
   const detail = $("reading-map-detail");
+  const isSurvey = map.map_variant === "survey";
+  const taskLabel = isSurvey ? "综述导读地图与智能索引" : "研究总览与智能索引";
   if (!grid) return;
   grid.replaceChildren();
+  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "Survey reading map" : "Research overview";
+  if ($("reading-map-title")) $("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览";
+  if ($("research-overview-button")) $("research-overview-button").textContent = isSurvey ? "综述地图 ↓" : "研究总览 ↓";
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", "Reading Map"),
-      create("h3", "", "论文阅读地图"),
-      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧 Agent 解释这一段。")
+      create("p", "panel-label", isSurvey ? "Survey guide" : "Research overview"),
+      create("h3", "", isSurvey ? "综述导读地图" : "研究总览"),
+      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧 Agent 解释。")
     );
   }
 
@@ -2884,12 +2892,12 @@ function renderReadingMap() {
   if (regenerateButton) regenerateButton.disabled = (regenerating && !timedOut) || !state.paperId;
   const failureText = readingMapFailureText(map);
   $("reading-map-status-copy").textContent = mapReady
-    ? (map.map_variant === "survey" ? "综述型阅读地图已生成" : "研究型阅读地图已生成")
+    ? (map.partial && map.generation_warning ? `${taskLabel}已生成；${map.generation_warning}` : `${taskLabel}已生成`)
     : mapFailed
-      ? `导读地图与智能索引生成失败：${failureText}`
+      ? `${taskLabel}生成失败：${failureText}`
       : timedOut
-        ? "导读地图与智能索引生成已超时，可以点击“重新生成”。"
-        : "正在生成导读地图与智能索引，请稍候。";
+        ? `${taskLabel}生成已超时，可以点击“重新生成”。`
+        : `正在并行生成${taskLabel}，请稍候。`;
 
   if (!mapReady && !mapFailed && !timedOut) {
     $("reading-map-status-copy").textContent = readingMapPhaseText();
@@ -2909,7 +2917,7 @@ function renderReadingMap() {
     return;
   }
 
-  const groups = map.map_variant === "survey" ? surveyReadingMapGroups(map) : researchReadingMapGroups(map);
+  const groups = isSurvey ? surveyReadingMapGroups(map) : researchReadingMapGroups(map);
   const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent;
   if (!mapReady) {
