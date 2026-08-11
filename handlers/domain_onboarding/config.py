@@ -81,7 +81,7 @@ class DomainOnboardingConfig(BaseModel):
     # rank. Keep the stage bounded while allowing one real embedding batch.
     ranking_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
-    evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
+    evaluation_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     relevance_weight: float = Field(default=0.70, ge=0.0, le=1.0)
     ranking_missing_abstract_penalty: float = Field(default=0.80, ge=0.0, le=1.0)

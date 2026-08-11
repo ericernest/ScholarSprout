@@ -228,6 +228,17 @@ class ModelBenchmarkTests(unittest.TestCase):
                 "generation_ms": 0.0,
             }
         )
+        evaluation_timeout = transient.model_copy(
+            update={
+                "status": "timeout",
+                "error": "domain onboarding deadline exceeded during evaluation",
+                "duration_ms": 234_000,
+                "total_tokens": 30_000,
+                "generation_succeeded": True,
+                "delivery_succeeded": False,
+                "generation_ms": 148_000.0,
+            }
+        )
 
         self.assertTrue(is_transient_infrastructure_failure(transient))
         self.assertFalse(is_resumable_complete(transient))
@@ -237,6 +248,8 @@ class ModelBenchmarkTests(unittest.TestCase):
         self.assertFalse(is_resumable_complete(throttled))
         self.assertTrue(is_transient_infrastructure_failure(ranking_timeout))
         self.assertFalse(is_resumable_complete(ranking_timeout))
+        self.assertTrue(is_transient_infrastructure_failure(evaluation_timeout))
+        self.assertFalse(is_resumable_complete(evaluation_timeout))
 
 
 if __name__ == "__main__":
