@@ -17,6 +17,7 @@ from handlers.paper_reading.handler import (
     _ensure_survey_prerequisite_task,
     _normalize_survey_card_plan,
     _reading_map_response_json,
+    _research_reading_sections,
     resume_pending_reading_map_generations,
 )
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
@@ -103,6 +104,25 @@ class _ConcurrentJsonModel:
 
 
 class ReadingMapRuntimeTests(unittest.TestCase):
+    def test_research_section_guides_cover_more_than_old_28_section_limit(self) -> None:
+        sections = [{
+            "section_id": f"sec:{index}",
+            "title": f"Section {index}",
+            "content": "Substantive section text.",
+        } for index in range(31)]
+        sections.extend([
+            {"section_id": "sec:references", "title": "References", "content": "[1] Citation"},
+            {"section_id": "sec:empty", "title": "Empty heading", "content": ""},
+        ])
+
+        selected = _research_reading_sections(
+            {"sections": sections},
+            {"paper_type": "research"},
+        )
+
+        self.assertEqual(len(selected), 31)
+        self.assertEqual(selected[-1]["section_id"], "sec:30")
+
     def test_research_overview_and_grouped_guides_run_in_bounded_parallel(self) -> None:
         class ResearchModel:
             def __init__(self) -> None:

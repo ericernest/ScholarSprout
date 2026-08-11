@@ -908,7 +908,10 @@ function renderOutline() {
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", label);
     button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "Untitled section"));
-    button.addEventListener("click", () => selectSection(section.section_id, false));
+    button.addEventListener("click", () => {
+      if (isReferenceSection(section)) jumpToPdfPage(section.start_page || 1, section.section_id);
+      else selectSection(section.section_id, false);
+    });
     container.append(button);
   });
   $("outline-count").textContent = sections.length ? String(sections.length) : "";
@@ -1038,7 +1041,7 @@ function readingMapCardProgressText() {
 function renderSections() {
   const reader = $("structured-reader");
   reader.replaceChildren();
-  const sections = state.paper?.sections || [];
+  const sections = (state.paper?.sections || []).filter((section) => !isReferenceSection(section));
   if (!sections.length) {
     reader.append(create("div", "empty-state", "没有解析到章节索引，请在 PDF 原文中阅读并划选。"));
     return;
@@ -1061,7 +1064,8 @@ function renderSections() {
     const body = create("div", "paper-section-body");
     const summary = create("p", "index-section-summary", sectionSummaryText(section, indexed, guide));
     body.append(summary);
-    body.append(renderSectionGuide(guide, indexed));
+    const renderedGuide = renderSectionGuide(guide, indexed);
+    if (renderedGuide) body.append(renderedGuide);
     const actions = create("div", "index-section-actions");
     const jump = create("button", "figure-source-button", `跳转 PDF 第 ${section.start_page || 1} 页`);
     jump.type = "button";
@@ -1121,6 +1125,9 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
     ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
     : "";
   const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
+  if (isReferenceSection(section)) {
+    return `${pages}${quality}参考文献章节按设计不生成智能索引卡片，请直接查看 PDF 原文。`;
+  }
   if (!isReadingMapDisplayable()) {
     return isReadingMapFailed()
       ? `${pages}${quality}智能索引生成失败，请点击“重新生成”。`
@@ -1130,34 +1137,36 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
   }
   return guide
     ? `${pages}${quality}下方是面向科研新手的章节导读。`
-    : `${pages}${quality}本章节没有生成可展示的智能索引卡片，请点击“重新生成”。`;
+    : strHasContent(section.content)
+      ? `${pages}${quality}本章节没有生成可展示的智能索引卡片，请点击“重新生成”。`
+      : `${pages}${quality}该条目只有目录标题，没有提取到独立正文；相关内容请查看其子章节或 PDF 原文。`;
 }
 
 function sectionGuide(sectionId) {
   if (!isReadingMapDisplayable()) return null;
   const guides = state.readingMap?.section_guides || state.paper?.reading_map?.section_guides || [];
-  return guides.find((item) => item.section_id === sectionId) || null;
+  const guide = guides.find((item) => item.section_id === sectionId) || null;
+  return guide && Array.isArray(guide.cards) && guide.cards.length ? guide : null;
 }
 
 function renderSectionGuide(guide, indexed = {}) {
+  if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null;
   const wrap = create("div", "section-guide");
-  if (guide) {
-    const cards = Array.isArray(guide.cards) && guide.cards.length ? guide.cards : [];
-    if (cards.length) {
-      cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
-      return wrap;
-    }
-  }
-  wrap.append(create(
-    "p",
-    `index-chunk${isReadingMapFailed() ? " is-error" : ""}`,
-    isReadingMapFailed()
-      ? "智能索引生成失败。请点击底部导读地图区域的“重新生成”。"
-      : isReadingMapTimedOut()
-        ? "智能索引生成等待时间过长，请点击底部导读地图区域的“重新生成”。"
-      : "智能索引正在生成中，完成前不会展示启发式 fallback 或检索片段。"
-  ));
+  guide.cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
   return wrap;
+}
+
+function isReferenceSection(section = {}) {
+  const title = String(section.title || "").toLowerCase();
+  const sectionId = String(section.section_id || "").toLowerCase();
+  return title.includes("reference")
+    || title.includes("bibliography")
+    || title.includes("参考文献")
+    || /^sec:(references|bibliography)\b/.test(sectionId);
+}
+
+function strHasContent(value) {
+  return Boolean(String(value || "").trim());
 }
 
 function renderPrerequisiteCard(card) {
@@ -1858,7 +1867,10 @@ async function selectSection(sectionId, analyze) {
 }
 
 function moveSection(offset) {
-  const sections = state.paper?.sections || [];
+  const allSections = state.paper?.sections || [];
+  const sections = state.readerMode === "structured"
+    ? allSections.filter((section) => !isReferenceSection(section))
+    : allSections;
   if (!sections.length) return;
   const current = Math.max(0, sections.findIndex((item) => item.section_id === state.currentSection));
   const target = sections[Math.min(sections.length - 1, Math.max(0, current + offset))];
