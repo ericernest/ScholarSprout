@@ -460,6 +460,23 @@ class GeneratorTests(unittest.TestCase):
                 ranked,
             )
 
+    def test_landscape_section_rejects_internal_detail_names(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        payload["current_landscape"]["problem_details"][0]["name"] = (
+            "problem_optimization"
+        )
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        with self.assertRaisesRegex(
+            GenerationError,
+            "reader-facing labels, not internal IDs",
+        ):
+            generator._complete_section_payload("landscape", payload, ranked)
+
     def test_learning_path_section_accepts_real_step_list_aliases(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(

@@ -45,6 +45,7 @@ from .schemas import (
     StageBreakthrough,
     SubdirectionDetail,
     TechniqueDetail,
+    is_internal_landscape_label,
 )
 
 
@@ -1029,6 +1030,22 @@ class StructuredOnboardingGenerator:
                 raise GenerationError("landscape section is missing current_landscape")
             problem_details = landscape.get("problem_details")
             subdirection_details = landscape.get("subdirection_details")
+            internal_problem_names = [
+                str(item.get("name") or "").strip()
+                for item in problem_details
+                if isinstance(item, dict)
+                and is_internal_landscape_label(item.get("name"))
+            ] if isinstance(problem_details, list) else []
+            internal_subdirection_names = [
+                str(item.get("name") or "").strip()
+                for item in subdirection_details
+                if isinstance(item, dict)
+                and is_internal_landscape_label(item.get("name"))
+            ] if isinstance(subdirection_details, list) else []
+            if internal_problem_names or internal_subdirection_names:
+                raise GenerationError(
+                    "landscape detail names must be reader-facing labels, not internal IDs"
+                )
             valid_problems = [
                 item
                 for item in problem_details
@@ -1514,9 +1531,14 @@ class StructuredOnboardingGenerator:
         by_name = {
             str(item.get("name") or "").strip(): item
             for item in raw_items
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip()
+            and not is_internal_landscape_label(item.get("name"))
         }
-        ordered_names = list(dict.fromkeys([*names, *by_name]))
+        fallback_names = [
+            name for name in names if not is_internal_landscape_label(name)
+        ]
+        ordered_names = list(dict.fromkeys(fallback_names)) or list(by_name)
         results = []
         for name in ordered_names:
             raw = by_name.get(name, {})
@@ -1548,9 +1570,14 @@ class StructuredOnboardingGenerator:
         by_name = {
             str(item.get("name") or "").strip(): item
             for item in raw_items
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip()
+            and not is_internal_landscape_label(item.get("name"))
         }
-        ordered_names = list(dict.fromkeys([*names, *by_name]))
+        fallback_names = [
+            name for name in names if not is_internal_landscape_label(name)
+        ]
+        ordered_names = list(dict.fromkeys(fallback_names)) or list(by_name)
         results = []
         for name in ordered_names:
             raw = by_name.get(name, {})
