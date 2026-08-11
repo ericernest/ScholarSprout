@@ -10,7 +10,9 @@ from unittest.mock import patch
 from handlers.paper_reading.handler import (
     RESEARCH_GUIDE_MAX_WORKERS,
     SURVEY_CARD_MAX_WORKERS,
+    SURVEY_CARD_MAX_TOKENS,
     SURVEY_MAP_TASK_LIMIT,
+    SURVEY_PLAN_MAX_TOKENS,
     SURVEY_SECTION_GUIDE_TASK_LIMIT,
     _build_llm_reading_map,
     _build_survey_plan_card_reading_map,
@@ -253,7 +255,13 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         for call in model.calls:
             self.assertEqual(call["response_format"], {"type": "json_object"})
             self.assertTrue(call["disable_thinking"])
-            self.assertNotIn("max_tokens", call)
+            prompt = call["messages"][-1]["content"]
+            expected_max_tokens = (
+                SURVEY_PLAN_MAX_TOKENS
+                if "planning a novice-oriented reading map" in prompt
+                else SURVEY_CARD_MAX_TOKENS
+            )
+            self.assertEqual(call["max_tokens"], expected_max_tokens)
             self.assertGreater(call["timeout"], 0)
             self.assertEqual(call["max_retries"], 0)
 
