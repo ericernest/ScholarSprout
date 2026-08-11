@@ -459,7 +459,7 @@ class PipelineTests(unittest.TestCase):
         pipeline = make_pipeline([low, low])
         trace = DomainOnboardingRequestTrace()
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
-        self.assertEqual(result.status, "quality_failed")
+        self.assertEqual(result.status, "quality_warning")
         self.assertEqual(result.quality.retry_status, "not_improved")
         self.assertEqual(result.quality.selected_attempt, 1)
         self.assertEqual(len(result.quality_attempts), 2)
@@ -528,6 +528,59 @@ class PipelineTests(unittest.TestCase):
         self.assertLess(result.quality.score, result.quality.threshold)
         self.assertEqual(result.status, "quality_warning")
 
+    def test_strict_quality_gate_mode_remains_available_for_offline_audits(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["development_stages"] = low["development_stages"][:1]
+        pipeline = make_pipeline(
+            [low, low],
+            config=DomainOnboardingConfig(quality_gate_enforcement="strict"),
+        )
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+        )
+
+        self.assertEqual(result.status, "quality_failed")
+        self.assertFalse(result.quality.passed_hard_gates)
+
+    def test_repair_timeout_delivers_initial_output_as_quality_warning(self) -> None:
+        now = [0.0]
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        low = make_generation_payload(paper_ids)
+        low["text"] = "太短"
+        low["development_stages"] = low["development_stages"][:1]
+        pipeline = make_pipeline([low, low])
+        original_repairer = pipeline.repairer
+
+        class SlowRepairer:
+            def repair(self, *args, **kwargs):
+                result = original_repairer.repair(*args, **kwargs)
+                now[0] += pipeline.config.repair_timeout_seconds + 1.0
+                return result
+
+        pipeline.repairer = SlowRepairer()
+        trace = DomainOnboardingRequestTrace()
+        context = PipelineExecutionContext(
+            timeout_seconds=pipeline.config.request_timeout_seconds,
+            clock=lambda: now[0],
+        )
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            trace,
+            context,
+        )
+
+        self.assertEqual(result.status, "quality_warning")
+        self.assertIsNotNone(result.output)
+        self.assertEqual(result.quality.retry_status, "llm_failed")
+        self.assertEqual(trace.interrupted_stage, "repair")
+        self.assertTrue(trace.deadline_exceeded)
+        self.assertIn("deadline exceeded during repair", result.error)
+
     def test_improved_result_must_meet_threshold_to_return_ok(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
         low = make_generation_payload(paper_ids)
@@ -556,7 +609,7 @@ class PipelineTests(unittest.TestCase):
 
         result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
 
-        self.assertEqual(result.status, "quality_failed")
+        self.assertEqual(result.status, "quality_warning")
         self.assertEqual(trace.repair_reason, "llm_repair_failed")
         self.assertEqual(trace.retry_model_calls, 1)
         self.assertEqual(trace.retry_usage.total_tokens, 50)

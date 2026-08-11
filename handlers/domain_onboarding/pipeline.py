@@ -45,6 +45,7 @@ from .schemas import (
     QualityAttempt,
     RankingStats,
     ResearchPerspective,
+    RepairDecision,
     RepairRecord,
     RetrievalStats,
 )
@@ -507,6 +508,46 @@ class DomainOnboardingPipeline:
                     duration_field,
                     float(getattr(trace, duration_field)) + error.duration_ms,
                 )
+            if (
+                error.status == "timeout"
+                and error.stage in {"repair", "evaluation"}
+                and partial_output is not None
+                and partial_quality is not None
+            ):
+                # The user already has a validated onboarding artifact. A slow
+                # optional repair must not turn that content into a failed job.
+                fallback_quality = partial_quality.model_copy(
+                    update={"retry_status": "llm_failed"}
+                )
+                trace.retry_status = "llm_failed"
+                record = partial_repair_record or RepairRecord(triggered=True)
+                record.decision = record.decision or RepairDecision(
+                    selected_attempt=1,
+                    decision="initial_retained",
+                    reasons=["repair_execution_failed"],
+                )
+                self._record_final(trace, fallback_quality, record)
+                final_quality = self._final_quality_summary(
+                    fallback_quality, quality_attempts, record
+                )
+                self._emit(
+                    progress_callback,
+                    "final_quality_ready",
+                    0.98,
+                    False,
+                    ["final_quality"],
+                    {"final_quality": final_quality.model_dump(mode="json")},
+                )
+                return self._result(
+                    status="quality_warning",
+                    query=request.query,
+                    output=partial_output,
+                    quality=fallback_quality,
+                    quality_attempts=quality_attempts,
+                    repair_record=record,
+                    final_quality=final_quality,
+                    error=str(error),
+                )
             return self._result(
                 status=error.status,
                 query=request.query,
@@ -907,11 +948,17 @@ class DomainOnboardingPipeline:
             update={"attempts": 2, "selected_attempt": selected, "retry_status": status}
         )
 
-    @staticmethod
-    def _quality_status(quality: ContentQuality) -> str:
-        if not quality.passed_hard_gates:
+    def _quality_status(self, quality: ContentQuality) -> str:
+        if (
+            not quality.passed_hard_gates
+            and self.config.quality_gate_enforcement == "strict"
+        ):
             return "quality_failed"
-        if quality.score < quality.threshold or quality.issues:
+        if (
+            not quality.passed_hard_gates
+            or quality.score < quality.threshold
+            or quality.issues
+        ):
             return "quality_warning"
         return "ok"
 

@@ -64,7 +64,13 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_timeout_seconds,
         )
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
-        self.assertEqual(config.generation_development_timeout_seconds, 180.0)
+        self.assertEqual(config.request_timeout_seconds, 3600.0)
+        self.assertEqual(config.generation_timeout_seconds, 2400.0)
+        self.assertEqual(config.generation_development_timeout_seconds, 360.0)
+        self.assertEqual(config.generation_max_attempts, 2)
+        self.assertEqual(config.generation_development_workers, 1)
+        self.assertEqual(config.generation_section_workers, 1)
+        self.assertEqual(config.quality_gate_enforcement, "warn")
         self.assertEqual(config.development_stage_planning_max_tokens, 4000)
         self.assertEqual(
             (
@@ -75,11 +81,15 @@ class ConfigAndSchemaTests(unittest.TestCase):
             (8000, 7000, 6500),
         )
         self.assertLessEqual(
-            config.generation_development_foundation_timeout_seconds
-            + config.generation_development_stage_timeout_seconds
-            + max(
-                config.generation_landscape_timeout_seconds,
-                config.generation_learning_path_timeout_seconds,
+            config.generation_max_attempts
+            * (
+                config.generation_development_foundation_timeout_seconds
+                + config.generation_development_stage_timeout_seconds
+                + config.generation_development_timeout_seconds
+                + max(
+                    config.generation_landscape_timeout_seconds,
+                    config.generation_learning_path_timeout_seconds,
+                )
             ),
             config.generation_timeout_seconds,
         )

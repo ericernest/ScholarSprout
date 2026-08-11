@@ -370,6 +370,7 @@ class StructuredOnboardingGenerator:
                 paths = ["learning_path"]
             on_section(event_name, data, paths)
 
+        staged_error: GenerationError | None = None
         try:
             if plan.development_stage_plans:
                 development_payload, development_stats = self._call_staged_development(
@@ -380,13 +381,34 @@ class StructuredOnboardingGenerator:
                     "development", request, profile, plan, papers, payload, on_delta
                 )
         except GenerationError as error:
-            raise GenerationError(
-                f"development section generation failed: {error}",
-                stats=error.stats,
-            ) from error
+            if not plan.development_stage_plans:
+                raise GenerationError(
+                    f"development section generation failed: {error}",
+                    stats=error.stats,
+                ) from error
+            # Per-stage research is richer but also creates more remote calls.
+            # If any researched stage exhausts its retries, fall back to one
+            # complete development call using the same verified papers.
+            staged_error = error
+            try:
+                development_payload, development_stats = self._call_section(
+                    "development", request, profile, plan, papers, payload, on_delta
+                )
+            except GenerationError as fallback_error:
+                self._add_stats(fallback_error.stats, error.stats)
+                raise GenerationError(
+                    "development section generation failed after staged and "
+                    f"standard attempts: {fallback_error}",
+                    stats=fallback_error.stats,
+                ) from fallback_error
+        if staged_error is not None:
+            self._add_stats(development_stats, staged_error.stats)
         apply_section("development", development_payload, development_stats)
         completed_snapshot = json.loads(json.dumps(payload, ensure_ascii=False))
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="onboarding-content") as executor:
+        with ThreadPoolExecutor(
+            max_workers=self.config.generation_section_workers,
+            thread_name_prefix="onboarding-content",
+        ) as executor:
             futures = {
                 executor.submit(
                     self._call_section,
@@ -412,19 +434,12 @@ class StructuredOnboardingGenerator:
                 if section in completed_sections:
                     section_payload, section_stats = completed_sections[section]
                     apply_section(section, section_payload, section_stats)
-            if failed_sections:
-                for error in failed_sections.values():
-                    self._add_stats(stats, error.stats)
-                failed_section = next(
-                    section
-                    for section in ("landscape", "learning_path")
-                    if section in failed_sections
-                )
-                failed_error = failed_sections[failed_section]
-                raise GenerationError(
-                    f"{failed_section} section generation failed: {failed_error}",
-                    stats=stats,
-                ) from failed_error
+            # Development is the minimum useful onboarding artifact. If an
+            # optional later section still fails after retries, retain and
+            # deliver every validated section already produced; the quality
+            # evaluator will expose the missing coverage as a warning.
+            for error in failed_sections.values():
+                self._add_stats(stats, error.stats)
         return GenerationResult(
             output=self._normalize(payload, request, profile, plan, papers), stats=stats
         )
@@ -513,7 +528,10 @@ class StructuredOnboardingGenerator:
         stage_results: dict[int, tuple[dict[str, Any], dict[str, Any], ModelCallStats]] = {}
         failures: list[GenerationError] = []
         with ThreadPoolExecutor(
-            max_workers=min(3, len(plan.development_stage_plans)),
+            max_workers=min(
+                self.config.generation_development_workers,
+                len(plan.development_stage_plans),
+            ),
             thread_name_prefix="onboarding-development-stage",
         ) as executor:
             futures = {
@@ -594,14 +612,23 @@ class StructuredOnboardingGenerator:
                 stream_stage=stream_stage,
             )
 
-        try:
-            return run_with_model_route(
-                model,
-                operation,
-                timeout_seconds=timeout_seconds,
-            )
-        except StructuredLLMError as error:
-            raise GenerationError(str(error), stats=error.stats) from error
+        total_stats = ModelCallStats()
+        last_error: StructuredLLMError | None = None
+        for _attempt in range(self.config.generation_max_attempts):
+            try:
+                payload, attempt_stats = run_with_model_route(
+                    model,
+                    operation,
+                    timeout_seconds=timeout_seconds,
+                )
+            except StructuredLLMError as error:
+                last_error = error
+                self._add_stats(total_stats, error.stats)
+                continue
+            self._add_stats(total_stats, attempt_stats)
+            return payload, total_stats
+        assert last_error is not None
+        raise GenerationError(str(last_error), stats=total_stats) from last_error
 
     @staticmethod
     def _unwrap_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -714,29 +741,31 @@ class StructuredOnboardingGenerator:
             "landscape": self.config.generation_landscape_timeout_seconds,
             "learning_path": self.config.generation_learning_path_timeout_seconds,
         }[section]
-        try:
-            completed, stats = run_with_model_route(
-                section_model,
-                generate_candidate,
-                timeout_seconds=section_timeout,
-            )
-            stats.model_calls = max(
-                stats.model_calls,
+        total_stats = ModelCallStats()
+        last_error: StructuredLLMError | GenerationError | None = None
+        for _attempt in range(self.config.generation_max_attempts):
+            try:
+                completed, attempt_stats = run_with_model_route(
+                    section_model,
+                    generate_candidate,
+                    timeout_seconds=section_timeout,
+                )
+            except (StructuredLLMError, GenerationError) as error:
+                last_error = error
+                error.stats.model_calls = max(
+                    error.stats.model_calls,
+                    int(getattr(section_model, "last_attempt_count", 1)),
+                )
+                self._add_stats(total_stats, error.stats)
+                continue
+            attempt_stats.model_calls = max(
+                attempt_stats.model_calls,
                 int(getattr(section_model, "last_attempt_count", 1)),
             )
-            return completed, stats
-        except StructuredLLMError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise GenerationError(str(error), stats=error.stats) from error
-        except GenerationError as error:
-            error.stats.model_calls = max(
-                error.stats.model_calls,
-                int(getattr(section_model, "last_attempt_count", 1)),
-            )
-            raise
+            self._add_stats(total_stats, attempt_stats)
+            return completed, total_stats
+        assert last_error is not None
+        raise GenerationError(str(last_error), stats=total_stats) from last_error
 
     def _complete_section_payload(
         self,

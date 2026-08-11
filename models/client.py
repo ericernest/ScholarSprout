@@ -98,6 +98,10 @@ class OpenAIClient:
             disable_thinking=disable_thinking,
         )
         kwargs["stream"] = True
+        # OpenAI-compatible providers only attach token usage to the terminal
+        # streaming chunk when explicitly requested. Without this option the
+        # domain-onboarding audit sees successful calls with zero tokens.
+        kwargs["stream_options"] = {"include_usage": True}
         client = (
             self.client.with_options(timeout=timeout, max_retries=0)
             if timeout is not None
