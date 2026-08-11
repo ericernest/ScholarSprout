@@ -349,6 +349,13 @@ def is_transient_infrastructure_failure(run: ModelBenchmarkRun) -> bool:
         for marker in ("rate limit exceeded", "throttling_error", "code: 429")
     ):
         return True
+    if (
+        run.status == "timeout"
+        and not run.generation_succeeded
+        and run.generation_ms == 0
+        and "deadline exceeded during ranking" in error
+    ):
+        return True
     return (
         not run.generation_succeeded
         and run.total_tokens == 0
