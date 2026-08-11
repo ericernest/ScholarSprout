@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import MagicMock
 
 from config.schema import OpenAIClientConfig
 from models.client import OpenAIClient
@@ -41,6 +42,20 @@ class OpenAIClientRequestTests(unittest.TestCase):
         )
 
         self.assertNotIn("extra_body", kwargs)
+
+    def test_streaming_requests_terminal_usage_chunk(self) -> None:
+        client = self._client("qwen3.6-chat")
+        client.client = MagicMock()
+        selected = client.client.with_options.return_value
+
+        client.chat_stream(
+            messages=[{"role": "user", "content": "return json"}],
+            timeout=10,
+        )
+
+        kwargs = selected.chat.completions.create.call_args.kwargs
+        self.assertTrue(kwargs["stream"])
+        self.assertEqual(kwargs["stream_options"], {"include_usage": True})
 
 
 if __name__ == "__main__":

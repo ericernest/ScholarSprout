@@ -42,6 +42,10 @@ class DomainOnboardingConfig(BaseModel):
         pattern=r"^domain-quality-v\d+\.\d+\.\d+$",
     )
     quality_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    # A validated output remains useful even when evidence/coverage gates need
+    # attention. Production therefore delivers it with warnings after repair;
+    # strict mode remains available for offline calibration and audits.
+    quality_gate_enforcement: Literal["warn", "strict"] = "warn"
     min_improvement_delta: float = Field(default=0.05, ge=0.0, le=1.0)
     quality_dimension_weights: dict[QualityDimension, float] = Field(
         default_factory=default_dimension_weights
@@ -64,21 +68,21 @@ class DomainOnboardingConfig(BaseModel):
     max_content_repairs: int = Field(default=1, ge=0, le=1)
     # Incremental clients receive validated sections before terminal completion.
     # The larger envelope also covers remote embedding and staged generation.
-    request_timeout_seconds: float = Field(default=600.0, gt=0.0, le=900.0)
+    request_timeout_seconds: float = Field(default=4800.0, gt=0.0, le=7200.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
-    planning_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
+    planning_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     planning_model_timeout_seconds: float = Field(
-        default=110.0, gt=0.0, le=115.0
+        default=280.0, gt=0.0, le=590.0
     )
     retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
     # Remote qwen3 embeddings can legitimately take longer than a lexical
     # rank. Keep the stage bounded while allowing one real embedding batch.
     ranking_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
-    generation_timeout_seconds: float = Field(default=450.0, gt=0.0, le=480.0)
-    evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
-    repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
+    generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
+    evaluation_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
+    repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     # Relevance owns the paper score. Recency is a small tie-breaker, while
     # diversity is handled once by MMR instead of rewarding off-topic outliers
     # in both the base score and the final selection.
@@ -109,25 +113,29 @@ class DomainOnboardingConfig(BaseModel):
     )
     max_development_stage_plans: int = Field(default=4, ge=3, le=6)
     staged_development_enabled: bool = True
+    generation_max_attempts: int = Field(default=3, ge=1, le=3)
+    generation_retry_backoff_seconds: float = Field(default=30.0, ge=0.0, le=60.0)
+    generation_development_workers: int = Field(default=1, ge=1, le=3)
+    generation_section_workers: int = Field(default=1, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
     stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
     # Incremental generation runs development first, then landscape/path in
-    # parallel. The default deadline fits two full attempts in both waves.
+    # parallel. The default deadline fits three full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
     generation_development_timeout_seconds: float = Field(
-        default=180.0, gt=0.0, le=240.0
+        default=360.0, gt=0.0, le=600.0
     )
     generation_development_foundation_timeout_seconds: float = Field(
-        default=120.0, gt=0.0, le=180.0
+        default=240.0, gt=0.0, le=600.0
     )
     generation_development_stage_timeout_seconds: float = Field(
-        default=150.0, gt=0.0, le=180.0
+        default=300.0, gt=0.0, le=600.0
     )
     generation_landscape_timeout_seconds: float = Field(
-        default=180.0, gt=0.0, le=240.0
+        default=300.0, gt=0.0, le=600.0
     )
     generation_learning_path_timeout_seconds: float = Field(
-        default=180.0, gt=0.0, le=240.0
+        default=300.0, gt=0.0, le=600.0
     )
     generation_paper_abstract_max_chars: int = Field(default=700, ge=200, le=4000)
     retrieval_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
@@ -162,15 +170,22 @@ class DomainOnboardingConfig(BaseModel):
             raise ValueError(
                 "planning model timeout must be shorter than the planning stage deadline"
             )
-        development_budget = (
+        development_budget = self.generation_max_attempts * (
             self.generation_development_foundation_timeout_seconds
             + self.generation_development_stage_timeout_seconds
             if self.staged_development_enabled
             else self.generation_development_timeout_seconds
         )
+        if self.staged_development_enabled:
+            # After researched-stage exhaustion the generator makes a final
+            # standard development-section attempt sequence.
+            development_budget += (
+                self.generation_max_attempts
+                * self.generation_development_timeout_seconds
+            )
         incremental_generation_budget = (
             development_budget
-            + max(
+            + self.generation_max_attempts * max(
                 self.generation_landscape_timeout_seconds,
                 self.generation_learning_path_timeout_seconds,
             )

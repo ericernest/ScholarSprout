@@ -65,16 +65,30 @@ class ConfigAndSchemaTests(unittest.TestCase):
             config.planning_model_timeout_seconds,
             config.planning_timeout_seconds,
         )
+        self.assertEqual(config.planning_timeout_seconds, 300.0)
+        self.assertEqual(config.planning_model_timeout_seconds, 280.0)
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
-        self.assertEqual(config.generation_development_timeout_seconds, 180.0)
+        self.assertEqual(config.request_timeout_seconds, 4800.0)
+        self.assertEqual(config.generation_timeout_seconds, 3600.0)
+        self.assertEqual(config.evaluation_timeout_seconds, 300.0)
+        self.assertEqual(config.generation_development_timeout_seconds, 360.0)
+        self.assertEqual(config.generation_max_attempts, 3)
+        self.assertEqual(config.generation_retry_backoff_seconds, 30.0)
+        self.assertEqual(config.generation_development_workers, 1)
+        self.assertEqual(config.generation_section_workers, 1)
+        self.assertEqual(config.quality_gate_enforcement, "warn")
         self.assertNotIn("planning_max_tokens", DomainOnboardingConfig.model_fields)
         self.assertNotIn("generation_max_tokens", DomainOnboardingConfig.model_fields)
         self.assertLessEqual(
-            config.generation_development_foundation_timeout_seconds
-            + config.generation_development_stage_timeout_seconds
-            + max(
-                config.generation_landscape_timeout_seconds,
-                config.generation_learning_path_timeout_seconds,
+            config.generation_max_attempts
+            * (
+                config.generation_development_foundation_timeout_seconds
+                + config.generation_development_stage_timeout_seconds
+                + config.generation_development_timeout_seconds
+                + max(
+                    config.generation_landscape_timeout_seconds,
+                    config.generation_learning_path_timeout_seconds,
+                )
             ),
             config.generation_timeout_seconds,
         )
