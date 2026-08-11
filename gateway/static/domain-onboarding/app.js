@@ -573,20 +573,25 @@ function renderLandscape(data) {
   `;
 }
 
-// Empty arrays are truthy in JavaScript, so `details || names` silently hid
-// valid summary names whenever an older or partial result contained `details:
-// []`.  Merge both representations, discard blank names, and let richer detail
-// objects win while retaining summary-only items as readable fallback cards.
+function isInternalLandscapeLabel(value) {
+  return /^(?:(?:problem|sub|subdirection|direction)_[a-z0-9_]+|(?:problem|sub|subdirection|direction)-?\d+)$/i
+    .test(String(value || "").trim());
+}
+
+// Detail objects are the canonical reader-facing representation. Summary-only
+// names remain a fallback for old partial tasks, but internal IDs are never
+// rendered as titles.
 function mergeLandscapeItems(details, names, idField, idPrefix, idsByName = {}) {
   const byName = new Map();
   for (const item of Array.isArray(details) ? details : []) {
     const name = String(item?.name || "").trim();
-    if (!name) continue;
+    if (!name || isInternalLandscapeLabel(name)) continue;
     byName.set(name, { ...item, name });
   }
+  if (byName.size) return [...byName.values()];
   for (const rawName of Array.isArray(names) ? names : []) {
     const name = String(rawName || "").trim();
-    if (!name || byName.has(name)) continue;
+    if (!name || isInternalLandscapeLabel(name) || byName.has(name)) continue;
     byName.set(name, {
       [idField]: idsByName?.[name] || `${idPrefix}-${byName.size}`,
       name,

@@ -109,7 +109,9 @@ def section_system_prompt(section: str, language: str) -> str:
         "landscape": (
             "Return current_landscape and up to 4 evidence_claims. current_landscape must contain exactly "
             "3 non-empty problem_details and exactly 3 non-empty subdirection_details; its problems and "
-            "subdirections arrays must mirror those detail names. Each problem detail must include "
+            "subdirections arrays must mirror those detail names. Every name must be a concise reader-facing "
+            "research label; never use internal identifiers such as problem_1, problem_optimization, sub_1 "
+            "or sub_architectures as names. Each problem detail must include "
             "problem_id, name, description, related_paper_ids and related_stage_ids. Each subdirection "
             "detail must include description, "
             "why_it_matters, typical_tasks, prerequisites, common_techniques, datasets_and_benchmarks, "

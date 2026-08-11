@@ -151,6 +151,19 @@ def stable_id(prefix: str, value: str) -> str:
     return f"{prefix}_{normalized or 'item'}_{digest}"
 
 
+_INTERNAL_LANDSCAPE_LABEL_RE = re.compile(
+    r"^(?:(?:problem|sub|subdirection|direction)_[a-z0-9_]+|"
+    r"(?:problem|sub|subdirection|direction)-?\d+)$",
+    re.IGNORECASE,
+)
+
+
+def is_internal_landscape_label(value: object) -> bool:
+    """Return whether a display label looks like a model-generated internal ID."""
+
+    return bool(_INTERNAL_LANDSCAPE_LABEL_RE.fullmatch(str(value or "").strip()))
+
+
 class OnboardingModel(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
@@ -639,10 +652,43 @@ class CurrentLandscape(OnboardingModel):
 
     @model_validator(mode="after")
     def ensure_ids(self) -> "CurrentLandscape":
-        if not self.problems and self.problem_details:
+        problem_details: list[LandscapeProblem] = []
+        seen_problem_names: set[str] = set()
+        for item in self.problem_details:
+            key = item.name.casefold()
+            if is_internal_landscape_label(item.name) or key in seen_problem_names:
+                continue
+            seen_problem_names.add(key)
+            problem_details.append(item)
+        self.problem_details = problem_details
+
+        subdirection_details: list[SubdirectionDetail] = []
+        seen_subdirection_names: set[str] = set()
+        for item in self.subdirection_details:
+            key = item.name.casefold()
+            if is_internal_landscape_label(item.name) or key in seen_subdirection_names:
+                continue
+            seen_subdirection_names.add(key)
+            subdirection_details.append(item)
+        self.subdirection_details = subdirection_details
+
+        # Detail objects carry the actual reader-facing content. When they are
+        # available, do not append model-invented summary IDs such as
+        # problem_optimization or sub_architectures.
+        if self.problem_details:
             self.problems = [item.name for item in self.problem_details]
-        if not self.subdirections and self.subdirection_details:
+        else:
+            self.problems = list(dict.fromkeys(
+                name for name in self.problems
+                if not is_internal_landscape_label(name)
+            ))
+        if self.subdirection_details:
             self.subdirections = [item.name for item in self.subdirection_details]
+        else:
+            self.subdirections = list(dict.fromkeys(
+                name for name in self.subdirections
+                if not is_internal_landscape_label(name)
+            ))
         self.subdirection_ids = {
             name: self.subdirection_ids.get(name)
             or next(

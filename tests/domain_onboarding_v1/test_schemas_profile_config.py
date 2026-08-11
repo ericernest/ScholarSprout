@@ -14,6 +14,7 @@ from handlers.domain_onboarding.schemas import (
     CurrentLandscape,
     DomainOnboardingRequest,
     DomainOnboardingOutput,
+    LandscapeProblem,
     PaperCandidate,
     PipelineResult,
     Prerequisite,
@@ -22,6 +23,7 @@ from handlers.domain_onboarding.schemas import (
     RepairActionRecord,
     RepairDecision,
     RepairRecord,
+    SubdirectionDetail,
     stable_id,
 )
 
@@ -133,6 +135,31 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertEqual(first.prerequisite_id, second.prerequisite_id)
         landscape = CurrentLandscape(subdirections=["检索优化"])
         self.assertEqual(landscape.subdirection_ids["检索优化"], stable_id("sub", "检索优化"))
+
+    def test_landscape_prefers_real_detail_names_over_internal_summary_ids(self) -> None:
+        landscape = CurrentLandscape(
+            problems=["problem_optimization", "problem_generalization"],
+            subdirections=["sub_architectures", "sub_learning"],
+            problem_details=[
+                LandscapeProblem(name="检索质量与证据可靠性", description="真实问题"),
+                LandscapeProblem(name="problem_safety", description="内部占位项"),
+            ],
+            subdirection_details=[
+                SubdirectionDetail(name="检索增强生成架构", description="真实方向"),
+                SubdirectionDetail(name="sub_evaluation", description="内部占位项"),
+            ],
+        )
+
+        self.assertEqual(landscape.problems, ["检索质量与证据可靠性"])
+        self.assertEqual(landscape.subdirections, ["检索增强生成架构"])
+        self.assertEqual(
+            [item.name for item in landscape.problem_details],
+            landscape.problems,
+        )
+        self.assertEqual(
+            [item.name for item in landscape.subdirection_details],
+            landscape.subdirections,
+        )
 
     def test_paper_identifiers_are_normalized(self) -> None:
         paper = PaperCandidate(
