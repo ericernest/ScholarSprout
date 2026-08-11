@@ -274,7 +274,6 @@ class StructuredOnboardingGenerator:
                 candidate,
                 system_prompt=development_stage_planning_prompt(request.language),
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens=self.config.development_stage_planning_max_tokens,
                 timeout_seconds=timeout_seconds,
                 on_delta=on_delta,
                 stream_stage="stage_planning",
@@ -453,7 +452,6 @@ class StructuredOnboardingGenerator:
                     for paper in papers
                 ],
             },
-            max_tokens=self.config.generation_development_foundation_max_tokens,
             timeout_seconds=self.config.generation_development_foundation_timeout_seconds,
             stream_stage="development_foundation",
             on_delta=on_delta,
@@ -487,7 +485,6 @@ class StructuredOnboardingGenerator:
                         self._paper_prompt_payload(paper) for paper in stage_papers
                     ],
                 },
-                max_tokens=self.config.generation_development_stage_max_tokens,
                 timeout_seconds=self.config.generation_development_stage_timeout_seconds,
                 stream_stage="development_stage",
                 on_delta=on_delta,
@@ -578,7 +575,6 @@ class StructuredOnboardingGenerator:
         *,
         system_prompt: str,
         user_payload: dict[str, Any],
-        max_tokens: int,
         timeout_seconds: float,
         stream_stage: str,
         on_delta: Callable[[str, str], None] | None,
@@ -588,7 +584,6 @@ class StructuredOnboardingGenerator:
                 candidate,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens=max_tokens,
                 timeout_seconds=attempt_timeout,
                 on_delta=on_delta,
                 stream_stage=stream_stage,
@@ -682,19 +677,11 @@ class StructuredOnboardingGenerator:
             completed,
         )
         section_model = self.section_models.get(section, self.model)
-        section_max_tokens = {
-            "development": self.config.generation_development_max_tokens,
-            "landscape": self.config.generation_landscape_max_tokens,
-            "learning_path": self.config.generation_learning_path_max_tokens,
-        }[section]
-        attempt_max_tokens = section_max_tokens
-
         def generate_candidate(candidate: Any, timeout_seconds: float | None):
             payload, stats = invoke_json(
                 candidate,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens=attempt_max_tokens,
                 timeout_seconds=timeout_seconds,
                 on_delta=on_delta,
                 stream_stage=section,
@@ -1128,7 +1115,6 @@ class StructuredOnboardingGenerator:
                 self.repair_model if previous_output is not None else self.model,
                 system_prompt=system_prompt,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                max_tokens=self.config.generation_max_tokens,
                 timeout_seconds=(
                     self.config.repair_timeout_seconds
                     if previous_output is not None

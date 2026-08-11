@@ -507,11 +507,10 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(all(item.contribution for item in core_references))
         self.assertTrue(all(item.reading_focus for item in core_references))
 
-    def test_generator_sends_compact_grounding_context_and_token_limit(self) -> None:
+    def test_generator_sends_compact_grounding_context_without_output_limit(self) -> None:
         config = self.config.model_copy(
             update={
                 "generation_paper_abstract_max_chars": 200,
-                "generation_max_tokens": 4321,
             }
         )
         ranked = list(self.ranked)
@@ -530,7 +529,7 @@ class GeneratorTests(unittest.TestCase):
         call = model.calls[0]
         prompt = json.loads(call["messages"][1]["content"])
         paper = prompt["allowed_papers"][0]
-        self.assertEqual(call["max_tokens"], 4321)
+        self.assertNotIn("max_tokens", call)
         self.assertEqual(len(paper["abstract"]), 200)
         self.assertNotIn("authors", paper)
         self.assertNotIn("url", paper)

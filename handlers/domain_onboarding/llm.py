@@ -137,7 +137,6 @@ def invoke_json(
     *,
     system_prompt: str,
     user_prompt: str,
-    max_tokens: int | None = None,
     timeout_seconds: float | None = None,
     on_delta: Callable[[str, str], None] | None = None,
     stream_stage: str = "generation",
@@ -153,7 +152,6 @@ def invoke_json(
         ):
             stream = model.chat_stream(
                 messages=messages,
-                max_tokens=max_tokens,
                 timeout=timeout_seconds,
                 response_format={"type": "json_object"},
                 disable_thinking=True,
@@ -234,7 +232,6 @@ def invoke_json(
         else:
             response = model.chat(
                 messages=messages,
-                max_tokens=max_tokens,
                 timeout=timeout_seconds,
                 response_format={"type": "json_object"},
                 disable_thinking=True,
@@ -261,9 +258,8 @@ def invoke_json(
     parsed = parse_json_object(content)
     if parsed is None:
         if _get_finish_reason(response) == "length":
-            token_limit = max_tokens if max_tokens is not None else "the configured limit"
             raise StructuredLLMError(
-                f"LLM JSON response was truncated at max_tokens={token_limit}",
+                "LLM JSON response was truncated by the model provider; the application did not set max_tokens",
                 stats,
             )
         raise StructuredLLMError("LLM did not return a JSON object", stats)
