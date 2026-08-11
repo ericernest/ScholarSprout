@@ -79,13 +79,17 @@ class DomainOnboardingConfig(BaseModel):
     generation_timeout_seconds: float = Field(default=450.0, gt=0.0, le=480.0)
     evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     repair_timeout_seconds: float = Field(default=120.0, gt=0.0, le=120.0)
-    relevance_weight: float = Field(default=0.70, ge=0.0, le=1.0)
+    # Relevance owns the paper score. Recency is a small tie-breaker, while
+    # diversity is handled once by MMR instead of rewarding off-topic outliers
+    # in both the base score and the final selection.
+    relevance_weight: float = Field(default=0.90, ge=0.0, le=1.0)
     ranking_missing_abstract_penalty: float = Field(default=0.80, ge=0.0, le=1.0)
-    recency_weight: float = Field(default=0.20, ge=0.0, le=1.0)
-    diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    recency_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    diversity_weight: float = Field(default=0.0, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
-    ranking_path_fusion_weight: float = Field(default=0.20, ge=0.0, le=0.5)
+    ranking_path_fusion_weight: float = Field(default=0.10, ge=0.0, le=0.5)
+    ranking_min_path_relevance_score: float = Field(default=0.03, ge=0.0, le=1.0)
     ranking_path_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_role_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_rrf_k: int = Field(default=60, ge=1, le=200)

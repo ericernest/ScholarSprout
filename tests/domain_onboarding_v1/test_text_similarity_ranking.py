@@ -179,6 +179,63 @@ class TextSimilarityTests(unittest.TestCase):
 
 
 class MMRRankingTests(unittest.TestCase):
+    def test_generic_academic_terms_cannot_replace_domain_relevance(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="图神经网络",
+            translated_domain="graph neural networks",
+            expanded_terms=["message passing", "node classification"],
+            perspectives=[
+                ResearchPerspective(
+                    path_id="foundations",
+                    name="基础",
+                    description="图结构与表示学习基础",
+                    questions=["核心问题是什么？"],
+                ),
+                ResearchPerspective(
+                    path_id="methods",
+                    name="方法",
+                    description="消息传递与训练方法",
+                    questions=["如何训练？"],
+                ),
+                ResearchPerspective(
+                    path_id="evaluation",
+                    name="评测",
+                    description="节点分类基准与指标",
+                    questions=["如何评测？"],
+                ),
+            ],
+            search_queries=["graph neural networks methods evaluation"],
+            expected_subdirections=["消息传递", "图表示学习", "节点分类"],
+        )
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="relevant-gnn-cn",
+                    title="图神经网络中的消息传递与节点分类方法",
+                    abstract="研究图表示学习模型的训练和评测。",
+                    year=2025,
+                    url="https://example.org/relevant-gnn-cn",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="generic-ai-cn",
+                    title="大型语言模型训练方法与评测综述",
+                    abstract="讨论人工智能模型的训练、推理和基准评测。",
+                    year=2026,
+                    url="https://example.org/generic-ai-cn",
+                    source="test",
+                ),
+            ],
+            plan,
+            limit=2,
+        )
+
+        self.assertEqual(
+            [paper.paper_id for paper in result.papers],
+            ["relevant-gnn-cn"],
+        )
+        self.assertEqual(result.stats.low_relevance_filtered_count, 1)
+
     def test_multilingual_lexical_ranking_keeps_relevant_chinese_paper(self) -> None:
         result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
             [

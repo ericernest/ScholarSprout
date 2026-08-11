@@ -98,14 +98,16 @@ class WeightedPaperRanker:
                 )
             )
 
+        # Global relevance must represent the research domain itself. Search
+        # instructions such as "survey", "method" and "evaluation" belong to
+        # path coverage; putting them in the global query made generic academic
+        # papers look relevant even when they did not mention the domain.
         query_text = " ".join(
             [
                 plan.normalized_domain,
                 plan.translated_domain,
                 *plan.expanded_terms,
-                *plan.search_queries,
                 *plan.expected_subdirections,
-                *(question for perspective in plan.perspectives for question in perspective.questions),
             ]
         )
         path_texts = [
@@ -161,7 +163,8 @@ class WeightedPaperRanker:
             path_pool = [
                 paper
                 for paper in path_ranking[:path_pool_size]
-                if path_scores_by_paper[paper.paper_id][path_id] > 0.0
+                if path_scores_by_paper[paper.paper_id][path_id]
+                >= self.config.ranking_min_path_relevance_score
             ]
             per_path_candidate_counts[path_id] = len(path_pool)
             for rank, paper in enumerate(path_pool, start=1):
@@ -179,10 +182,10 @@ class WeightedPaperRanker:
         for paper, paper_vector in zip(valid, document_vectors, strict=True):
             global_relevance = cosine_similarity(query_vector, paper_vector)
             paper_path_scores = path_scores_by_paper[paper.paper_id]
-            semantic_relevance = max(
-                global_relevance,
-                max(paper_path_scores.values(), default=0.0),
-            )
+            # Path similarity affects coverage/fusion below, but cannot replace
+            # domain grounding. A paper matching only generic path words must
+            # still fail the main relevance gate.
+            semantic_relevance = global_relevance
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
             recency = self._recency_score(paper.year)

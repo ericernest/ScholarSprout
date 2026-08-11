@@ -436,6 +436,30 @@ class GeneratorTests(unittest.TestCase):
             payload["subdirections"],
         )
 
+    def test_landscape_section_rejects_empty_detail_arrays(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        with self.assertRaisesRegex(
+            GenerationError,
+            "requires 3 non-empty problem_details",
+        ):
+            generator._complete_section_payload(
+                "landscape",
+                {
+                    "current_landscape": {
+                        "problems": ["问题一", "问题二", "问题三"],
+                        "subdirections": ["方向一", "方向二", "方向三"],
+                        "problem_details": [],
+                        "subdirection_details": [],
+                    }
+                },
+                ranked,
+            )
+
     def test_learning_path_section_accepts_real_step_list_aliases(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(

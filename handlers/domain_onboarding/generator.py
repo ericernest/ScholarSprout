@@ -648,7 +648,10 @@ class StructuredOnboardingGenerator:
             ),
             "landscape": (
                 '{"current_landscape":{"problems":["problem"],"subdirections":["direction"],'
-                '"problem_details":[],"subdirection_details":[{"subdirection_id":"sub_1","name":"direction",'
+                '"problem_details":[{"problem_id":"problem_1","name":"problem",'
+                '"description":"current research challenge","related_paper_ids":["paper_1"],'
+                '"related_stage_ids":["stage_1"]}],"subdirection_details":['
+                '{"subdirection_id":"sub_1","name":"direction",'
                 '"description":"scope","why_it_matters":"importance","typical_tasks":["task"],'
                 '"prerequisites":["foundation"],"common_techniques":[{"name":"method",'
                 '"explanation":"what it does","mechanism":"how it works","why_it_matters":"value",'
@@ -1037,6 +1040,33 @@ class StructuredOnboardingGenerator:
             landscape = payload.get("current_landscape")
             if not isinstance(landscape, dict):
                 raise GenerationError("landscape section is missing current_landscape")
+            problem_details = landscape.get("problem_details")
+            subdirection_details = landscape.get("subdirection_details")
+            valid_problems = [
+                item
+                for item in problem_details
+                if isinstance(item, dict)
+                and str(item.get("name") or "").strip()
+                and str(item.get("description") or "").strip()
+            ] if isinstance(problem_details, list) else []
+            valid_subdirections = [
+                item
+                for item in subdirection_details
+                if isinstance(item, dict)
+                and str(item.get("name") or "").strip()
+                and (
+                    str(item.get("description") or "").strip()
+                    or str(item.get("why_it_matters") or "").strip()
+                )
+            ] if isinstance(subdirection_details, list) else []
+            if len(valid_problems) < 3:
+                raise GenerationError(
+                    "landscape section requires 3 non-empty problem_details"
+                )
+            if len(valid_subdirections) < self.config.min_subdirections:
+                raise GenerationError(
+                    "landscape section requires 3 non-empty subdirection_details"
+                )
             return
         steps = payload.get("learning_path")
         if not isinstance(steps, list):

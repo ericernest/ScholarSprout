@@ -111,7 +111,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
-            DomainOnboardingConfig(relevance_weight=0.9)
+            DomainOnboardingConfig(relevance_weight=0.8)
 
     def test_selected_limit_cannot_exceed_candidates(self) -> None:
         with self.assertRaises(ValidationError):
