@@ -23,7 +23,7 @@ from runtime.agent_runner import AgentRunResult, run_agent_detailed
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
-from handlers.paper_reading.postprocessors.common import extract_json_object
+from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
@@ -126,9 +126,14 @@ def _reading_map_response_json(
 
     normalized_reason = str(finish_reason or "unknown").lower()
     diagnostics = f"finish_reason={normalized_reason}, content_chars={len(content)}"
-    logger.warning("Invalid JSON for %s (%s)", label, diagnostics)
     if normalized_reason in {"length", "max_tokens"}:
+        logger.warning("Truncated JSON for %s (%s)", label, diagnostics)
         raise ValueError(f"{label}输出在 max_tokens={max_tokens} 处被截断（{diagnostics}）")
+    repaired = repair_json_object(content)
+    if repaired is not None:
+        logger.warning("Repaired malformed JSON for %s (%s)", label, diagnostics)
+        return repaired
+    logger.warning("Invalid JSON for %s (%s)", label, diagnostics)
     raise ValueError(f"{label}未返回有效 JSON（{diagnostics}）")
 
 
@@ -2314,10 +2319,11 @@ def _plan_survey_cards(
         max_tokens=SURVEY_PLAN_MAX_TOKENS,
         timeout=SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS,
     )
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError("No valid JSON while planning survey cards")
-    return parsed
+    return _reading_map_response_json(
+        response,
+        label="综述卡片规划",
+        max_tokens=SURVEY_PLAN_MAX_TOKENS,
+    )
 
 
 def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2672,9 +2678,11 @@ def _generate_survey_card(
         max_tokens=SURVEY_CARD_MAX_TOKENS,
         timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
     )
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError(f"No valid JSON for {task.get('task_id')}")
+    parsed = _reading_map_response_json(
+        response,
+        label=f"综述卡片 {task.get('task_id')}",
+        max_tokens=SURVEY_CARD_MAX_TOKENS,
+    )
     return _normalize_survey_card_result(parsed, task, sections)
 
 
@@ -3298,9 +3306,11 @@ def _extract_survey_chunk_facts(
         max_tokens=SURVEY_FACT_MAX_TOKENS,
         timeout=SURVEY_FACT_REQUEST_TIMEOUT_SECONDS,
     )
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError(f"No valid JSON for {chunk.get('chunk_id')}")
+    parsed = _reading_map_response_json(
+        response,
+        label=f"综述事实 {chunk.get('chunk_id')}",
+        max_tokens=SURVEY_FACT_MAX_TOKENS,
+    )
     source = _chunk_source_ref(chunk)
     parsed["chunk_id"] = chunk.get("chunk_id", "")
     parsed["section_id"] = chunk.get("section_id", "")
@@ -3350,10 +3360,11 @@ def _merge_survey_facts(
         max_tokens=SURVEY_MERGE_MAX_TOKENS,
         timeout=SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS,
     )
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError("No valid JSON while merging survey facts")
-    return parsed
+    return _reading_map_response_json(
+        response,
+        label="综述事实合并",
+        max_tokens=SURVEY_MERGE_MAX_TOKENS,
+    )
 
 
 def _build_survey_reading_map_from_merged_facts(

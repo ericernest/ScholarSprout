@@ -19,7 +19,7 @@ from handlers.paper_reading.handler import (
     _reading_map_response_json,
     resume_pending_reading_map_generations,
 )
-from handlers.paper_reading.postprocessors.common import extract_json_object
+from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 
 
 class _ConcurrentJsonModel:
@@ -175,6 +175,17 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         )])
         with self.assertRaisesRegex(ValueError, r"max_tokens=5000.*finish_reason=length"):
             _reading_map_response_json(response, label="研究总览", max_tokens=5000)
+
+    def test_completed_malformed_json_is_repaired_without_model_retry(self) -> None:
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"research_problem": {"title": "问题",} "core_method": {"name": "方法"}}'),
+            finish_reason="stop",
+        )])
+        parsed = _reading_map_response_json(response, label="研究总览", max_tokens=5000)
+
+        self.assertEqual(parsed["research_problem"]["title"], "问题")
+        self.assertEqual(parsed["core_method"]["name"], "方法")
+        self.assertIsNotNone(repair_json_object("{'paper_type': 'research', 'map_variant': 'research'}"))
 
     def test_json_parser_repairs_inner_quotes_but_rejects_truncated_outer_object(self) -> None:
         parsed = extract_json_object('{"title": "for "Mind" Exploration", "items": []}')

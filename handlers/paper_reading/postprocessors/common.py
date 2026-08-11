@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from json_repair import repair_json
+
 
 HIDDEN_STRUCTURED_KEYS = {
     "kg",
@@ -115,6 +117,35 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
                 if parsed is not None:
                     return parsed
                 start = None
+    return None
+
+
+def repair_json_object(text: str) -> dict[str, Any] | None:
+    """Repair one malformed model object after strict parsing has failed.
+
+    Callers must reject responses stopped by a token limit before invoking this
+    helper. Repair is appropriate for syntax mistakes in a completed response,
+    not for accepting a semantically incomplete truncated payload.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
+    if match:
+        candidates.insert(0, match.group(1).strip())
+    for candidate in candidates:
+        try:
+            value = repair_json(
+                candidate,
+                return_objects=True,
+                skip_json_loads=True,
+                ensure_ascii=False,
+            )
+        except (ValueError, TypeError, IndexError):
+            continue
+        if isinstance(value, dict) and value:
+            return value
     return None
 
 
