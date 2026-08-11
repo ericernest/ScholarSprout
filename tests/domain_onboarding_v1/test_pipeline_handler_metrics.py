@@ -691,7 +691,10 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
         self.assertIn("retrieval_source_failure_count", snapshot["papers"])
         self.assertIn("planning", snapshot["stage_latency"])
-        self.assertGreaterEqual(snapshot["ranking"]["vectorizer_backends"]["tfidf"], 1)
+        self.assertGreaterEqual(
+            snapshot["ranking"]["vectorizer_backends"]["multilingual_tfidf"],
+            1,
+        )
         self.assertGreater(snapshot["evidence"]["evidence_claim_count"], 0)
         self.assertEqual(snapshot["quality"]["final_states"]["passed"], 1)
         self.assertEqual(

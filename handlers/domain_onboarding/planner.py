@@ -96,7 +96,6 @@ class StormLitePlanner:
                 self.model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                max_tokens=self.config.planning_max_tokens,
                 timeout_seconds=self.config.planning_model_timeout_seconds,
                 on_delta=on_delta,
                 stream_stage="planning",

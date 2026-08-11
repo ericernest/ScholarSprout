@@ -193,15 +193,15 @@ class ReadingMapRuntimeTests(unittest.TestCase):
             message=SimpleNamespace(content='{"research_problem": {"title": "cut off"}'),
             finish_reason="length",
         )])
-        with self.assertRaisesRegex(ValueError, r"max_tokens=8000.*finish_reason=length"):
-            _reading_map_response_json(response, label="研究总览", max_tokens=8000)
+        with self.assertRaisesRegex(ValueError, r"模型服务截断.*应用未设置 max_tokens"):
+            _reading_map_response_json(response, label="研究总览")
 
     def test_completed_malformed_json_is_repaired_without_model_retry(self) -> None:
         response = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"research_problem": {"title": "问题",} "core_method": {"name": "方法"}}'),
             finish_reason="stop",
         )])
-        parsed = _reading_map_response_json(response, label="研究总览", max_tokens=8000)
+        parsed = _reading_map_response_json(response, label="研究总览")
 
         self.assertEqual(parsed["research_problem"]["title"], "问题")
         self.assertEqual(parsed["core_method"]["name"], "方法")
@@ -253,7 +253,7 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         for call in model.calls:
             self.assertEqual(call["response_format"], {"type": "json_object"})
             self.assertTrue(call["disable_thinking"])
-            self.assertGreater(call["max_tokens"], 0)
+            self.assertNotIn("max_tokens", call)
             self.assertGreater(call["timeout"], 0)
             self.assertEqual(call["max_retries"], 0)
 

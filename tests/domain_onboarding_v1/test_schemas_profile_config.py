@@ -65,15 +65,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         )
         self.assertEqual(config.generation_section_timeout_seconds, 60.0)
         self.assertEqual(config.generation_development_timeout_seconds, 180.0)
-        self.assertEqual(config.development_stage_planning_max_tokens, 4000)
-        self.assertEqual(
-            (
-                config.generation_development_max_tokens,
-                config.generation_landscape_max_tokens,
-                config.generation_learning_path_max_tokens,
-            ),
-            (8000, 7000, 6500),
-        )
+        self.assertNotIn("planning_max_tokens", DomainOnboardingConfig.model_fields)
+        self.assertNotIn("generation_max_tokens", DomainOnboardingConfig.model_fields)
         self.assertLessEqual(
             config.generation_development_foundation_timeout_seconds
             + config.generation_development_stage_timeout_seconds
@@ -111,7 +104,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
-            DomainOnboardingConfig(relevance_weight=0.9)
+            DomainOnboardingConfig(relevance_weight=0.8)
 
     def test_selected_limit_cannot_exceed_candidates(self) -> None:
         with self.assertRaises(ValidationError):
