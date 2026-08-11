@@ -19,33 +19,102 @@ HIDDEN_STRUCTURED_KEYS = {
 }
 
 
+def _escape_unquoted_inner_quotes(text: str) -> str:
+    """Repair unescaped quotes inside JSON strings without closing truncation."""
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(text)
+    for index, character in enumerate(text):
+        if not in_string:
+            repaired.append(character)
+            if character == '"':
+                in_string = True
+            continue
+        if escaped:
+            repaired.append(character)
+            escaped = False
+            continue
+        if character == "\\":
+            repaired.append(character)
+            escaped = True
+            continue
+        if character != '"':
+            repaired.append(character)
+            continue
+
+        next_index = index + 1
+        while next_index < length and text[next_index].isspace():
+            next_index += 1
+        next_character = text[next_index] if next_index < length else ""
+        if not next_character or next_character in ":,}]":
+            repaired.append(character)
+            in_string = False
+        else:
+            repaired.append('\\"')
+    return "".join(repaired)
+
+
+def _load_json_object(candidate: str) -> dict[str, Any] | None:
+    for text in (candidate, _escape_unquoted_inner_quotes(candidate)):
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
 def extract_json_object(text: str) -> dict[str, Any] | None:
     """从 LLM 文本中提取 JSON object。"""
     raw = (text or "").strip()
     if not raw:
         return None
-    try:
-        value = json.loads(raw)
-        return value if isinstance(value, dict) else None
-    except json.JSONDecodeError:
-        pass
+    parsed = _load_json_object(raw)
+    if parsed is not None:
+        return parsed
 
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
     if match:
-        try:
-            value = json.loads(match.group(1))
-            return value if isinstance(value, dict) else None
-        except json.JSONDecodeError:
-            pass
+        parsed = _load_json_object(match.group(1))
+        if parsed is not None:
+            return parsed
 
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            value = json.loads(raw[start : end + 1])
-            return value if isinstance(value, dict) else None
-        except json.JSONDecodeError:
-            pass
+    # Accept only balanced top-level objects. A truncated outer object may
+    # contain valid inner objects; returning one of them would silently turn a
+    # broken reading map into a plausible but incomplete payload.
+    depth = 0
+    array_depth = 0
+    start: int | None = None
+    in_string = False
+    escaped = False
+    for index, character in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "[" and depth == 0:
+            array_depth += 1
+        elif character == "]" and depth == 0 and array_depth:
+            array_depth -= 1
+        elif character == "{" and array_depth == 0:
+            if depth == 0:
+                start = index
+            depth += 1
+        elif character == "}" and array_depth == 0 and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                parsed = _load_json_object(raw[start : index + 1])
+                if parsed is not None:
+                    return parsed
+                start = None
     return None
 
 

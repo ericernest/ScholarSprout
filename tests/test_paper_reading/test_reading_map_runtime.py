@@ -8,14 +8,18 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from handlers.paper_reading.handler import (
+    RESEARCH_GUIDE_MAX_WORKERS,
     SURVEY_CARD_MAX_WORKERS,
     SURVEY_MAP_TASK_LIMIT,
     SURVEY_SECTION_GUIDE_TASK_LIMIT,
+    _build_llm_reading_map,
     _build_survey_plan_card_reading_map,
     _ensure_survey_prerequisite_task,
     _normalize_survey_card_plan,
+    _reading_map_response_json,
     resume_pending_reading_map_generations,
 )
+from handlers.paper_reading.postprocessors.common import extract_json_object
 
 
 class _ConcurrentJsonModel:
@@ -99,6 +103,84 @@ class _ConcurrentJsonModel:
 
 
 class ReadingMapRuntimeTests(unittest.TestCase):
+    def test_research_overview_and_grouped_guides_run_in_bounded_parallel(self) -> None:
+        class ResearchModel:
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+                self.active = 0
+                self.max_active = 0
+                self.calls: list[dict] = []
+
+            def chat(self, **kwargs):
+                with self.lock:
+                    self.calls.append(kwargs)
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                try:
+                    time.sleep(0.06)
+                    system = kwargs["messages"][0]["content"]
+                    if "research section guides" in system:
+                        prompt = kwargs["messages"][-1]["content"]
+                        section_ids = list(dict.fromkeys(
+                            __import__("re").findall(r'"section_id": "(sec:\d+)"', prompt)
+                        ))
+                        payload = {
+                            "section_guides": [{
+                                "section_id": section_id,
+                                "title": section_id,
+                                "novice_summary": "章节主线",
+                                "cards": [{"title": "阅读重点", "content": {"core_message": "理解本节"}}],
+                            } for section_id in section_ids]
+                        }
+                    else:
+                        payload = {
+                            "paper_type": "research",
+                            "map_variant": "research",
+                            "research_problem": {"title": "问题", "one_sentence": "研究问题"},
+                            "core_method": {"name": "方法", "one_sentence": "核心方法"},
+                            "section_guides": [],
+                        }
+                    content = json.dumps(payload, ensure_ascii=False)
+                    return SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")]
+                    )
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+        model = ResearchModel()
+        sections = [{
+            "section_id": f"sec:{index}",
+            "title": f"Section {index}",
+            "content": "Research details and evidence. " * 30,
+        } for index in range(7)]
+        result = _build_llm_reading_map(
+            paper={"title": "Research paper", "abstract": "Abstract", "sections": sections},
+            fallback={"paper_type": "research", "map_variant": "research"},
+            model=model,
+            skill_registry=None,
+        )
+
+        self.assertEqual(result["status"], "llm_done")
+        self.assertEqual(len(result["section_guides"]), 7)
+        self.assertEqual(result["generation_artifacts_summary"]["requests_total"], 4)
+        self.assertEqual(result["generation_artifacts_summary"]["sections_fallback_generated"], 0)
+        self.assertGreaterEqual(model.max_active, 2)
+        self.assertLessEqual(model.max_active, RESEARCH_GUIDE_MAX_WORKERS)
+
+    def test_invalid_json_reports_output_truncation(self) -> None:
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"research_problem": {"title": "cut off"}'),
+            finish_reason="length",
+        )])
+        with self.assertRaisesRegex(ValueError, r"max_tokens=5000.*finish_reason=length"):
+            _reading_map_response_json(response, label="研究总览", max_tokens=5000)
+
+    def test_json_parser_repairs_inner_quotes_but_rejects_truncated_outer_object(self) -> None:
+        parsed = extract_json_object('{"title": "for "Mind" Exploration", "items": []}')
+        self.assertEqual(parsed["title"], 'for "Mind" Exploration')
+        self.assertIsNone(extract_json_object('{"outer": {"ok": true}'))
+
     def test_survey_cards_run_in_bounded_parallel_and_use_json_settings(self) -> None:
         model = _ConcurrentJsonModel()
         paper = {

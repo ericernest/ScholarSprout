@@ -2,7 +2,7 @@
 
 NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助科研新手建立第一批“科研知识连接”，把方向、论文、概念、方法和实验串联起来。
 
-当前项目使用 Python 开发，部署和运行标准以 Linux 为准。Web 端以聊天页作为统一入口，当前提供三个模式：
+当前项目使用 Python 开发，支持 Windows 和 Linux 原生开发；生产部署推荐 Linux 或 Docker。Web 端以聊天页作为统一入口，当前提供三个模式：
 
 - 日常聊天：支持 Markdown、表格、流式回答、思考过程折叠和生成中断。
 - 论文精读：从聊天卡片进入独立工作台，支持论文解析、章节索引、PDF 原文定位与缓存、高亮注释、阅读进度恢复、Copilot 问答和 Fork 探索。
@@ -25,6 +25,8 @@ NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助�
 ## 快速开始
 
 推荐 Python 版本：`Python 3.11`
+
+Windows（PowerShell/命令提示符）和 Linux 使用同一组 `conda`、`pip` 与 `novicesynapse` 命令。路径通过 `pathlib` 处理，不要在配置中混用两种系统的路径：Windows 可填 `D:\NoviceSynapseData`，Linux 可填 `/home/<user>/novicesynapse-data`。默认的 `~/.novicesynapse` 在两种系统上都会展开到当前用户主目录。
 
 使用 conda：
 
@@ -90,6 +92,8 @@ novicesynapse config
 也可以使用其它兼容 OpenAI SDK 的模型服务，只要提供 `base_url`、`api_key` 和可用的 `model_name`。
 
 会话、论文结构化数据、上传的 PDF 和图片默认写入 `storage.data_dir`。也可以用 `NOVICESYNAPSE_DATA_DIR` 环境变量覆盖该配置；修改目录后需重启服务，旧目录数据不会自动迁移。
+
+跨平台注意事项：SQLite 数据库、PDF、图片和配置文件都位于数据目录内；不依赖 `fork`、Unix socket 或平台专属文件锁。Dockerfile 使用 Linux 容器，在 Windows 上应通过 Docker Desktop 的 Linux 容器模式运行。若需要在 Windows 与 Linux 之间切换开发环境，请重新安装当前平台的 Python 依赖，不要直接复用另一平台创建的虚拟环境。
 
 如需估算领域入门重试产生的额外货币成本，可以按模型计价填写每百万输入、输出 token 单价。未配置单价时仍会记录实际 token，但 `estimated_cost` 返回 `null`。
 

@@ -41,6 +41,12 @@ SURVEY_CARD_CONTEXT_LIMIT = 26000
 SURVEY_INTRO_CONTEXT_LIMIT = 18000
 READING_MAP_MAX_TOKENS = 5000
 READING_MAP_REQUEST_TIMEOUT_SECONDS = 90.0
+RESEARCH_GUIDE_MAX_TOKENS = 3500
+RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS = 75.0
+RESEARCH_GUIDE_MAX_WORKERS = 4
+RESEARCH_GUIDE_SECTIONS_PER_REQUEST = 3
+RESEARCH_GUIDE_SECTION_LIMIT = 28
+RESEARCH_GUIDE_SECTION_TEXT_LIMIT = 7000
 SURVEY_PLAN_MAX_TOKENS = 5000
 SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS = 75.0
 SURVEY_CARD_MAX_TOKENS = 4000
@@ -87,6 +93,43 @@ def _reading_map_json_chat(
         timeout=timeout,
         max_retries=0,
     )
+
+
+def _reading_map_response_json(
+    response: Any,
+    *,
+    label: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    choices = getattr(response, "choices", None) or (
+        response.get("choices", []) if isinstance(response, dict) else []
+    )
+    if not choices:
+        raise ValueError(f"{label}未返回 choices")
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None) or (
+        choice.get("finish_reason") if isinstance(choice, dict) else None
+    )
+    message = getattr(choice, "message", None) or (
+        choice.get("message", {}) if isinstance(choice, dict) else {}
+    )
+    content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text") or "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    content = str(content or "")
+    parsed = extract_json_object(content)
+    if parsed is not None:
+        return parsed
+
+    normalized_reason = str(finish_reason or "unknown").lower()
+    diagnostics = f"finish_reason={normalized_reason}, content_chars={len(content)}"
+    logger.warning("Invalid JSON for %s (%s)", label, diagnostics)
+    if normalized_reason in {"length", "max_tokens"}:
+        raise ValueError(f"{label}输出在 max_tokens={max_tokens} 处被截断（{diagnostics}）")
+    raise ValueError(f"{label}未返回有效 JSON（{diagnostics}）")
 
 
 # ── 主入口 ──
@@ -1554,38 +1597,261 @@ def _build_llm_reading_map(
     fallback: dict[str, Any],
     model: Any | None,
     skill_registry: Any | None,
+    storage: Any | None = None,
+    paper_id: str = "",
+    generation_id: str = "",
 ) -> dict[str, Any]:
     if model is None:
         return _failed_reading_map("LLM 模型未初始化，无法生成导读地图与智能索引。")
-    prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
+    sections = _research_reading_sections(paper, fallback)
+    if not sections:
+        return _failed_reading_map("未找到可用于导读地图生成的章节正文。")
+
+    groups = [
+        sections[index:index + RESEARCH_GUIDE_SECTIONS_PER_REQUEST]
+        for index in range(0, len(sections), RESEARCH_GUIDE_SECTIONS_PER_REQUEST)
+    ]
+    task_total = 1 + len(groups)
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="generating_research_map",
+        progress=5,
+        artifacts={
+            "research_generation_progress": {
+                "total": task_total,
+                "completed": 0,
+                "failed": 0,
+                "sections_total": len(sections),
+            }
+        },
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    overview: dict[str, Any] | None = None
+    guides_by_id: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    completed = 0
+    executor = ThreadPoolExecutor(max_workers=min(RESEARCH_GUIDE_MAX_WORKERS, task_total))
+    stop_without_waiting = False
     try:
-        response = _reading_map_json_chat(
-            model,
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a paper-reading map builder for novice researchers. "
-                        "Return only a valid JSON object that follows the requested schema."
-                    ),
+        future_to_label: dict[Any, str] = {
+            executor.submit(
+                _generate_research_overview,
+                model,
+                paper,
+                fallback,
+                skill_registry,
+            ): "研究总览"
+        }
+        for index, group in enumerate(groups, start=1):
+            future_to_label[
+                executor.submit(_generate_research_section_guide_group, model, paper, group, fallback)
+            ] = f"章节导读组 {index}"
+
+        for future in as_completed(future_to_label):
+            if not _generation_is_current(storage, paper_id, generation_id):
+                stop_without_waiting = True
+                for pending_future in future_to_label:
+                    pending_future.cancel()
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+            label = future_to_label[future]
+            try:
+                result = future.result()
+                if label == "研究总览":
+                    overview = result
+                else:
+                    for guide in result:
+                        section_id = str(guide.get("section_id") or "")
+                        if section_id:
+                            guides_by_id[section_id] = guide
+            except Exception as error:
+                logger.warning("Research reading map task failed (%s): %s", label, error)
+                failures.append(f"{label}：{error}")
+            completed += 1
+            _save_reading_map_phase(
+                storage,
+                paper_id,
+                generation_id,
+                phase="generating_research_map",
+                progress=min(95, 5 + int(completed / task_total * 90)),
+                artifacts={
+                    "research_generation_progress": {
+                        "total": task_total,
+                        "completed": completed,
+                        "failed": len(failures),
+                        "sections_total": len(sections),
+                        "sections_generated": len(guides_by_id),
+                    }
                 },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=READING_MAP_MAX_TOKENS,
-            timeout=READING_MAP_REQUEST_TIMEOUT_SECONDS,
-        )
-        content = response.choices[0].message.content or ""
-        parsed = extract_json_object(content)
-        if not parsed:
-            return _failed_reading_map("LLM 未返回有效 JSON，导读地图与智能索引生成失败。")
-        merged = _normalize_reading_map(parsed, _llm_visible_base(fallback))
-        merged["status"] = "llm_done"
-        if not _reading_map_has_visible_content(merged):
-            return _failed_reading_map("LLM 返回结果缺少可展示内容，导读地图与智能索引生成失败。")
-        return merged
-    except Exception as error:
-        logger.warning("LLM reading map extraction failed: %s", error)
-        return _failed_reading_map(f"LLM 调用失败：{error}")
+            )
+    finally:
+        executor.shutdown(wait=not stop_without_waiting, cancel_futures=stop_without_waiting)
+
+    if overview is None:
+        detail = next((item for item in failures if item.startswith("研究总览")), "研究总览未生成")
+        return _failed_reading_map(f"导读地图生成失败：{detail}")
+
+    merged = _normalize_reading_map(overview, _llm_visible_base(fallback))
+    fallback_guides = {
+        str(guide.get("section_id") or ""): guide
+        for guide in _build_heuristic_section_guides(sections, str(merged.get("paper_type") or "research"))
+        if isinstance(guide, dict) and guide.get("section_id")
+    }
+    generated_count = len(guides_by_id)
+    ordered_guides: list[dict[str, Any]] = []
+    fallback_count = 0
+    for section in sections:
+        section_id = str(section.get("section_id") or "")
+        guide = guides_by_id.get(section_id)
+        if guide is None:
+            guide = fallback_guides.get(section_id)
+            fallback_count += int(guide is not None)
+            if guide is not None:
+                guide = dict(guide)
+                guide["fallback_generated"] = True
+        if guide is not None:
+            ordered_guides.append(guide)
+    merged["section_guides"] = _normalize_section_guides(ordered_guides)
+    merged["status"] = "llm_done"
+    merged["partial"] = bool(failures or fallback_count)
+    merged["generation_artifacts_summary"] = {
+        "requests_total": task_total,
+        "requests_failed": len(failures),
+        "sections_total": len(sections),
+        "sections_llm_generated": generated_count,
+        "sections_fallback_generated": fallback_count,
+        "max_workers": min(RESEARCH_GUIDE_MAX_WORKERS, task_total),
+    }
+    if failures or fallback_count:
+        merged["generation_warning"] = "部分章节导读由本地章节内容补全；研究总览和其余智能索引可正常使用。"
+    if not _reading_map_has_visible_content(merged):
+        return _failed_reading_map("LLM 返回结果缺少可展示内容，导读地图与智能索引生成失败。")
+    return merged
+
+
+def _generate_research_overview(
+    model: Any,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    skill_registry: Any | None,
+) -> dict[str, Any]:
+    response = _reading_map_json_chat(
+        model,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a paper-reading map builder for novice researchers. "
+                    "Return only a valid JSON object that follows the requested schema."
+                ),
+            },
+            {"role": "user", "content": _build_reading_map_prompt(paper, fallback, skill_registry)},
+        ],
+        max_tokens=READING_MAP_MAX_TOKENS,
+        timeout=READING_MAP_REQUEST_TIMEOUT_SECONDS,
+    )
+    return _reading_map_response_json(
+        response,
+        label="研究总览",
+        max_tokens=READING_MAP_MAX_TOKENS,
+    )
+
+
+def _research_reading_sections(
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        section
+        for section in (paper.get("sections", []) or [])
+        if isinstance(section, dict)
+        and str(section.get("content") or "").strip()
+        and _section_role(section, str(fallback.get("paper_type") or "research")) != "references"
+    ][:RESEARCH_GUIDE_SECTION_LIMIT]
+
+
+def _generate_research_section_guide_group(
+    model: Any,
+    paper: dict[str, Any],
+    sections: list[dict[str, Any]],
+    fallback: dict[str, Any],
+) -> list[dict[str, Any]]:
+    payload = []
+    expected: dict[str, dict[str, Any]] = {}
+    paper_type = str(fallback.get("paper_type") or "research")
+    for index, section in enumerate(sections, start=1):
+        section_id = str(section.get("section_id") or f"section-{index}")
+        expected[section_id] = section
+        payload.append({
+            "section_id": section_id,
+            "title": str(section.get("title") or f"Section {index}"),
+            "section_role_hint": _section_role(section, paper_type),
+            "start_page": section.get("start_page"),
+            "end_page": section.get("end_page"),
+            "text": _compact_section_for_card(
+                section,
+                RESEARCH_GUIDE_SECTION_TEXT_LIMIT,
+                {"group_key": "research_section_guide"},
+            ),
+        })
+    prompt = (
+        "Generate novice-oriented smart-index guides for exactly the supplied sections. Return JSON only. "
+        "Do not add sections and do not copy long paragraphs. Each section needs 1-3 concise, substantive cards. "
+        "Use source_sections with section_id, title, and page; do not invent facts. Write Chinese content.\n"
+        "Schema:\n"
+        '{"section_guides": [{"section_id": "", "title": "", "section_role": "", '
+        '"read_priority": "high|medium|low", "novice_summary": "", '
+        '"cards": [{"card_type": "abstract_takeaway|intro_insight|problem_formulation|method_architecture|algorithm_steps|innovation_detail|experiment_dataset|experiment_design|result_interpretation|limitation_reflection|reading_route", '
+        '"title": "", "content": {"core_message": "", "why_it_matters": "", "key_points": [], "connections": [], "next_reading": ""}, "source_sections": []}], '
+        '"main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", '
+        '"datasets": [], "baselines": [], "metrics": [], "novice_focus": "", "source_page": null}]}\n\n'
+        f"Paper title: {paper.get('title', '')}\n"
+        f"Abstract: {str(paper.get('abstract') or '')[:1200]}\n"
+        f"Sections:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for research section guides."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
+        timeout=RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS,
+    )
+    parsed = _reading_map_response_json(
+        response,
+        label="章节导读",
+        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
+    )
+    raw_guides = parsed.get("section_guides")
+    if not isinstance(raw_guides, list):
+        raw_guides = [parsed] if parsed.get("section_id") else []
+    normalized: list[dict[str, Any]] = []
+    for guide in raw_guides:
+        if not isinstance(guide, dict):
+            continue
+        section_id = str(guide.get("section_id") or "")
+        section = expected.get(section_id)
+        if section is None:
+            continue
+        guide = dict(guide)
+        guide["title"] = guide.get("title") or section.get("title", "")
+        guide["section_role"] = guide.get("section_role") or _section_role(section, paper_type)
+        guide["read_priority"] = guide.get("read_priority") or "medium"
+        guide["source_page"] = guide.get("source_page") or section.get("start_page")
+        source_ref = _source_ref(section)
+        if not guide.get("source_sections"):
+            guide["source_sections"] = [source_ref]
+        for card in guide.get("cards") if isinstance(guide.get("cards"), list) else []:
+            if isinstance(card, dict) and not card.get("source_sections"):
+                card["source_sections"] = [source_ref]
+        normalized.append(guide)
+    normalized = _normalize_section_guides(normalized)
+    if not normalized:
+        raise ValueError("章节导读 JSON 中没有匹配输入章节的内容")
+    return normalized
 
 
 def _generate_reading_map_for_paper(
@@ -1613,6 +1879,9 @@ def _generate_reading_map_for_paper(
         fallback=fallback,
         model=model,
         skill_registry=skill_registry,
+        storage=storage,
+        paper_id=paper_id or str(paper.get("paper_id") or ""),
+        generation_id=generation_id,
     )
 
 
@@ -3459,27 +3728,25 @@ def _build_reading_map_prompt(
     }
     return (
         f"{skill_instructions}\n\n"
-        "Build a deep novice-oriented reading_map and smart_index for this paper. "
-        "First decide paper_type: research, survey, theory, or system. "
-        "Use survey when the paper primarily summarizes a field, taxonomy, datasets, benchmarks, challenges, or trends.\n"
+        "Build a deep novice-oriented reading_map overview for this non-survey paper. "
+        "Decide paper_type as research, theory, or system; keep map_variant as research.\n"
         "The output must be JSON only. Use this schema exactly, keeping legacy research fields for compatibility:\n"
         "{\n"
-        '  "paper_type": "research|survey|theory|system",\n'
-        '  "map_variant": "research|survey",\n'
+        '  "paper_type": "research|theory|system",\n'
+        '  "map_variant": "research",\n'
         '  "prerequisite_card": {"concepts": [{"name": "", "why_needed": "", "learn_first": [], "difficulty": "easy|medium|hard"}], "baseline_papers": [{"title": "", "url": "", "relationship": "direct_baseline|strongest_compared_baseline|foundational_work|survey_anchor|dataset_or_benchmark_paper", "why_read": ""}], "reading_order": []},\n'
         '  "research_map": {"research_problem": {}, "core_method": {}, "method_steps": [], "experimental_support": [], "limitations_and_questions": []},\n'
-        '  "survey_map": {"field_overview": {"field": "", "core_task": "", "why_now": "", "novice_takeaway": "", "source_sections": []}, "development_timeline": [], "pain_points": [], "taxonomy": [], "technical_routes": [], "representative_methods": [], "datasets": [], "evaluation_protocols": [], "applications": [], "open_challenges": [], "reading_strategy": []},\n'
+        '  "survey_map": {},\n'
         '  "research_problem": {"title": "", "one_sentence": "", "why_it_matters": "", "novice_takeaway": "", "source_sections": []},\n'
         '  "core_method": {"name": "", "one_sentence": "", "main_idea": "", "technical_route": "", "source_sections": []},\n'
         '  "method_steps": [{"name": "", "goal": "", "input": "", "operation": "", "output": "", "why_needed": "", "source_sections": []}],\n'
         '  "experimental_support": [{"claim": "", "evidence": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "protocol": "", "figures_or_tables": [], "source_sections": []}],\n'
         '  "limitations_and_questions": [{"limitation": "", "why_it_matters": "", "novice_question": "", "source_sections": []}],\n'
-        '  "section_guides": [{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", "novice_summary": "", "cards": [{"card_type": "abstract_takeaway|intro_insight|problem_formulation|method_architecture|algorithm_steps|innovation_detail|experiment_dataset|experiment_design|result_interpretation|limitation_reflection|field_timeline|taxonomy_node|route_comparison|paper_method_table|dataset_catalog|benchmark_protocol|challenge_card|application_landscape|future_direction|reading_route", "title": "", "content": {}, "source_sections": []}], "main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "experiment_protocol": "", "novice_focus": "", "source_page": null}]\n'
+        '  "section_guides": []\n'
         "}\n"
         "Rules: keep each field compact but substantive; do not copy long paragraphs; "
-        "for survey papers, prioritize development_timeline, pain_points, taxonomy, technical_routes, representative_methods with concrete paper titles and methods, datasets, evaluation_protocols, applications, and open_challenges; "
         "for research papers, prioritize problem, insight, method structure, experiments, datasets, baselines, metrics, limitations; "
-        "section_guides must cover every input section except references when possible, and each guide should choose 2-5 cards suited to that section; "
+        "leave section_guides empty because section guides are generated by separate bounded requests; "
         "source_sections entries should be objects with section_id, title, page when possible; "
         "paper links may be empty if unavailable; do not invent URLs; "
         "write Chinese content for readers.\n\n"

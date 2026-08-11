@@ -530,19 +530,32 @@ More results.
 
         class RecordingModel:
             def __init__(self) -> None:
-                self.kwargs = {}
+                self.calls = []
 
             def chat(self, **kwargs):
-                self.kwargs = kwargs
-                content = json.dumps({
-                    "paper_type": "research",
-                    "map_variant": "research",
-                    "research_problem": {"title": "Problem", "one_sentence": "A visible problem."},
-                    "core_method": {"name": "Method", "one_sentence": "A visible method."},
-                    "section_guides": [{"section_id": "sec:0", "title": "Section 0", "main_content": "Guide"}],
-                })
+                self.calls.append(kwargs)
+                if "research section guides" in kwargs["messages"][0]["content"]:
+                    content = json.dumps({
+                        "section_guides": [
+                            {
+                                "section_id": f"sec:{index}",
+                                "title": f"Section {index}",
+                                "novice_summary": "Guide",
+                                "cards": [{"title": "Card", "content": {"core_message": "Guide"}}],
+                            }
+                            for index in range(2)
+                        ]
+                    })
+                else:
+                    content = json.dumps({
+                        "paper_type": "research",
+                        "map_variant": "research",
+                        "research_problem": {"title": "Problem", "one_sentence": "A visible problem."},
+                        "core_method": {"name": "Method", "one_sentence": "A visible method."},
+                        "section_guides": [],
+                    })
                 return SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")]
                 )
 
         model = RecordingModel()
@@ -554,11 +567,13 @@ More results.
         )
 
         self.assertEqual(result["status"], "llm_done")
-        self.assertGreater(model.kwargs["timeout"], 0)
-        self.assertEqual(model.kwargs["max_tokens"], 5000)
-        self.assertEqual(model.kwargs["response_format"], {"type": "json_object"})
-        self.assertTrue(model.kwargs["disable_thinking"])
-        self.assertEqual(model.kwargs["max_retries"], 0)
+        self.assertEqual(len(model.calls), 2)
+        self.assertEqual({call["max_tokens"] for call in model.calls}, {3500, 5000})
+        for call in model.calls:
+            self.assertGreater(call["timeout"], 0)
+            self.assertEqual(call["response_format"], {"type": "json_object"})
+            self.assertTrue(call["disable_thinking"])
+            self.assertEqual(call["max_retries"], 0)
 
     def test_survey_text_chunks_cover_full_long_sections(self) -> None:
         long_text = " ".join(f"Sentence {index} describes a survey fact." for index in range(900))
