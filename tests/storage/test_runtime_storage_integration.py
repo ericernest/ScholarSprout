@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
 import unittest
@@ -159,17 +160,19 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             store.initialize()
             paper_storage = PaperReadingStorage(root / "paper_reading", store)
             paper_storage.save_upload("paper-1", b"%PDF-test")
-            paper_storage.save_paper(
-                "paper-1",
-                {"paper_id": "paper-1", "title": "Test Paper", "authors": ["A"], "sections": []},
-            )
+            with patch.object(store, "save_paper_file", wraps=store.save_paper_file) as save_file:
+                paper_storage.save_paper(
+                    "paper-1",
+                    {"paper_id": "paper-1", "title": "Test Paper", "authors": ["A"], "sections": []},
+                )
+                save_file.assert_not_called()
 
             self.assertEqual(paper_storage.load_paper("paper-1")["title"], "Test Paper")
             with closing(sqlite3.connect(store.database_path)) as connection:
-                file_count = connection.execute(
-                    "SELECT COUNT(*) FROM paper_files WHERE paper_id = 'paper-1'"
-                ).fetchone()[0]
-            self.assertEqual(file_count, 1)
+                file_rows = connection.execute(
+                    "SELECT sha256 FROM paper_files WHERE paper_id = 'paper-1'"
+                ).fetchall()
+            self.assertEqual(file_rows, [(hashlib.sha256(b"%PDF-test").hexdigest(),)])
 
     def test_reading_questions_share_one_persistent_conversation(self) -> None:
         with TemporaryDirectory() as directory:

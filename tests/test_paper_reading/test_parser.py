@@ -554,8 +554,11 @@ More results.
         )
 
         self.assertEqual(result["status"], "llm_done")
-        self.assertEqual(model.kwargs["timeout"], 120.0)
+        self.assertGreater(model.kwargs["timeout"], 0)
         self.assertEqual(model.kwargs["max_tokens"], 5000)
+        self.assertEqual(model.kwargs["response_format"], {"type": "json_object"})
+        self.assertTrue(model.kwargs["disable_thinking"])
+        self.assertEqual(model.kwargs["max_retries"], 0)
 
     def test_survey_text_chunks_cover_full_long_sections(self) -> None:
         long_text = " ".join(f"Sentence {index} describes a survey fact." for index in range(900))

@@ -51,6 +51,7 @@ class OpenAIClient:
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         timeout: float | None = None,
+        max_retries: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_name: str | None = None,
         disable_thinking: bool = False,
@@ -64,11 +65,15 @@ class OpenAIClient:
             model_name=model_name,
             disable_thinking=disable_thinking,
         )
-        client = (
-            self.client.with_options(timeout=timeout, max_retries=0)
-            if timeout is not None
-            else self.client
-        )
+        if timeout is not None:
+            client = self.client.with_options(
+                timeout=timeout,
+                max_retries=0 if max_retries is None else max_retries,
+            )
+        elif max_retries is not None:
+            client = self.client.with_options(max_retries=max_retries)
+        else:
+            client = self.client
         return client.chat.completions.create(**kwargs)
 
     def chat_stream(

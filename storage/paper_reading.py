@@ -44,14 +44,6 @@ class PaperReadingStorage:
         payload = dict(data)
         payload["paper_id"] = paper_id
         self.research_store.save_paper_document(paper_id, payload)
-        upload = self.get_upload_path(paper_id)
-        if upload is not None:
-            self.research_store.save_paper_file(
-                paper_id,
-                file_kind="pdf",
-                storage_uri=upload.resolve().as_uri(),
-                sha256=self._sha256(upload),
-            )
 
     def load_paper(self, paper_id: str) -> dict[str, Any] | None:
         return self.research_store.load_paper_document(paper_id)
@@ -82,6 +74,10 @@ class PaperReadingStorage:
             for data in self.research_store.list_paper_documents()
         ]
 
+    def list_paper_documents(self) -> list[dict[str, Any]]:
+        """Return full documents for restart recovery and internal maintenance."""
+        return self.research_store.list_paper_documents()
+
     def save_kg(self, paper_id: str, kg_data: dict[str, Any]) -> None:
         self.research_store.save_paper_knowledge_graph(kg_data, paper_id=paper_id)
 
@@ -94,9 +90,16 @@ class PaperReadingStorage:
     def load_cross_paper_kg(self) -> dict[str, Any] | None:
         return self.research_store.load_paper_knowledge_graph()
 
-    def save_upload(self, paper_id: str, pdf_bytes: bytes) -> Path:
+    def save_upload(self, paper_id: str, pdf_bytes: bytes, *, sha256: str = "") -> Path:
         path = self.base_dir / "uploads" / f"{self._safe_component(paper_id)}.pdf"
         path.write_bytes(pdf_bytes)
+        self.research_store.ensure_paper_reference(paper_id, title=paper_id)
+        self.research_store.save_paper_file(
+            paper_id,
+            file_kind="pdf",
+            storage_uri=path.resolve().as_uri(),
+            sha256=sha256 or hashlib.sha256(pdf_bytes).hexdigest(),
+        )
         return path
 
     def get_upload_path(self, paper_id: str) -> Path | None:
@@ -159,11 +162,3 @@ class PaperReadingStorage:
             digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
             safe = f"{safe[:80]}-{digest}"
         return safe
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()

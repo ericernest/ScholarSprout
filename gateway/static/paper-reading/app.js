@@ -25,12 +25,13 @@ const SKILLS = [
 const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
+const READING_MAP_STALE_AFTER_MS = 180000;
 
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   paperIndex: null, parseQuality: "", textLayerAvailable: false,
   sectionExtractionSource: "", sectionExtractionStatus: "", sectionExtractionMessage: "", outlineEntriesCount: 0,
-  parseStatus: "", readingMapStatus: "", readingMapPhase: "", readingMapProgress: 0, readingMapError: "", readingMapCardProgress: null, readingMap: null, readingMapStartedAt: 0, parsePollTimer: null,
+  parseStatus: "", readingMapStatus: "", readingMapPhase: "", readingMapProgress: 0, readingMapError: "", readingMapCardProgress: null, readingMap: null, readingMapStartedAt: 0, readingMapHeartbeatAt: "", parsePollTimer: null,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   selectedText: "", selectedPage: null, selectedRect: null, sourceView: "pdf", uploadSummary: null,
   sessionState: "", restored: false, busy: false,
@@ -465,6 +466,7 @@ async function acceptUploadedPaper(payload, sourceLabel) {
   state.readingMapProgress = Number(data.reading_map_progress || 0);
   state.readingMapError = data.reading_map_error || "";
   state.readingMapCardProgress = data.reading_map_card_progress || null;
+  state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || "";
   state.readingMapStartedAt = state.readingMapStatus === "llm_running" ? Date.now() : 0;
   state.readingMap = null;
   state.activeSkills = [];
@@ -496,6 +498,7 @@ async function loadPaperDetail() {
   state.readingMapProgress = Number(data.reading_map_progress || state.paper?.reading_map_progress || 0);
   state.readingMapError = data.reading_map_error || state.paper?.reading_map_error || state.readingMap?.error || "";
   state.readingMapCardProgress = data.reading_map_card_progress || state.paper?.reading_map_card_progress || null;
+  state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || state.paper?.reading_map_heartbeat_at || "";
   if (state.readingMapStatus === "llm_running" && !state.readingMapStartedAt) state.readingMapStartedAt = Date.now();
   if (state.readingMapStatus !== "llm_running") state.readingMapStartedAt = 0;
   state.textLayerAvailable = Boolean(data.text_layer_available);
@@ -519,6 +522,7 @@ async function regenerateReadingMap() {
   state.readingMapProgress = 0;
   state.readingMapError = "";
   state.readingMapCardProgress = null;
+  state.readingMapHeartbeatAt = new Date().toISOString();
   state.readingMapStartedAt = Date.now();
   state.readingMap = { version: "novice-reading-map-v2", status: "llm_running", paper_type: "unknown", map_variant: "research", prerequisite_card: {}, research_map: {}, survey_map: {}, section_guides: [] };
   renderSections();
@@ -536,6 +540,7 @@ async function regenerateReadingMap() {
     state.readingMapProgress = Number(data.reading_map_progress || 0);
     state.readingMapError = data.reading_map_error || "";
     state.readingMapCardProgress = data.reading_map_card_progress || null;
+    state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || state.readingMapHeartbeatAt;
     state.readingMapStartedAt = state.readingMapStatus === "llm_running" ? Date.now() : 0;
     toast(data.message || "已重新提交导读地图生成。");
     startParsePolling();
@@ -545,6 +550,7 @@ async function regenerateReadingMap() {
     state.readingMapProgress = 0;
     state.readingMapError = error.message || "重新生成失败。";
     state.readingMapCardProgress = null;
+    state.readingMapHeartbeatAt = "";
     state.readingMapStartedAt = 0;
     state.readingMap = { version: "novice-reading-map-v2", status: "failed", error: error.message || "重新生成失败。", prerequisite_card: {}, research_map: {}, survey_map: {}, section_guides: [] };
     toast(error.message || "重新生成失败。", true);
@@ -990,9 +996,11 @@ function isReadingMapDisplayable() {
 }
 
 function isReadingMapTimedOut() {
+  const heartbeatAt = Date.parse(state.readingMapHeartbeatAt || "");
+  const lastActivityAt = Number.isFinite(heartbeatAt) ? heartbeatAt : state.readingMapStartedAt;
   return readingMapGenerationStatus() === "llm_running"
-    && state.readingMapStartedAt
-    && Date.now() - state.readingMapStartedAt > 600000;
+    && lastActivityAt
+    && Date.now() - lastActivityAt > READING_MAP_STALE_AFTER_MS;
 }
 
 function readingMapPhaseText() {
