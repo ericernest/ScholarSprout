@@ -481,6 +481,24 @@ More results.
         self.assertTrue(survey["datasets"])
         self.assertTrue(normalized["section_guides"])
 
+    def test_research_overview_caps_lists_and_syncs_legacy_research_map(self) -> None:
+        normalized = _normalize_reading_map({
+            "paper_type": "research",
+            "map_variant": "research",
+            "research_map": {},
+            "research_problem": {"title": "Problem"},
+            "core_method": {"name": "Method"},
+            "method_steps": [{"name": f"Step {index}"} for index in range(10)],
+            "experimental_support": [{"claim": f"Claim {index}"} for index in range(10)],
+            "limitations_and_questions": [{"limitation": f"Limit {index}"} for index in range(10)],
+        }, {"paper_type": "research", "map_variant": "research"})
+
+        self.assertEqual(len(normalized["method_steps"]), 6)
+        self.assertEqual(len(normalized["experimental_support"]), 6)
+        self.assertEqual(len(normalized["limitations_and_questions"]), 5)
+        self.assertEqual(normalized["research_map"]["research_problem"], normalized["research_problem"])
+        self.assertEqual(normalized["research_map"]["method_steps"], normalized["method_steps"])
+
     def test_llm_reading_map_failure_does_not_expose_fallback(self) -> None:
         fallback = {
             "paper_type": "survey",
@@ -568,7 +586,7 @@ More results.
 
         self.assertEqual(result["status"], "llm_done")
         self.assertEqual(len(model.calls), 2)
-        self.assertEqual({call["max_tokens"] for call in model.calls}, {3500, 5000})
+        self.assertEqual({call["max_tokens"] for call in model.calls}, {3500, 8000})
         for call in model.calls:
             self.assertGreater(call["timeout"], 0)
             self.assertEqual(call["response_format"], {"type": "json_object"})
