@@ -530,7 +530,7 @@ select option { color: #07120f; }
 .composer-row { margin-top: .45rem; }
 .composer-row span { max-width: 210px; color: var(--muted); font-size: .68rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.reading-map-panel { margin-top: .8rem; min-height: 440px; }
+.reading-map-panel { margin-top: .8rem; min-height: 440px; scroll-margin-top: 76px; }
 .reading-map-header { padding: 1rem; border-bottom: 1px solid var(--line); }
 .reading-map-layout { display: grid; grid-template-columns: minmax(0,1fr) 300px; min-height: 350px; }
 .reading-map-shell { position: relative; min-height: 350px; border-right: 1px solid var(--line); overflow: hidden; }

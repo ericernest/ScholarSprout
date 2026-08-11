@@ -78,7 +78,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "pdf-frame",
             "analysis-feed",
             "reading-map-grid",
+            "reading-map-panel",
+            "reading-map-kicker",
+            "reading-map-title",
             "reading-map-status-copy",
+            "research-overview-button",
             "regenerate-reading-map-button",
             "fork-panel",
             "pdf-fit-select",
@@ -97,6 +101,31 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('id="paper-intake" class="intake-view" hidden', html)
         self.assertIn('class="paper-reading-body is-booting"', html)
         self.assertNotIn('id="new-paper-button"', html)
+
+    def test_research_overview_is_named_and_reachable_from_workbench_header(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="research-overview-button"', html)
+        self.assertIn('id="reading-map-title">研究总览</h2>', html)
+        self.assertIn('$("reading-map-panel")?.scrollIntoView', javascript)
+        self.assertIn('$("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览"', javascript)
+        self.assertIn('"研究总览与智能索引"', javascript)
+        self.assertIn('`正在并行生成${taskLabel}，请稍候。`', javascript)
+        self.assertIn('title: "研究问题"', javascript)
+        self.assertIn('title: "核心方法"', javascript)
+
+    def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function isReferenceSection", javascript)
+        self.assertIn("参考文献章节按设计不生成智能索引卡片", javascript)
+        self.assertIn(".filter((section) => !isReferenceSection(section))", javascript)
+        self.assertIn("if (isReferenceSection(section)) jumpToPdfPage", javascript)
+        self.assertIn("if (renderedGuide) body.append(renderedGuide)", javascript)
+        self.assertIn("if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null", javascript)
+        self.assertIn("该条目只有目录标题，没有提取到独立正文", javascript)
+        self.assertNotIn("智能索引正在生成中，完成前不会展示启发式 fallback 或检索片段。", javascript)
 
     def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")

@@ -23,7 +23,7 @@ from runtime.agent_runner import AgentRunResult, run_agent_detailed
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
-from handlers.paper_reading.postprocessors.common import extract_json_object
+from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,25 @@ SURVEY_MERGE_PROMPT_LIMIT = 60000
 SURVEY_CARD_SECTION_TEXT_LIMIT = 12000
 SURVEY_CARD_CONTEXT_LIMIT = 26000
 SURVEY_INTRO_CONTEXT_LIMIT = 18000
+RESEARCH_OVERVIEW_MAX_TOKENS = 8000
+RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS = 120.0
+RESEARCH_GUIDE_MAX_TOKENS = 3500
+RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS = 75.0
+RESEARCH_GUIDE_MAX_WORKERS = 4
+RESEARCH_GUIDE_SECTIONS_PER_REQUEST = 3
+RESEARCH_GUIDE_SECTION_LIMIT = 120
+RESEARCH_GUIDE_SECTION_TEXT_LIMIT = 7000
+SURVEY_PLAN_MAX_TOKENS = 5000
+SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS = 75.0
+SURVEY_CARD_MAX_TOKENS = 4000
+SURVEY_CARD_REQUEST_TIMEOUT_SECONDS = 75.0
+SURVEY_CARD_MAX_WORKERS = 4
+SURVEY_MAP_TASK_LIMIT = 12
+SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
+SURVEY_FACT_MAX_TOKENS = 4500
+SURVEY_FACT_REQUEST_TIMEOUT_SECONDS = 75.0
+SURVEY_MERGE_MAX_TOKENS = 7000
+SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS = 90.0
 SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
 SURVEY_MAP_GROUP_KEYS = (
     "field_overview",
@@ -52,6 +71,70 @@ SURVEY_MAP_GROUP_KEYS = (
     "applications",
     "open_challenges",
 )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _reading_map_json_chat(
+    model: Any,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int,
+    timeout: float,
+) -> Any:
+    """Run one bounded JSON request; an explicit timeout disables SDK retries."""
+    return model.chat(
+        messages=messages,
+        response_format={"type": "json_object"},
+        disable_thinking=True,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=0,
+    )
+
+
+def _reading_map_response_json(
+    response: Any,
+    *,
+    label: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    choices = getattr(response, "choices", None) or (
+        response.get("choices", []) if isinstance(response, dict) else []
+    )
+    if not choices:
+        raise ValueError(f"{label}未返回 choices")
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None) or (
+        choice.get("finish_reason") if isinstance(choice, dict) else None
+    )
+    message = getattr(choice, "message", None) or (
+        choice.get("message", {}) if isinstance(choice, dict) else {}
+    )
+    content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text") or "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    content = str(content or "")
+    parsed = extract_json_object(content)
+    if parsed is not None:
+        return parsed
+
+    normalized_reason = str(finish_reason or "unknown").lower()
+    diagnostics = f"finish_reason={normalized_reason}, content_chars={len(content)}"
+    if normalized_reason in {"length", "max_tokens"}:
+        logger.warning("Truncated JSON for %s (%s)", label, diagnostics)
+        raise ValueError(f"{label}输出在 max_tokens={max_tokens} 处被截断（{diagnostics}）")
+    repaired = repair_json_object(content)
+    if repaired is not None:
+        logger.warning("Repaired malformed JSON for %s (%s)", label, diagnostics)
+        return repaired
+    logger.warning("Invalid JSON for %s (%s)", label, diagnostics)
+    raise ValueError(f"{label}未返回有效 JSON（{diagnostics}）")
 
 
 # ── 主入口 ──
@@ -242,7 +325,7 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
         pdf_url=request.pdf_url,
         metadata=request.metadata,
     )
-    storage.save_upload(paper_id, pdf_bytes)
+    storage.save_upload(paper_id, pdf_bytes, sha256=file_hash)
     storage.save_paper(paper_id, quick_payload)
     if research_store is not None:
         research_store.ensure_library_item(paper_id, reading_status="unread")
@@ -442,6 +525,10 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         payload["reading_map_progress"] = 0
         payload["reading_map_error"] = ""
         payload["reading_map_generation_id"] = generation_id
+        generation_started_at = _utc_now_iso()
+        payload["reading_map_started_at"] = generation_started_at
+        payload["reading_map_heartbeat_at"] = generation_started_at
+        payload.pop("reading_map_completed_at", None)
         _persist_figure_assets(storage, paper_id, metadata.figures)
         _persist_table_assets(storage, paper_id, metadata.tables)
         _persist_layout_assets(storage, paper_id, metadata.layout_elements)
@@ -477,6 +564,9 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
         elif latest["reading_map_status"] in {"failed", "failed_partial"}:
             latest["reading_map_phase"] = "failed"
             latest["reading_map_error"] = payload["reading_map"].get("error", "")
+        completed_at = _utc_now_iso()
+        latest["reading_map_heartbeat_at"] = completed_at
+        latest["reading_map_completed_at"] = completed_at
         storage.save_paper(paper_id, latest)
     except Exception as error:
         logger.exception("Background PDF parse failed for %s", paper_id)
@@ -531,6 +621,44 @@ def _schedule_reading_map_generation(
     thread.start()
 
 
+def resume_pending_reading_map_generations(app_state: Any) -> int:
+    """Requeue persisted in-flight maps after a service restart."""
+    storage = getattr(app_state, "paper_storage", None)
+    if storage is None:
+        return 0
+    try:
+        papers = storage.list_paper_documents()
+    except Exception as error:
+        logger.warning("Failed to inspect persisted reading maps during startup: %s", error)
+        return 0
+
+    resumed = 0
+    for paper in papers:
+        if paper.get("reading_map_status") != "llm_running" or not paper.get("sections"):
+            continue
+        paper_id = str(paper.get("paper_id") or "")
+        if not paper_id:
+            continue
+        generation_id = str(paper.get("reading_map_generation_id") or uuid4())
+        now = _utc_now_iso()
+        paper["reading_map_generation_id"] = generation_id
+        paper["reading_map_started_at"] = paper.get("reading_map_started_at") or now
+        paper["reading_map_heartbeat_at"] = now
+        paper["reading_map_resumed_at"] = now
+        paper["reading_map_phase"] = "queued"
+        paper["reading_map_error"] = ""
+        storage.save_paper(paper_id, paper)
+        _schedule_reading_map_generation(
+            app_state,
+            paper_id,
+            generation_id=generation_id,
+        )
+        resumed += 1
+    if resumed:
+        logger.info("Requeued %s persisted reading-map generation task(s)", resumed)
+    return resumed
+
+
 def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id: str = "") -> None:
     storage = getattr(app_state, "paper_storage", None)
     if storage is None:
@@ -572,6 +700,9 @@ def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id:
         elif paper["reading_map_status"] in {"failed", "failed_partial"}:
             paper["reading_map_phase"] = "failed"
             paper["reading_map_error"] = paper["reading_map"].get("error", "")
+        completed_at = _utc_now_iso()
+        paper["reading_map_heartbeat_at"] = completed_at
+        paper["reading_map_completed_at"] = completed_at
         storage.save_paper(paper_id, paper)
     except Exception as error:
         logger.exception("Reading map generation failed for %s", paper_id)
@@ -953,6 +1084,10 @@ def _handle_regenerate_reading_map(request: PaperReadingRequest, app_state: Any)
     paper["reading_map_progress"] = 0
     paper["reading_map_error"] = ""
     paper["reading_map_generation_id"] = generation_id
+    generation_started_at = _utc_now_iso()
+    paper["reading_map_started_at"] = generation_started_at
+    paper["reading_map_heartbeat_at"] = generation_started_at
+    paper.pop("reading_map_completed_at", None)
     storage.save_paper(paper_id, paper)
     _schedule_reading_map_generation(app_state, paper_id, generation_id=generation_id, force=True)
     return _ok("regenerate_reading_map", {
@@ -963,6 +1098,8 @@ def _handle_regenerate_reading_map(request: PaperReadingRequest, app_state: Any)
         "reading_map_progress": 0,
         "reading_map_error": "",
         "reading_map_card_progress": {},
+        "reading_map_started_at": paper["reading_map_started_at"],
+        "reading_map_heartbeat_at": paper["reading_map_heartbeat_at"],
         "message": "导读地图与智能索引已重新提交生成。",
     })
 
@@ -1012,6 +1149,9 @@ def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> di
         "reading_map_progress": paper.get("reading_map_progress", 0),
         "reading_map_error": paper.get("reading_map_error", reading_map.get("error", "")),
         "reading_map_card_progress": card_progress,
+        "reading_map_started_at": paper.get("reading_map_started_at", ""),
+        "reading_map_heartbeat_at": paper.get("reading_map_heartbeat_at", ""),
+        "reading_map_completed_at": paper.get("reading_map_completed_at", ""),
         "text_layer_available": text_layer_available,
         "parse_quality": parse_quality,
         "parse_status": paper.get("parse_status", ""),
@@ -1462,37 +1602,261 @@ def _build_llm_reading_map(
     fallback: dict[str, Any],
     model: Any | None,
     skill_registry: Any | None,
+    storage: Any | None = None,
+    paper_id: str = "",
+    generation_id: str = "",
 ) -> dict[str, Any]:
     if model is None:
         return _failed_reading_map("LLM 模型未初始化，无法生成导读地图与智能索引。")
-    prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
+    sections = _research_reading_sections(paper, fallback)
+    if not sections:
+        return _failed_reading_map("未找到可用于导读地图生成的章节正文。")
+
+    groups = [
+        sections[index:index + RESEARCH_GUIDE_SECTIONS_PER_REQUEST]
+        for index in range(0, len(sections), RESEARCH_GUIDE_SECTIONS_PER_REQUEST)
+    ]
+    task_total = 1 + len(groups)
+    if not _save_reading_map_phase(
+        storage,
+        paper_id,
+        generation_id,
+        phase="generating_research_map",
+        progress=5,
+        artifacts={
+            "research_generation_progress": {
+                "total": task_total,
+                "completed": 0,
+                "failed": 0,
+                "sections_total": len(sections),
+            }
+        },
+    ):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+
+    overview: dict[str, Any] | None = None
+    guides_by_id: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    completed = 0
+    executor = ThreadPoolExecutor(max_workers=min(RESEARCH_GUIDE_MAX_WORKERS, task_total))
+    stop_without_waiting = False
     try:
-        response = model.chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a paper-reading map builder for novice researchers. "
-                        "Return only a valid JSON object that follows the requested schema."
-                    ),
+        future_to_label: dict[Any, str] = {
+            executor.submit(
+                _generate_research_overview,
+                model,
+                paper,
+                fallback,
+                skill_registry,
+            ): "研究总览"
+        }
+        for index, group in enumerate(groups, start=1):
+            future_to_label[
+                executor.submit(_generate_research_section_guide_group, model, paper, group, fallback)
+            ] = f"章节导读组 {index}"
+
+        for future in as_completed(future_to_label):
+            if not _generation_is_current(storage, paper_id, generation_id):
+                stop_without_waiting = True
+                for pending_future in future_to_label:
+                    pending_future.cancel()
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+            label = future_to_label[future]
+            try:
+                result = future.result()
+                if label == "研究总览":
+                    overview = result
+                else:
+                    for guide in result:
+                        section_id = str(guide.get("section_id") or "")
+                        if section_id:
+                            guides_by_id[section_id] = guide
+            except Exception as error:
+                logger.warning("Research reading map task failed (%s): %s", label, error)
+                failures.append(f"{label}：{error}")
+            completed += 1
+            _save_reading_map_phase(
+                storage,
+                paper_id,
+                generation_id,
+                phase="generating_research_map",
+                progress=min(95, 5 + int(completed / task_total * 90)),
+                artifacts={
+                    "research_generation_progress": {
+                        "total": task_total,
+                        "completed": completed,
+                        "failed": len(failures),
+                        "sections_total": len(sections),
+                        "sections_generated": len(guides_by_id),
+                    }
                 },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=5000,
-            timeout=120.0,
-        )
-        content = response.choices[0].message.content or ""
-        parsed = extract_json_object(content)
-        if not parsed:
-            return _failed_reading_map("LLM 未返回有效 JSON，导读地图与智能索引生成失败。")
-        merged = _normalize_reading_map(parsed, _llm_visible_base(fallback))
-        merged["status"] = "llm_done"
-        if not _reading_map_has_visible_content(merged):
-            return _failed_reading_map("LLM 返回结果缺少可展示内容，导读地图与智能索引生成失败。")
-        return merged
-    except Exception as error:
-        logger.warning("LLM reading map extraction failed: %s", error)
-        return _failed_reading_map(f"LLM 调用失败：{error}")
+            )
+    finally:
+        executor.shutdown(wait=not stop_without_waiting, cancel_futures=stop_without_waiting)
+
+    if overview is None:
+        detail = next((item for item in failures if item.startswith("研究总览")), "研究总览未生成")
+        return _failed_reading_map(f"导读地图生成失败：{detail}")
+
+    merged = _normalize_reading_map(overview, _llm_visible_base(fallback))
+    fallback_guides = {
+        str(guide.get("section_id") or ""): guide
+        for guide in _build_heuristic_section_guides(sections, str(merged.get("paper_type") or "research"))
+        if isinstance(guide, dict) and guide.get("section_id")
+    }
+    generated_count = len(guides_by_id)
+    ordered_guides: list[dict[str, Any]] = []
+    fallback_count = 0
+    for section in sections:
+        section_id = str(section.get("section_id") or "")
+        guide = guides_by_id.get(section_id)
+        if guide is None:
+            guide = fallback_guides.get(section_id)
+            fallback_count += int(guide is not None)
+            if guide is not None:
+                guide = dict(guide)
+                guide["fallback_generated"] = True
+        if guide is not None:
+            ordered_guides.append(guide)
+    merged["section_guides"] = _normalize_section_guides(ordered_guides)
+    merged["status"] = "llm_done"
+    merged["partial"] = bool(failures or fallback_count)
+    merged["generation_artifacts_summary"] = {
+        "requests_total": task_total,
+        "requests_failed": len(failures),
+        "sections_total": len(sections),
+        "sections_llm_generated": generated_count,
+        "sections_fallback_generated": fallback_count,
+        "max_workers": min(RESEARCH_GUIDE_MAX_WORKERS, task_total),
+    }
+    if failures or fallback_count:
+        merged["generation_warning"] = "部分章节导读由本地章节内容补全；研究总览和其余智能索引可正常使用。"
+    if not _reading_map_has_visible_content(merged):
+        return _failed_reading_map("LLM 返回结果缺少可展示内容，导读地图与智能索引生成失败。")
+    return merged
+
+
+def _generate_research_overview(
+    model: Any,
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+    skill_registry: Any | None,
+) -> dict[str, Any]:
+    response = _reading_map_json_chat(
+        model,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a paper-reading map builder for novice researchers. "
+                    "Return only a valid JSON object that follows the requested schema."
+                ),
+            },
+            {"role": "user", "content": _build_reading_map_prompt(paper, fallback, skill_registry)},
+        ],
+        max_tokens=RESEARCH_OVERVIEW_MAX_TOKENS,
+        timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
+    )
+    return _reading_map_response_json(
+        response,
+        label="研究总览",
+        max_tokens=RESEARCH_OVERVIEW_MAX_TOKENS,
+    )
+
+
+def _research_reading_sections(
+    paper: dict[str, Any],
+    fallback: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        section
+        for section in (paper.get("sections", []) or [])
+        if isinstance(section, dict)
+        and str(section.get("content") or "").strip()
+        and _section_role(section, str(fallback.get("paper_type") or "research")) != "references"
+    ][:RESEARCH_GUIDE_SECTION_LIMIT]
+
+
+def _generate_research_section_guide_group(
+    model: Any,
+    paper: dict[str, Any],
+    sections: list[dict[str, Any]],
+    fallback: dict[str, Any],
+) -> list[dict[str, Any]]:
+    payload = []
+    expected: dict[str, dict[str, Any]] = {}
+    paper_type = str(fallback.get("paper_type") or "research")
+    for index, section in enumerate(sections, start=1):
+        section_id = str(section.get("section_id") or f"section-{index}")
+        expected[section_id] = section
+        payload.append({
+            "section_id": section_id,
+            "title": str(section.get("title") or f"Section {index}"),
+            "section_role_hint": _section_role(section, paper_type),
+            "start_page": section.get("start_page"),
+            "end_page": section.get("end_page"),
+            "text": _compact_section_for_card(
+                section,
+                RESEARCH_GUIDE_SECTION_TEXT_LIMIT,
+                {"group_key": "research_section_guide"},
+            ),
+        })
+    prompt = (
+        "Generate novice-oriented smart-index guides for exactly the supplied sections. Return JSON only. "
+        "Do not add sections and do not copy long paragraphs. Each section needs 1-3 concise, substantive cards. "
+        "Use source_sections with section_id, title, and page; do not invent facts. Write Chinese content.\n"
+        "Schema:\n"
+        '{"section_guides": [{"section_id": "", "title": "", "section_role": "", '
+        '"read_priority": "high|medium|low", "novice_summary": "", '
+        '"cards": [{"card_type": "abstract_takeaway|intro_insight|problem_formulation|method_architecture|algorithm_steps|innovation_detail|experiment_dataset|experiment_design|result_interpretation|limitation_reflection|reading_route", '
+        '"title": "", "content": {"core_message": "", "why_it_matters": "", "key_points": [], "connections": [], "next_reading": ""}, "source_sections": []}], '
+        '"main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", '
+        '"datasets": [], "baselines": [], "metrics": [], "novice_focus": "", "source_page": null}]}\n\n'
+        f"Paper title: {paper.get('title', '')}\n"
+        f"Abstract: {str(paper.get('abstract') or '')[:1200]}\n"
+        f"Sections:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for research section guides."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
+        timeout=RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS,
+    )
+    parsed = _reading_map_response_json(
+        response,
+        label="章节导读",
+        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
+    )
+    raw_guides = parsed.get("section_guides")
+    if not isinstance(raw_guides, list):
+        raw_guides = [parsed] if parsed.get("section_id") else []
+    normalized: list[dict[str, Any]] = []
+    for guide in raw_guides:
+        if not isinstance(guide, dict):
+            continue
+        section_id = str(guide.get("section_id") or "")
+        section = expected.get(section_id)
+        if section is None:
+            continue
+        guide = dict(guide)
+        guide["title"] = guide.get("title") or section.get("title", "")
+        guide["section_role"] = guide.get("section_role") or _section_role(section, paper_type)
+        guide["read_priority"] = guide.get("read_priority") or "medium"
+        guide["source_page"] = guide.get("source_page") or section.get("start_page")
+        source_ref = _source_ref(section)
+        if not guide.get("source_sections"):
+            guide["source_sections"] = [source_ref]
+        for card in guide.get("cards") if isinstance(guide.get("cards"), list) else []:
+            if isinstance(card, dict) and not card.get("source_sections"):
+                card["source_sections"] = [source_ref]
+        normalized.append(guide)
+    normalized = _normalize_section_guides(normalized)
+    if not normalized:
+        raise ValueError("章节导读 JSON 中没有匹配输入章节的内容")
+    return normalized
 
 
 def _generate_reading_map_for_paper(
@@ -1520,6 +1884,9 @@ def _generate_reading_map_for_paper(
         fallback=fallback,
         model=model,
         skill_registry=skill_registry,
+        storage=storage,
+        paper_id=paper_id or str(paper.get("paper_id") or ""),
+        generation_id=generation_id,
     )
 
 
@@ -1587,11 +1954,9 @@ def _build_survey_plan_card_reading_map(
 
     completed = 0
     failed = 0
+    pending_tasks: list[tuple[dict[str, Any], str]] = []
     for task in tasks:
-        if not _generation_is_current(storage, paper_id, generation_id):
-            return _failed_reading_map("生成任务已被新一轮请求替换。")
         task_id = str(task.get("task_id") or "")
-        current_title = str(task.get("title") or task_id)
         section_text_hash = _survey_task_section_text_hash(task, paper)
         cached = card_results.get(task_id) if isinstance(card_results, dict) else None
         if (
@@ -1604,8 +1969,28 @@ def _build_survey_plan_card_reading_map(
         ):
             completed += 1
         else:
+            pending_tasks.append((task, section_text_hash))
+
+    if not _generation_is_current(storage, paper_id, generation_id):
+        return _failed_reading_map("生成任务已被新一轮请求替换。")
+    executor = ThreadPoolExecutor(max_workers=min(SURVEY_CARD_MAX_WORKERS, max(1, len(pending_tasks))))
+    stop_without_waiting = False
+    try:
+        future_to_task = {
+            executor.submit(_generate_survey_card, model, paper, task, skill_instructions): (task, section_text_hash)
+            for task, section_text_hash in pending_tasks
+        }
+        for future in as_completed(future_to_task):
+            if not _generation_is_current(storage, paper_id, generation_id):
+                stop_without_waiting = True
+                for pending_future in future_to_task:
+                    pending_future.cancel()
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+            task, section_text_hash = future_to_task[future]
+            task_id = str(task.get("task_id") or "")
+            current_title = str(task.get("title") or task_id)
             try:
-                result = _generate_survey_card(model, paper, task, skill_instructions)
+                result = future.result()
                 card_results[task_id] = {
                     "status": "ok",
                     "section_text_hash": section_text_hash,
@@ -1626,30 +2011,35 @@ def _build_survey_plan_card_reading_map(
                     "error": str(error),
                 }
 
-        partial_map = _build_survey_reading_map_from_card_results(
-            paper=paper,
-            fallback=fallback,
-            plan=plan,
-            card_results=card_results,
-            status="llm_running",
-            partial=True,
-        )
-        if not _save_survey_partial_reading_map(
-            storage,
-            paper_id,
-            generation_id,
-            reading_map=partial_map,
-            phase="generating_cards",
-            progress=_survey_card_generation_progress(completed + failed, len(tasks)),
-            artifacts={
-                "survey_section_manifest": manifest,
-                "survey_card_plan": plan,
-                "survey_card_results": card_results,
-                "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, current_title),
-                "survey_skill_hash": skill_hash,
-            },
-        ):
-            return _failed_reading_map("生成任务已被新一轮请求替换。")
+            partial_map = _build_survey_reading_map_from_card_results(
+                paper=paper,
+                fallback=fallback,
+                plan=plan,
+                card_results=card_results,
+                status="llm_running",
+                partial=True,
+            )
+            if not _save_survey_partial_reading_map(
+                storage,
+                paper_id,
+                generation_id,
+                reading_map=partial_map,
+                phase="generating_cards",
+                progress=_survey_card_generation_progress(completed + failed, len(tasks)),
+                artifacts={
+                    "survey_section_manifest": manifest,
+                    "survey_card_plan": plan,
+                    "survey_card_results": card_results,
+                    "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, current_title),
+                    "survey_skill_hash": skill_hash,
+                },
+            ):
+                stop_without_waiting = True
+                for pending_future in future_to_task:
+                    pending_future.cancel()
+                return _failed_reading_map("生成任务已被新一轮请求替换。")
+    finally:
+        executor.shutdown(wait=not stop_without_waiting, cancel_futures=stop_without_waiting)
 
     if not _save_reading_map_phase(storage, paper_id, generation_id, phase="finalizing_map", progress=95):
         return _failed_reading_map("生成任务已被新一轮请求替换。")
@@ -1914,19 +2304,26 @@ def _plan_survey_cards(
         "For representative_methods, prioritize sections with citation/year/method/table/benchmark/comparison signals and set expected_output_fields to paper_title, year, method_name, route, problem_addressed, core_mechanism, specific_solution, improves_on, limitations, evidence, source_sections. "
         "For datasets, set expected_output_fields to name, task, content, structure, scale, metrics, used_by_methods, evidence, source_sections. "
         "Create section_guide_tasks for important non-reference sections; each should target 2-4 cards. "
-        "Keep map_tasks <= 24 and section_guide_tasks <= 80. Write Chinese titles/goals.\n\n"
+        f"Keep map_tasks <= {SURVEY_MAP_TASK_LIMIT} and section_guide_tasks <= {SURVEY_SECTION_GUIDE_TASK_LIMIT}. "
+        "Prefer high-value coverage over many small tasks. Write Chinese titles/goals.\n\n"
         f"Paper title: {paper.get('title', '')}\n"
         f"Abstract: {str(paper.get('abstract') or '')[:1600]}\n"
         f"Section manifest:\n{json.dumps(manifest, ensure_ascii=False)}"
     )
-    response = model.chat(messages=[
-        {"role": "system", "content": "Return only valid JSON for survey card planning."},
-        {"role": "user", "content": prompt},
-    ])
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError("No valid JSON while planning survey cards")
-    return parsed
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for survey card planning."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=SURVEY_PLAN_MAX_TOKENS,
+        timeout=SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS,
+    )
+    return _reading_map_response_json(
+        response,
+        label="综述卡片规划",
+        max_tokens=SURVEY_PLAN_MAX_TOKENS,
+    )
 
 
 def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2000,11 +2397,28 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
         task["task_hash"] = _survey_task_hash(task)
         tasks.append(task)
 
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+
+    def prioritized(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        return sorted(
+            items,
+            key=lambda task: priority_order.get(str(task.get("priority") or "medium"), 1),
+        )[:limit]
+
+    map_tasks = prioritized(
+        [task for task in tasks if task.get("target") == "survey_map"],
+        SURVEY_MAP_TASK_LIMIT,
+    )
+    section_guide_tasks = prioritized(
+        [task for task in tasks if task.get("target") == "section_guide"],
+        SURVEY_SECTION_GUIDE_TASK_LIMIT,
+    )
+    bounded_tasks = [*map_tasks, *section_guide_tasks]
     return {
         "version": SURVEY_CARD_PLAN_VERSION,
-        "map_tasks_count": sum(1 for task in tasks if task.get("target") == "survey_map"),
-        "section_guide_tasks_count": sum(1 for task in tasks if task.get("target") == "section_guide"),
-        "tasks": tasks[:120],
+        "map_tasks_count": len(map_tasks),
+        "section_guide_tasks_count": len(section_guide_tasks),
+        "tasks": bounded_tasks,
     }
 
 
@@ -2255,13 +2669,20 @@ def _generate_survey_card(
         f"Intro context:\n{intro_context}\n\n"
         f"Selected section text:\n{selected_context}"
     )
-    response = model.chat(messages=[
-        {"role": "system", "content": "Return only valid JSON for one survey card task."},
-        {"role": "user", "content": prompt},
-    ])
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError(f"No valid JSON for {task.get('task_id')}")
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for one survey card task."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=SURVEY_CARD_MAX_TOKENS,
+        timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
+    )
+    parsed = _reading_map_response_json(
+        response,
+        label=f"综述卡片 {task.get('task_id')}",
+        max_tokens=SURVEY_CARD_MAX_TOKENS,
+    )
     return _normalize_survey_card_result(parsed, task, sections)
 
 
@@ -2531,6 +2952,10 @@ def _save_survey_partial_reading_map(
     paper["reading_map_phase"] = phase
     paper["reading_map_progress"] = int(progress)
     paper["reading_map_error"] = error
+    heartbeat_at = _utc_now_iso()
+    paper["reading_map_heartbeat_at"] = heartbeat_at
+    if phase in {"failed", "failed_partial", "llm_done"}:
+        paper["reading_map_completed_at"] = heartbeat_at
     if artifacts:
         existing = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
         existing.update(artifacts)
@@ -2797,6 +3222,10 @@ def _save_reading_map_phase(
     paper["reading_map_phase"] = phase
     paper["reading_map_progress"] = int(progress)
     paper["reading_map_error"] = error
+    heartbeat_at = _utc_now_iso()
+    paper["reading_map_heartbeat_at"] = heartbeat_at
+    if phase in {"failed", "failed_partial", "llm_done"}:
+        paper["reading_map_completed_at"] = heartbeat_at
     if artifacts:
         existing = paper.get("reading_map_artifacts") if isinstance(paper.get("reading_map_artifacts"), dict) else {}
         existing.update(artifacts)
@@ -2825,6 +3254,9 @@ def _persist_failed_reading_map(
     paper["reading_map_phase"] = "failed"
     paper["reading_map_progress"] = int(paper.get("reading_map_progress") or 0)
     paper["reading_map_error"] = message
+    completed_at = _utc_now_iso()
+    paper["reading_map_heartbeat_at"] = completed_at
+    paper["reading_map_completed_at"] = completed_at
     storage.save_paper(paper_id, paper)
 
 
@@ -2865,13 +3297,20 @@ def _extract_survey_chunk_facts(
         f"Chunk metadata: {json.dumps({k: chunk.get(k) for k in ('chunk_id','section_id','title','start_page','end_page','section_role_hint')}, ensure_ascii=False)}\n"
         f"Chunk text:\n{chunk.get('text', '')}"
     )
-    response = model.chat(messages=[
-        {"role": "system", "content": "Return only valid JSON for survey fact extraction."},
-        {"role": "user", "content": prompt},
-    ])
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError(f"No valid JSON for {chunk.get('chunk_id')}")
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for survey fact extraction."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=SURVEY_FACT_MAX_TOKENS,
+        timeout=SURVEY_FACT_REQUEST_TIMEOUT_SECONDS,
+    )
+    parsed = _reading_map_response_json(
+        response,
+        label=f"综述事实 {chunk.get('chunk_id')}",
+        max_tokens=SURVEY_FACT_MAX_TOKENS,
+    )
     source = _chunk_source_ref(chunk)
     parsed["chunk_id"] = chunk.get("chunk_id", "")
     parsed["section_id"] = chunk.get("section_id", "")
@@ -2912,14 +3351,20 @@ def _merge_survey_facts(
         f"Paper: {paper.get('title', '')}\n"
         f"Extracted facts:\n{compact}"
     )
-    response = model.chat(messages=[
-        {"role": "system", "content": "Return only valid JSON for survey fact merging."},
-        {"role": "user", "content": prompt},
-    ])
-    parsed = extract_json_object(response.choices[0].message.content or "")
-    if not parsed:
-        raise ValueError("No valid JSON while merging survey facts")
-    return parsed
+    response = _reading_map_json_chat(
+        model,
+        [
+            {"role": "system", "content": "Return only valid JSON for survey fact merging."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=SURVEY_MERGE_MAX_TOKENS,
+        timeout=SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS,
+    )
+    return _reading_map_response_json(
+        response,
+        label="综述事实合并",
+        max_tokens=SURVEY_MERGE_MAX_TOKENS,
+    )
 
 
 def _build_survey_reading_map_from_merged_facts(
@@ -3294,27 +3739,27 @@ def _build_reading_map_prompt(
     }
     return (
         f"{skill_instructions}\n\n"
-        "Build a deep novice-oriented reading_map and smart_index for this paper. "
-        "First decide paper_type: research, survey, theory, or system. "
-        "Use survey when the paper primarily summarizes a field, taxonomy, datasets, benchmarks, challenges, or trends.\n"
+        "Build a deep novice-oriented reading_map overview for this non-survey paper. "
+        "Decide paper_type as research, theory, or system; keep map_variant as research.\n"
         "The output must be JSON only. Use this schema exactly, keeping legacy research fields for compatibility:\n"
         "{\n"
-        '  "paper_type": "research|survey|theory|system",\n'
-        '  "map_variant": "research|survey",\n'
+        '  "paper_type": "research|theory|system",\n'
+        '  "map_variant": "research",\n'
         '  "prerequisite_card": {"concepts": [{"name": "", "why_needed": "", "learn_first": [], "difficulty": "easy|medium|hard"}], "baseline_papers": [{"title": "", "url": "", "relationship": "direct_baseline|strongest_compared_baseline|foundational_work|survey_anchor|dataset_or_benchmark_paper", "why_read": ""}], "reading_order": []},\n'
-        '  "research_map": {"research_problem": {}, "core_method": {}, "method_steps": [], "experimental_support": [], "limitations_and_questions": []},\n'
-        '  "survey_map": {"field_overview": {"field": "", "core_task": "", "why_now": "", "novice_takeaway": "", "source_sections": []}, "development_timeline": [], "pain_points": [], "taxonomy": [], "technical_routes": [], "representative_methods": [], "datasets": [], "evaluation_protocols": [], "applications": [], "open_challenges": [], "reading_strategy": []},\n'
+        '  "research_map": {},\n'
+        '  "survey_map": {},\n'
         '  "research_problem": {"title": "", "one_sentence": "", "why_it_matters": "", "novice_takeaway": "", "source_sections": []},\n'
         '  "core_method": {"name": "", "one_sentence": "", "main_idea": "", "technical_route": "", "source_sections": []},\n'
         '  "method_steps": [{"name": "", "goal": "", "input": "", "operation": "", "output": "", "why_needed": "", "source_sections": []}],\n'
         '  "experimental_support": [{"claim": "", "evidence": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "protocol": "", "figures_or_tables": [], "source_sections": []}],\n'
         '  "limitations_and_questions": [{"limitation": "", "why_it_matters": "", "novice_question": "", "source_sections": []}],\n'
-        '  "section_guides": [{"section_id": "", "title": "", "section_role": "", "read_priority": "high|medium|low", "novice_summary": "", "cards": [{"card_type": "abstract_takeaway|intro_insight|problem_formulation|method_architecture|algorithm_steps|innovation_detail|experiment_dataset|experiment_design|result_interpretation|limitation_reflection|field_timeline|taxonomy_node|route_comparison|paper_method_table|dataset_catalog|benchmark_protocol|challenge_card|application_landscape|future_direction|reading_route", "title": "", "content": {}, "source_sections": []}], "main_content": "", "core_idea": "", "technical_route": "", "implementation_plan": "", "datasets": [], "dataset_format": "", "experiment_setting": "", "baselines": [], "metrics": [], "experiment_protocol": "", "novice_focus": "", "source_page": null}]\n'
+        '  "section_guides": []\n'
         "}\n"
-        "Rules: keep each field compact but substantive; do not copy long paragraphs; "
-        "for survey papers, prioritize development_timeline, pain_points, taxonomy, technical_routes, representative_methods with concrete paper titles and methods, datasets, evaluation_protocols, applications, and open_challenges; "
+        "Rules: keep each field compact but substantive; do not copy long paragraphs; do not duplicate the top-level research fields inside research_map; "
         "for research papers, prioritize problem, insight, method structure, experiments, datasets, baselines, metrics, limitations; "
-        "section_guides must cover every input section except references when possible, and each guide should choose 2-5 cards suited to that section; "
+        "output 3-6 prerequisite concepts, at most 5 baseline papers, at most 6 reading-order items, 3-6 method_steps, 3-6 experimental_support items, and 3-5 limitations_and_questions; "
+        "keep each explanatory string within 180 Chinese characters, each nested name/metric/dataset/baseline list within 8 items, and each source_sections list within 3 items; "
+        "leave section_guides empty because section guides are generated by separate bounded requests; "
         "source_sections entries should be objects with section_id, title, page when possible; "
         "paper links may be empty if unavailable; do not invent URLs; "
         "write Chinese content for readers.\n\n"
@@ -3329,10 +3774,23 @@ def _normalize_reading_map(parsed: dict[str, Any], fallback: dict[str, Any]) -> 
     map_variant = str(parsed.get("map_variant") or fallback.get("map_variant") or ("survey" if paper_type == "survey" else "research"))
     if map_variant not in {"research", "survey"}:
         map_variant = "survey" if paper_type == "survey" else "research"
-    research_map = parsed.get("research_map") if isinstance(parsed.get("research_map"), dict) else fallback.get("research_map", {})
+    research_map_source = parsed.get("research_map") if isinstance(parsed.get("research_map"), dict) else fallback.get("research_map", {})
+    if not isinstance(research_map_source, dict):
+        research_map_source = {}
     survey_map = parsed.get("survey_map") if isinstance(parsed.get("survey_map"), dict) else fallback.get("survey_map", {})
-    research_problem = parsed.get("research_problem") or research_map.get("research_problem") or fallback.get("research_problem", {})
-    core_method = parsed.get("core_method") or research_map.get("core_method") or fallback.get("core_method", {})
+    research_problem = parsed.get("research_problem") or research_map_source.get("research_problem") or fallback.get("research_problem", {})
+    core_method = parsed.get("core_method") or research_map_source.get("core_method") or fallback.get("core_method", {})
+    method_steps = _list_or_fallback(parsed.get("method_steps") or research_map_source.get("method_steps"), fallback.get("method_steps", []), 6)
+    experimental_support = _list_or_fallback(parsed.get("experimental_support") or research_map_source.get("experimental_support"), fallback.get("experimental_support", []), 6)
+    limitations_and_questions = _list_or_fallback(parsed.get("limitations_and_questions") or research_map_source.get("limitations_and_questions"), fallback.get("limitations_and_questions", []), 5)
+    research_map = dict(research_map_source) if isinstance(research_map_source, dict) else {}
+    research_map.update({
+        "research_problem": research_problem,
+        "core_method": core_method,
+        "method_steps": method_steps,
+        "experimental_support": experimental_support,
+        "limitations_and_questions": limitations_and_questions,
+    })
     normalized = {
         "version": READING_MAP_VERSION,
         "status": "llm_done",
@@ -3343,9 +3801,9 @@ def _normalize_reading_map(parsed: dict[str, Any], fallback: dict[str, Any]) -> 
         "survey_map": _normalize_survey_map(survey_map, fallback.get("survey_map", {})),
         "research_problem": research_problem,
         "core_method": core_method,
-        "method_steps": _list_or_fallback(parsed.get("method_steps") or research_map.get("method_steps"), fallback.get("method_steps", []), 12),
-        "experimental_support": _list_or_fallback(parsed.get("experimental_support") or research_map.get("experimental_support"), fallback.get("experimental_support", []), 12),
-        "limitations_and_questions": _list_or_fallback(parsed.get("limitations_and_questions") or research_map.get("limitations_and_questions"), fallback.get("limitations_and_questions", []), 12),
+        "method_steps": method_steps,
+        "experimental_support": experimental_support,
+        "limitations_and_questions": limitations_and_questions,
         "section_guides": _normalize_section_guides(
             _list_or_fallback(parsed.get("section_guides"), fallback.get("section_guides", []), 120)
         ),

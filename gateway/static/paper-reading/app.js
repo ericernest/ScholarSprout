@@ -25,12 +25,13 @@ const SKILLS = [
 const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
+const READING_MAP_STALE_AFTER_MS = 180000;
 
 const state = {
   sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   paperIndex: null, parseQuality: "", textLayerAvailable: false,
   sectionExtractionSource: "", sectionExtractionStatus: "", sectionExtractionMessage: "", outlineEntriesCount: 0,
-  parseStatus: "", readingMapStatus: "", readingMapPhase: "", readingMapProgress: 0, readingMapError: "", readingMapCardProgress: null, readingMap: null, readingMapStartedAt: 0, parsePollTimer: null,
+  parseStatus: "", readingMapStatus: "", readingMapPhase: "", readingMapProgress: 0, readingMapError: "", readingMapCardProgress: null, readingMap: null, readingMapStartedAt: 0, readingMapHeartbeatAt: "", parsePollTimer: null,
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   selectedText: "", selectedPage: null, selectedRect: null, sourceView: "pdf", uploadSummary: null,
   sessionState: "", restored: false, busy: false,
@@ -107,6 +108,9 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
+  $("research-overview-button")?.addEventListener("click", () => {
+    $("reading-map-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -465,6 +469,7 @@ async function acceptUploadedPaper(payload, sourceLabel) {
   state.readingMapProgress = Number(data.reading_map_progress || 0);
   state.readingMapError = data.reading_map_error || "";
   state.readingMapCardProgress = data.reading_map_card_progress || null;
+  state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || "";
   state.readingMapStartedAt = state.readingMapStatus === "llm_running" ? Date.now() : 0;
   state.readingMap = null;
   state.activeSkills = [];
@@ -496,6 +501,7 @@ async function loadPaperDetail() {
   state.readingMapProgress = Number(data.reading_map_progress || state.paper?.reading_map_progress || 0);
   state.readingMapError = data.reading_map_error || state.paper?.reading_map_error || state.readingMap?.error || "";
   state.readingMapCardProgress = data.reading_map_card_progress || state.paper?.reading_map_card_progress || null;
+  state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || state.paper?.reading_map_heartbeat_at || "";
   if (state.readingMapStatus === "llm_running" && !state.readingMapStartedAt) state.readingMapStartedAt = Date.now();
   if (state.readingMapStatus !== "llm_running") state.readingMapStartedAt = 0;
   state.textLayerAvailable = Boolean(data.text_layer_available);
@@ -519,6 +525,7 @@ async function regenerateReadingMap() {
   state.readingMapProgress = 0;
   state.readingMapError = "";
   state.readingMapCardProgress = null;
+  state.readingMapHeartbeatAt = new Date().toISOString();
   state.readingMapStartedAt = Date.now();
   state.readingMap = { version: "novice-reading-map-v2", status: "llm_running", paper_type: "unknown", map_variant: "research", prerequisite_card: {}, research_map: {}, survey_map: {}, section_guides: [] };
   renderSections();
@@ -536,6 +543,7 @@ async function regenerateReadingMap() {
     state.readingMapProgress = Number(data.reading_map_progress || 0);
     state.readingMapError = data.reading_map_error || "";
     state.readingMapCardProgress = data.reading_map_card_progress || null;
+    state.readingMapHeartbeatAt = data.reading_map_heartbeat_at || state.readingMapHeartbeatAt;
     state.readingMapStartedAt = state.readingMapStatus === "llm_running" ? Date.now() : 0;
     toast(data.message || "已重新提交导读地图生成。");
     startParsePolling();
@@ -545,6 +553,7 @@ async function regenerateReadingMap() {
     state.readingMapProgress = 0;
     state.readingMapError = error.message || "重新生成失败。";
     state.readingMapCardProgress = null;
+    state.readingMapHeartbeatAt = "";
     state.readingMapStartedAt = 0;
     state.readingMap = { version: "novice-reading-map-v2", status: "failed", error: error.message || "重新生成失败。", prerequisite_card: {}, research_map: {}, survey_map: {}, section_guides: [] };
     toast(error.message || "重新生成失败。", true);
@@ -899,7 +908,10 @@ function renderOutline() {
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", label);
     button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "Untitled section"));
-    button.addEventListener("click", () => selectSection(section.section_id, false));
+    button.addEventListener("click", () => {
+      if (isReferenceSection(section)) jumpToPdfPage(section.start_page || 1, section.section_id);
+      else selectSection(section.section_id, false);
+    });
     container.append(button);
   });
   $("outline-count").textContent = sections.length ? String(sections.length) : "";
@@ -990,9 +1002,11 @@ function isReadingMapDisplayable() {
 }
 
 function isReadingMapTimedOut() {
+  const heartbeatAt = Date.parse(state.readingMapHeartbeatAt || "");
+  const lastActivityAt = Number.isFinite(heartbeatAt) ? heartbeatAt : state.readingMapStartedAt;
   return readingMapGenerationStatus() === "llm_running"
-    && state.readingMapStartedAt
-    && Date.now() - state.readingMapStartedAt > 600000;
+    && lastActivityAt
+    && Date.now() - lastActivityAt > READING_MAP_STALE_AFTER_MS;
 }
 
 function readingMapPhaseText() {
@@ -1027,7 +1041,7 @@ function readingMapCardProgressText() {
 function renderSections() {
   const reader = $("structured-reader");
   reader.replaceChildren();
-  const sections = state.paper?.sections || [];
+  const sections = (state.paper?.sections || []).filter((section) => !isReferenceSection(section));
   if (!sections.length) {
     reader.append(create("div", "empty-state", "没有解析到章节索引，请在 PDF 原文中阅读并划选。"));
     return;
@@ -1050,7 +1064,8 @@ function renderSections() {
     const body = create("div", "paper-section-body");
     const summary = create("p", "index-section-summary", sectionSummaryText(section, indexed, guide));
     body.append(summary);
-    body.append(renderSectionGuide(guide, indexed));
+    const renderedGuide = renderSectionGuide(guide, indexed);
+    if (renderedGuide) body.append(renderedGuide);
     const actions = create("div", "index-section-actions");
     const jump = create("button", "figure-source-button", `跳转 PDF 第 ${section.start_page || 1} 页`);
     jump.type = "button";
@@ -1110,6 +1125,9 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
     ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
     : "";
   const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
+  if (isReferenceSection(section)) {
+    return `${pages}${quality}参考文献章节按设计不生成智能索引卡片，请直接查看 PDF 原文。`;
+  }
   if (!isReadingMapDisplayable()) {
     return isReadingMapFailed()
       ? `${pages}${quality}智能索引生成失败，请点击“重新生成”。`
@@ -1119,34 +1137,36 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
   }
   return guide
     ? `${pages}${quality}下方是面向科研新手的章节导读。`
-    : `${pages}${quality}本章节没有生成可展示的智能索引卡片，请点击“重新生成”。`;
+    : strHasContent(section.content)
+      ? `${pages}${quality}本章节没有生成可展示的智能索引卡片，请点击“重新生成”。`
+      : `${pages}${quality}该条目只有目录标题，没有提取到独立正文；相关内容请查看其子章节或 PDF 原文。`;
 }
 
 function sectionGuide(sectionId) {
   if (!isReadingMapDisplayable()) return null;
   const guides = state.readingMap?.section_guides || state.paper?.reading_map?.section_guides || [];
-  return guides.find((item) => item.section_id === sectionId) || null;
+  const guide = guides.find((item) => item.section_id === sectionId) || null;
+  return guide && Array.isArray(guide.cards) && guide.cards.length ? guide : null;
 }
 
 function renderSectionGuide(guide, indexed = {}) {
+  if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null;
   const wrap = create("div", "section-guide");
-  if (guide) {
-    const cards = Array.isArray(guide.cards) && guide.cards.length ? guide.cards : [];
-    if (cards.length) {
-      cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
-      return wrap;
-    }
-  }
-  wrap.append(create(
-    "p",
-    `index-chunk${isReadingMapFailed() ? " is-error" : ""}`,
-    isReadingMapFailed()
-      ? "智能索引生成失败。请点击底部导读地图区域的“重新生成”。"
-      : isReadingMapTimedOut()
-        ? "智能索引生成等待时间过长，请点击底部导读地图区域的“重新生成”。"
-      : "智能索引正在生成中，完成前不会展示启发式 fallback 或检索片段。"
-  ));
+  guide.cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
   return wrap;
+}
+
+function isReferenceSection(section = {}) {
+  const title = String(section.title || "").toLowerCase();
+  const sectionId = String(section.section_id || "").toLowerCase();
+  return title.includes("reference")
+    || title.includes("bibliography")
+    || title.includes("参考文献")
+    || /^sec:(references|bibliography)\b/.test(sectionId);
+}
+
+function strHasContent(value) {
+  return Boolean(String(value || "").trim());
 }
 
 function renderPrerequisiteCard(card) {
@@ -1847,7 +1867,10 @@ async function selectSection(sectionId, analyze) {
 }
 
 function moveSection(offset) {
-  const sections = state.paper?.sections || [];
+  const allSections = state.paper?.sections || [];
+  const sections = state.readerMode === "structured"
+    ? allSections.filter((section) => !isReferenceSection(section))
+    : allSections;
   if (!sections.length) return;
   const current = Math.max(0, sections.findIndex((item) => item.section_id === state.currentSection));
   const target = sections[Math.min(sections.length - 1, Math.max(0, current + offset))];
@@ -2856,13 +2879,18 @@ function renderReadingMap() {
   const grid = $("reading-map-grid");
   const empty = $("reading-map-empty");
   const detail = $("reading-map-detail");
+  const isSurvey = map.map_variant === "survey";
+  const taskLabel = isSurvey ? "综述导读地图与智能索引" : "研究总览与智能索引";
   if (!grid) return;
   grid.replaceChildren();
+  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "Survey reading map" : "Research overview";
+  if ($("reading-map-title")) $("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览";
+  if ($("research-overview-button")) $("research-overview-button").textContent = isSurvey ? "综述地图 ↓" : "研究总览 ↓";
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", "Reading Map"),
-      create("h3", "", "论文阅读地图"),
-      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧 Agent 解释这一段。")
+      create("p", "panel-label", isSurvey ? "Survey guide" : "Research overview"),
+      create("h3", "", isSurvey ? "综述导读地图" : "研究总览"),
+      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧 Agent 解释。")
     );
   }
 
@@ -2876,12 +2904,12 @@ function renderReadingMap() {
   if (regenerateButton) regenerateButton.disabled = (regenerating && !timedOut) || !state.paperId;
   const failureText = readingMapFailureText(map);
   $("reading-map-status-copy").textContent = mapReady
-    ? (map.map_variant === "survey" ? "综述型阅读地图已生成" : "研究型阅读地图已生成")
+    ? (map.partial && map.generation_warning ? `${taskLabel}已生成；${map.generation_warning}` : `${taskLabel}已生成`)
     : mapFailed
-      ? `导读地图与智能索引生成失败：${failureText}`
+      ? `${taskLabel}生成失败：${failureText}`
       : timedOut
-        ? "导读地图与智能索引生成已超时，可以点击“重新生成”。"
-        : "正在生成导读地图与智能索引，请稍候。";
+        ? `${taskLabel}生成已超时，可以点击“重新生成”。`
+        : `正在并行生成${taskLabel}，请稍候。`;
 
   if (!mapReady && !mapFailed && !timedOut) {
     $("reading-map-status-copy").textContent = readingMapPhaseText();
@@ -2901,7 +2929,7 @@ function renderReadingMap() {
     return;
   }
 
-  const groups = map.map_variant === "survey" ? surveyReadingMapGroups(map) : researchReadingMapGroups(map);
+  const groups = isSurvey ? surveyReadingMapGroups(map) : researchReadingMapGroups(map);
   const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent;
   if (!mapReady) {

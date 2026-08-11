@@ -11,6 +11,15 @@
 
 数据目录修改后需要重启服务。新目录承接重启后的新读写，不会自动搬迁旧目录的数据；这样可以避免一次普通配置修改暗中移动或覆盖用户文件。
 
+### 从论文独立存储接入共享存储后的影响
+
+论文精读原先使用 `paper_reading/papers/{paper_id}.json`、`sessions/*.json` 和独立 PDF 目录。接入共享存储后，`PaperReadingStorage` 仍保留原 API，但论文稳定字段会同步到 `papers`，完整演进状态写入 `paper_documents.document_json`，会话、checkpoint 和论文库关系则进入各自的关系表。这个改造带来以下实际差异：
+
+- 每次 `save_paper` 不再只是覆盖单个 JSON 文件，而是更新论文稳定字段和完整 `document_json`。因此导读地图的高频进度保存确实比旧实现多了一层数据库事务；模型任务并行执行，但 SQLite 进度写入仍集中在生成主线程串行完成，避免并发写锁竞争。
+- 初版共享存储适配器曾在每次 `save_paper` 时重新读取并计算 PDF SHA-256。导读地图每完成一张卡片都会保存进度，因此这会放大本地 I/O。现在 SHA-256 只在 `save_upload` 时计算/登记，后续进度、笔记和状态保存不再读取整份 PDF。
+- `llm_running`、卡片缓存和部分导读地图现在会可靠地跨服务重启保留；如果只保存状态而不恢复后台线程，就会留下永久运行中的任务。现在文档同时保存 `reading_map_started_at`、`reading_map_heartbeat_at`、`reading_map_resumed_at` 和 `reading_map_completed_at`，gateway 启动后会重新排队所有仍为 `llm_running` 且已有章节正文的任务，并复用已完成的卡片缓存。
+- 这些生成时间和心跳仍属于快速演进的导读地图状态，保存在 `paper_documents.document_json`，不新增没有筛选需求的数据库列。
+
 ## 字段策略：关系字段 + 分块 JSON
 
 不使用“一整份模式输出 JSON”，也不在模式仍快速演进时将每个概念、每个评分、每个技能输出拆成大量表。具体规则如下：

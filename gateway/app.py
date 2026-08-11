@@ -35,7 +35,10 @@ from handlers.domain_onboarding.jobs import (
 from handlers.domain_onboarding.schemas import DomainOnboardingRequest
 from handlers.domain_onboarding_handler import handle_domain_onboarding_message
 from handlers.domain_onboarding_metrics import DomainOnboardingMetrics
-from handlers.paper_reading_handler import handle_paper_reading_message
+from handlers.paper_reading_handler import (
+    handle_paper_reading_message,
+    resume_pending_reading_map_generations,
+)
 from gateway.message_flow import process_channel_input, process_channel_stream
 from models.client import OpenAIClient, SetupRequiredModel
 from handlers.paper_reading.harness.session import SessionManager
@@ -527,6 +530,8 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.session_manager = session_manager
     app.state.fork_manager = fork_manager
     app.state.paper_pipeline = paper_pipeline
+    if setup_complete:
+        resume_pending_reading_map_generations(app.state)
 
     uvicorn.run(app, host=host, port=port)
 
