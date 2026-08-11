@@ -586,8 +586,8 @@ More results.
 
         self.assertEqual(result["status"], "llm_done")
         self.assertEqual(len(model.calls), 2)
-        self.assertEqual({call["max_tokens"] for call in model.calls}, {3500, 8000})
         for call in model.calls:
+            self.assertNotIn("max_tokens", call)
             self.assertGreater(call["timeout"], 0)
             self.assertEqual(call["response_format"], {"type": "json_object"})
             self.assertTrue(call["disable_thinking"])

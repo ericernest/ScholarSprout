@@ -74,17 +74,16 @@ class FailedLLMCallMetricsTests(unittest.TestCase):
         self.assertEqual({stage for stage, _ in deltas}, {"planning"})
         self.assertEqual(stats.total_tokens, 5)
 
-    def test_max_tokens_is_forwarded_to_model(self) -> None:
+    def test_json_call_does_not_set_application_output_limit(self) -> None:
         model = FakeJSONModel([{"ok": True}])
 
         invoke_json(
             model,
             system_prompt="system",
             user_prompt="user",
-            max_tokens=1234,
         )
 
-        self.assertEqual(model.calls[0]["max_tokens"], 1234)
+        self.assertNotIn("max_tokens", model.calls[0])
         self.assertEqual(
             model.calls[0]["response_format"],
             {"type": "json_object"},
@@ -103,13 +102,12 @@ class FailedLLMCallMetricsTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             StructuredLLMError,
-            "truncated at max_tokens=1400",
+            "truncated by the model provider",
         ):
             invoke_json(
                 TruncatedStreamingModel(),
                 system_prompt="system",
                 user_prompt="user",
-                max_tokens=1400,
             )
 
     def test_invalid_json_error_preserves_reported_usage(self) -> None:

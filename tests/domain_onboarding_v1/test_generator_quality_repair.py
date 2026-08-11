@@ -491,6 +491,47 @@ class GeneratorTests(unittest.TestCase):
             payload["subdirections"],
         )
 
+    def test_landscape_section_rejects_empty_detail_arrays(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        with self.assertRaisesRegex(
+            GenerationError,
+            "requires 3 non-empty problem_details",
+        ):
+            generator._complete_section_payload(
+                "landscape",
+                {
+                    "current_landscape": {
+                        "problems": ["问题一", "问题二", "问题三"],
+                        "subdirections": ["方向一", "方向二", "方向三"],
+                        "problem_details": [],
+                        "subdirection_details": [],
+                    }
+                },
+                ranked,
+            )
+
+    def test_landscape_section_rejects_internal_detail_names(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        payload["current_landscape"]["problem_details"][0]["name"] = (
+            "problem_optimization"
+        )
+        generator = StructuredOnboardingGenerator(FakeJSONModel([]), config)
+
+        with self.assertRaisesRegex(
+            GenerationError,
+            "reader-facing labels, not internal IDs",
+        ):
+            generator._complete_section_payload("landscape", payload, ranked)
+
     def test_learning_path_section_accepts_real_step_list_aliases(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(
@@ -538,11 +579,10 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(all(item.contribution for item in core_references))
         self.assertTrue(all(item.reading_focus for item in core_references))
 
-    def test_generator_sends_compact_grounding_context_and_token_limit(self) -> None:
+    def test_generator_sends_compact_grounding_context_without_output_limit(self) -> None:
         config = self.config.model_copy(
             update={
                 "generation_paper_abstract_max_chars": 200,
-                "generation_max_tokens": 4321,
             }
         )
         ranked = list(self.ranked)
@@ -561,7 +601,7 @@ class GeneratorTests(unittest.TestCase):
         call = model.calls[0]
         prompt = json.loads(call["messages"][1]["content"])
         paper = prompt["allowed_papers"][0]
-        self.assertEqual(call["max_tokens"], 4321)
+        self.assertNotIn("max_tokens", call)
         self.assertEqual(len(paper["abstract"]), 200)
         self.assertNotIn("authors", paper)
         self.assertNotIn("url", paper)

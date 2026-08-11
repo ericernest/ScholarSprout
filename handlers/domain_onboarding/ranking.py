@@ -20,7 +20,11 @@ from .schemas import (
     RankingResult,
     RankingStats,
 )
-from .text_similarity import TextVectorizer, TfidfTextVectorizer, cosine_similarity
+from .text_similarity import (
+    MultilingualEvidenceTextVectorizer,
+    TextVectorizer,
+    cosine_similarity,
+)
 
 
 class PaperRanker(Protocol):
@@ -47,11 +51,15 @@ class WeightedPaperRanker:
         canonical_registry: CanonicalPaperRegistry | None = None,
     ):
         self.config = config
-        self.vectorizer = vectorizer or TfidfTextVectorizer()
+        self.vectorizer = vectorizer or MultilingualEvidenceTextVectorizer()
         self.fallback_vectorizer = (
             fallback_vectorizer
             if fallback_vectorizer is not None
-            else (TfidfTextVectorizer() if vectorizer is not None else None)
+            else (
+                MultilingualEvidenceTextVectorizer()
+                if vectorizer is not None
+                else None
+            )
         )
         self.context_guard = context_guard or DomainContextGuard()
         self.canonical_registry = canonical_registry or CanonicalPaperRegistry()
@@ -90,14 +98,16 @@ class WeightedPaperRanker:
                 )
             )
 
+        # Global relevance must represent the research domain itself. Search
+        # instructions such as "survey", "method" and "evaluation" belong to
+        # path coverage; putting them in the global query made generic academic
+        # papers look relevant even when they did not mention the domain.
         query_text = " ".join(
             [
                 plan.normalized_domain,
                 plan.translated_domain,
                 *plan.expanded_terms,
-                *plan.search_queries,
                 *plan.expected_subdirections,
-                *(question for perspective in plan.perspectives for question in perspective.questions),
             ]
         )
         path_texts = [
@@ -153,7 +163,8 @@ class WeightedPaperRanker:
             path_pool = [
                 paper
                 for paper in path_ranking[:path_pool_size]
-                if path_scores_by_paper[paper.paper_id][path_id] > 0.0
+                if path_scores_by_paper[paper.paper_id][path_id]
+                >= self.config.ranking_min_path_relevance_score
             ]
             per_path_candidate_counts[path_id] = len(path_pool)
             for rank, paper in enumerate(path_pool, start=1):
@@ -171,10 +182,10 @@ class WeightedPaperRanker:
         for paper, paper_vector in zip(valid, document_vectors, strict=True):
             global_relevance = cosine_similarity(query_vector, paper_vector)
             paper_path_scores = path_scores_by_paper[paper.paper_id]
-            semantic_relevance = max(
-                global_relevance,
-                max(paper_path_scores.values(), default=0.0),
-            )
+            # Path similarity affects coverage/fusion below, but cannot replace
+            # domain grounding. A paper matching only generic path words must
+            # still fail the main relevance gate.
+            semantic_relevance = global_relevance
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
             recency = self._recency_score(paper.year)
@@ -236,9 +247,15 @@ class WeightedPaperRanker:
             if paper.is_canonical
             or paper.relevance_score >= self.config.ranking_min_relevance_score
         ]
-        if relevance_filtered:
-            low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
-            ranked = relevance_filtered
+        # Never let recency/diversity turn a batch with zero lexical or semantic
+        # grounding into plausible recommendations.  This used to retain every
+        # candidate when *all* papers missed the relevance threshold, which is
+        # especially harmful when a broad provider query returns unrelated
+        # Chinese-language records.  Returning no papers lets the pipeline
+        # supplement retrieval or report retrieval_failed instead of fabricating
+        # a credible-looking reading list.
+        low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
+        ranked = relevance_filtered
         abstract_ready = [
             paper
             for paper in ranked

@@ -36,27 +36,23 @@ SURVEY_CHUNK_MAX_WORKERS = 3
 SURVEY_CHUNK_BATCH_SIZE = 3
 SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS = 180
 SURVEY_MERGE_PROMPT_LIMIT = 60000
-SURVEY_CARD_SECTION_TEXT_LIMIT = 12000
-SURVEY_CARD_CONTEXT_LIMIT = 26000
-SURVEY_INTRO_CONTEXT_LIMIT = 18000
-RESEARCH_OVERVIEW_MAX_TOKENS = 8000
+SURVEY_CARD_SECTION_TEXT_LIMIT = 15000
+SURVEY_CARD_CONTEXT_LIMIT = 36000
+SURVEY_INTRO_CONTEXT_LIMIT = 24000
 RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS = 120.0
-RESEARCH_GUIDE_MAX_TOKENS = 3500
 RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS = 75.0
 RESEARCH_GUIDE_MAX_WORKERS = 4
 RESEARCH_GUIDE_SECTIONS_PER_REQUEST = 3
 RESEARCH_GUIDE_SECTION_LIMIT = 120
 RESEARCH_GUIDE_SECTION_TEXT_LIMIT = 7000
-SURVEY_PLAN_MAX_TOKENS = 5000
 SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS = 75.0
-SURVEY_CARD_MAX_TOKENS = 4000
 SURVEY_CARD_REQUEST_TIMEOUT_SECONDS = 75.0
+SURVEY_PLAN_MAX_TOKENS = 16000
+SURVEY_CARD_MAX_TOKENS = 12000
 SURVEY_CARD_MAX_WORKERS = 4
 SURVEY_MAP_TASK_LIMIT = 12
 SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
-SURVEY_FACT_MAX_TOKENS = 4500
 SURVEY_FACT_REQUEST_TIMEOUT_SECONDS = 75.0
-SURVEY_MERGE_MAX_TOKENS = 7000
 SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS = 90.0
 SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
 SURVEY_MAP_GROUP_KEYS = (
@@ -81,25 +77,26 @@ def _reading_map_json_chat(
     model: Any,
     messages: list[dict[str, Any]],
     *,
-    max_tokens: int,
     timeout: float,
+    max_tokens: int | None = None,
 ) -> Any:
-    """Run one bounded JSON request; an explicit timeout disables SDK retries."""
-    return model.chat(
-        messages=messages,
-        response_format={"type": "json_object"},
-        disable_thinking=True,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        max_retries=0,
-    )
+    """Run one JSON request with optional caller-owned output budget."""
+    kwargs = {
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "disable_thinking": True,
+        "timeout": timeout,
+        "max_retries": 0,
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return model.chat(**kwargs)
 
 
 def _reading_map_response_json(
     response: Any,
     *,
     label: str,
-    max_tokens: int,
 ) -> dict[str, Any]:
     choices = getattr(response, "choices", None) or (
         response.get("choices", []) if isinstance(response, dict) else []
@@ -128,7 +125,7 @@ def _reading_map_response_json(
     diagnostics = f"finish_reason={normalized_reason}, content_chars={len(content)}"
     if normalized_reason in {"length", "max_tokens"}:
         logger.warning("Truncated JSON for %s (%s)", label, diagnostics)
-        raise ValueError(f"{label}输出在 max_tokens={max_tokens} 处被截断（{diagnostics}）")
+        raise ValueError(f"{label}被模型服务截断（{diagnostics}）；应用未设置 max_tokens")
     repaired = repair_json_object(content)
     if repaired is not None:
         logger.warning("Repaired malformed JSON for %s (%s)", label, diagnostics)
@@ -1754,13 +1751,11 @@ def _generate_research_overview(
             },
             {"role": "user", "content": _build_reading_map_prompt(paper, fallback, skill_registry)},
         ],
-        max_tokens=RESEARCH_OVERVIEW_MAX_TOKENS,
         timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
     )
     return _reading_map_response_json(
         response,
         label="研究总览",
-        max_tokens=RESEARCH_OVERVIEW_MAX_TOKENS,
     )
 
 
@@ -1822,13 +1817,11 @@ def _generate_research_section_guide_group(
             {"role": "system", "content": "Return only valid JSON for research section guides."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
         timeout=RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS,
     )
     parsed = _reading_map_response_json(
         response,
         label="章节导读",
-        max_tokens=RESEARCH_GUIDE_MAX_TOKENS,
     )
     raw_guides = parsed.get("section_guides")
     if not isinstance(raw_guides, list):
@@ -2316,13 +2309,12 @@ def _plan_survey_cards(
             {"role": "system", "content": "Return only valid JSON for survey card planning."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=SURVEY_PLAN_MAX_TOKENS,
         timeout=SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS,
+        max_tokens=SURVEY_PLAN_MAX_TOKENS,
     )
     return _reading_map_response_json(
         response,
         label="综述卡片规划",
-        max_tokens=SURVEY_PLAN_MAX_TOKENS,
     )
 
 
@@ -2675,13 +2667,12 @@ def _generate_survey_card(
             {"role": "system", "content": "Return only valid JSON for one survey card task."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=SURVEY_CARD_MAX_TOKENS,
         timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
+        max_tokens=SURVEY_CARD_MAX_TOKENS,
     )
     parsed = _reading_map_response_json(
         response,
         label=f"综述卡片 {task.get('task_id')}",
-        max_tokens=SURVEY_CARD_MAX_TOKENS,
     )
     return _normalize_survey_card_result(parsed, task, sections)
 
@@ -3303,13 +3294,11 @@ def _extract_survey_chunk_facts(
             {"role": "system", "content": "Return only valid JSON for survey fact extraction."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=SURVEY_FACT_MAX_TOKENS,
         timeout=SURVEY_FACT_REQUEST_TIMEOUT_SECONDS,
     )
     parsed = _reading_map_response_json(
         response,
         label=f"综述事实 {chunk.get('chunk_id')}",
-        max_tokens=SURVEY_FACT_MAX_TOKENS,
     )
     source = _chunk_source_ref(chunk)
     parsed["chunk_id"] = chunk.get("chunk_id", "")
@@ -3357,13 +3346,11 @@ def _merge_survey_facts(
             {"role": "system", "content": "Return only valid JSON for survey fact merging."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=SURVEY_MERGE_MAX_TOKENS,
         timeout=SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS,
     )
     return _reading_map_response_json(
         response,
         label="综述事实合并",
-        max_tokens=SURVEY_MERGE_MAX_TOKENS,
     )
 
 

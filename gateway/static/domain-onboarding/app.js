@@ -528,14 +528,19 @@ function renderLandscape(data) {
     container.innerHTML = sectionStatusCopy("概念全景", data);
     return;
   }
-  const problems = landscape.problem_details || (landscape.problems || []).map((name, index) => ({
-    problem_id: `problem-${index}`,
-    name,
-  }));
-  const directions = landscape.subdirection_details || (landscape.subdirections || []).map((name, index) => ({
-    subdirection_id: landscape.subdirection_ids?.[name] || `sub-${index}`,
-    name,
-  }));
+  const problems = mergeLandscapeItems(
+    landscape.problem_details,
+    landscape.problems,
+    "problem_id",
+    "problem",
+  );
+  const directions = mergeLandscapeItems(
+    landscape.subdirection_details,
+    landscape.subdirections,
+    "subdirection_id",
+    "sub",
+    landscape.subdirection_ids,
+  );
   const container = $("landscape-content");
   container.classList.remove("loading-grid");
   container.innerHTML = `
@@ -566,6 +571,33 @@ function renderLandscape(data) {
       </div>
     </div>
   `;
+}
+
+function isInternalLandscapeLabel(value) {
+  return /^(?:(?:problem|sub|subdirection|direction)_[a-z0-9_]+|(?:problem|sub|subdirection|direction)-?\d+)$/i
+    .test(String(value || "").trim());
+}
+
+// Detail objects are the canonical reader-facing representation. Summary-only
+// names remain a fallback for old partial tasks, but internal IDs are never
+// rendered as titles.
+function mergeLandscapeItems(details, names, idField, idPrefix, idsByName = {}) {
+  const byName = new Map();
+  for (const item of Array.isArray(details) ? details : []) {
+    const name = String(item?.name || "").trim();
+    if (!name || isInternalLandscapeLabel(name)) continue;
+    byName.set(name, { ...item, name });
+  }
+  if (byName.size) return [...byName.values()];
+  for (const rawName of Array.isArray(names) ? names : []) {
+    const name = String(rawName || "").trim();
+    if (!name || isInternalLandscapeLabel(name) || byName.has(name)) continue;
+    byName.set(name, {
+      [idField]: idsByName?.[name] || `${idPrefix}-${byName.size}`,
+      name,
+    });
+  }
+  return [...byName.values()];
 }
 
 function renderLearningPath(data) {
@@ -708,7 +740,12 @@ function showDetail(kind, id) {
       ...(item.main_techniques || []).flatMap(detailPaperIds),
     ];
   } else if (kind === "problem") {
-    const item = (data.current_landscape?.problem_details || []).find((value, index) => String(value.problem_id || index) === id);
+    const item = mergeLandscapeItems(
+      data.current_landscape?.problem_details,
+      data.current_landscape?.problems,
+      "problem_id",
+      "problem",
+    ).find((value, index) => String(value.problem_id || index) === id);
     if (!item) return;
     title = item.name;
     subtitle = "当前核心问题";
@@ -717,7 +754,13 @@ function showDetail(kind, id) {
     blocks.push(detailList("关联方向", namesForSubdirections(item.related_subdirection_ids, data)));
     paperIds = item.related_paper_ids || [];
   } else if (kind === "subdirection") {
-    const item = (data.current_landscape?.subdirection_details || []).find((value, index) => String(value.subdirection_id || index) === id);
+    const item = mergeLandscapeItems(
+      data.current_landscape?.subdirection_details,
+      data.current_landscape?.subdirections,
+      "subdirection_id",
+      "sub",
+      data.current_landscape?.subdirection_ids,
+    ).find((value, index) => String(value.subdirection_id || index) === id);
     if (!item) return;
     title = item.name;
     subtitle = "研究分支";

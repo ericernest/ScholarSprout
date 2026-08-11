@@ -107,8 +107,13 @@ def section_system_prompt(section: str, language: str) -> str:
             "paper's contribution and concrete reading focus."
         ),
         "landscape": (
-            "Return current_landscape and up to 4 evidence_claims. Include exactly 3 grounded problems and "
-            "exactly 3 genuine research subdirections. Each subdirection detail must include description, "
+            "Return current_landscape and up to 4 evidence_claims. current_landscape must contain exactly "
+            "3 non-empty problem_details and exactly 3 non-empty subdirection_details; its problems and "
+            "subdirections arrays must mirror those detail names. Every name must be a concise reader-facing "
+            "research label; never use internal identifiers such as problem_1, problem_optimization, sub_1 "
+            "or sub_architectures as names. Each problem detail must include "
+            "problem_id, name, description, related_paper_ids and related_stage_ids. Each subdirection "
+            "detail must include description, "
             "why_it_matters, typical_tasks, prerequisites, common_techniques, datasets_and_benchmarks, "
             "evaluation_metrics, starter_project, research_workflow, research_questions, related_paper_ids, "
             "related_stage_ids, emerged_in_stage_id and addresses_problem_ids. common_techniques use the "

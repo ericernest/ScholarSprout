@@ -83,13 +83,17 @@ class DomainOnboardingConfig(BaseModel):
     generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
     evaluation_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
-    relevance_weight: float = Field(default=0.70, ge=0.0, le=1.0)
+    # Relevance owns the paper score. Recency is a small tie-breaker, while
+    # diversity is handled once by MMR instead of rewarding off-topic outliers
+    # in both the base score and the final selection.
+    relevance_weight: float = Field(default=0.90, ge=0.0, le=1.0)
     ranking_missing_abstract_penalty: float = Field(default=0.80, ge=0.0, le=1.0)
-    recency_weight: float = Field(default=0.20, ge=0.0, le=1.0)
-    diversity_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    recency_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    diversity_weight: float = Field(default=0.0, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
-    ranking_path_fusion_weight: float = Field(default=0.20, ge=0.0, le=0.5)
+    ranking_path_fusion_weight: float = Field(default=0.10, ge=0.0, le=0.5)
+    ranking_min_path_relevance_score: float = Field(default=0.03, ge=0.0, le=1.0)
     ranking_path_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_role_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_rrf_k: int = Field(default=60, ge=1, le=200)
@@ -104,16 +108,6 @@ class DomainOnboardingConfig(BaseModel):
     ranking_min_abstract_candidates: int = Field(default=6, ge=0, le=40)
     embedding_batch_size: int = Field(default=32, ge=1, le=128)
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
-    planning_max_tokens: int = Field(default=1000, ge=256, le=4096)
-    generation_max_tokens: int = Field(default=8000, ge=1024, le=12000)
-    generation_development_max_tokens: int = Field(default=8000, ge=800, le=12000)
-    generation_development_foundation_max_tokens: int = Field(
-        default=5000, ge=600, le=8000
-    )
-    generation_development_stage_max_tokens: int = Field(
-        default=6000, ge=800, le=8000
-    )
-    development_stage_planning_max_tokens: int = Field(default=4000, ge=400, le=8000)
     development_stage_planning_timeout_seconds: float = Field(
         default=65.0, gt=0.0, le=120.0
     )
@@ -125,8 +119,6 @@ class DomainOnboardingConfig(BaseModel):
     generation_section_workers: int = Field(default=1, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
     stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
-    generation_landscape_max_tokens: int = Field(default=7000, ge=600, le=12000)
-    generation_learning_path_max_tokens: int = Field(default=6500, ge=800, le=12000)
     # Incremental generation runs development first, then landscape/path in
     # parallel. The default deadline fits three full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
