@@ -36,9 +36,9 @@ SURVEY_CHUNK_MAX_WORKERS = 3
 SURVEY_CHUNK_BATCH_SIZE = 3
 SURVEY_CHUNK_BATCH_TIMEOUT_SECONDS = 180
 SURVEY_MERGE_PROMPT_LIMIT = 60000
-SURVEY_CARD_SECTION_TEXT_LIMIT = 12000
-SURVEY_CARD_CONTEXT_LIMIT = 26000
-SURVEY_INTRO_CONTEXT_LIMIT = 18000
+SURVEY_CARD_SECTION_TEXT_LIMIT = 15000
+SURVEY_CARD_CONTEXT_LIMIT = 36000
+SURVEY_INTRO_CONTEXT_LIMIT = 24000
 RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS = 120.0
 RESEARCH_GUIDE_REQUEST_TIMEOUT_SECONDS = 75.0
 RESEARCH_GUIDE_MAX_WORKERS = 4
@@ -47,6 +47,8 @@ RESEARCH_GUIDE_SECTION_LIMIT = 120
 RESEARCH_GUIDE_SECTION_TEXT_LIMIT = 7000
 SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS = 75.0
 SURVEY_CARD_REQUEST_TIMEOUT_SECONDS = 75.0
+SURVEY_PLAN_MAX_TOKENS = 16000
+SURVEY_CARD_MAX_TOKENS = 12000
 SURVEY_CARD_MAX_WORKERS = 4
 SURVEY_MAP_TASK_LIMIT = 12
 SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
@@ -76,15 +78,19 @@ def _reading_map_json_chat(
     messages: list[dict[str, Any]],
     *,
     timeout: float,
+    max_tokens: int | None = None,
 ) -> Any:
-    """Run one JSON request without an application output cap."""
-    return model.chat(
-        messages=messages,
-        response_format={"type": "json_object"},
-        disable_thinking=True,
-        timeout=timeout,
-        max_retries=0,
-    )
+    """Run one JSON request with optional caller-owned output budget."""
+    kwargs = {
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "disable_thinking": True,
+        "timeout": timeout,
+        "max_retries": 0,
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return model.chat(**kwargs)
 
 
 def _reading_map_response_json(
@@ -2304,6 +2310,7 @@ def _plan_survey_cards(
             {"role": "user", "content": prompt},
         ],
         timeout=SURVEY_PLAN_REQUEST_TIMEOUT_SECONDS,
+        max_tokens=SURVEY_PLAN_MAX_TOKENS,
     )
     return _reading_map_response_json(
         response,
@@ -2661,6 +2668,7 @@ def _generate_survey_card(
             {"role": "user", "content": prompt},
         ],
         timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
+        max_tokens=SURVEY_CARD_MAX_TOKENS,
     )
     parsed = _reading_map_response_json(
         response,
