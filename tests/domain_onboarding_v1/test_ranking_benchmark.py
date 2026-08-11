@@ -38,7 +38,7 @@ class EmbeddingVectorizerTests(unittest.TestCase):
         self.assertEqual(first[0], first[2])
         self.assertEqual(second, [first[3], first[0]])
 
-    def test_ranker_falls_back_to_tfidf_when_embedding_fails(self) -> None:
+    def test_ranker_falls_back_to_multilingual_tfidf_when_embedding_fails(self) -> None:
         class OfflineProvider:
             def embed(self, texts: list[str]) -> list[list[float]]:
                 raise RuntimeError("embedding service offline")
@@ -63,7 +63,7 @@ class EmbeddingVectorizerTests(unittest.TestCase):
 
         self.assertEqual([paper.paper_id for paper in result.papers], ["rag"])
         self.assertTrue(result.stats.vectorizer_fallback_used)
-        self.assertEqual(result.stats.vectorizer_backend, "tfidf")
+        self.assertEqual(result.stats.vectorizer_backend, "multilingual_tfidf")
 
     @staticmethod
     def _plan(domain: str, subdirections: list[str]) -> DomainResearchPlan:

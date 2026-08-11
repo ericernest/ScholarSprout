@@ -10,6 +10,7 @@ from handlers.domain_onboarding.schemas import DomainResearchPlan, PaperCandidat
 from handlers.domain_onboarding.text_similarity import (
     CachedEmbeddingTextVectorizer,
     FastEmbedProvider,
+    MultilingualEvidenceTextVectorizer,
     OpenAIEmbeddingProvider,
     TfidfTextVectorizer,
     cosine_similarity,
@@ -47,6 +48,20 @@ class TextSimilarityTests(unittest.TestCase):
                 "retrieval augmented generation",
                 "retrieval augmented generation with evidence",
                 "graph convolutional networks",
+            ]
+        )
+
+        self.assertGreater(
+            cosine_similarity(vectors[0], vectors[1]),
+            cosine_similarity(vectors[0], vectors[2]),
+        )
+
+    def test_multilingual_lexical_fallback_bridges_chinese_domain_terms(self) -> None:
+        vectors = MultilingualEvidenceTextVectorizer().vectorize(
+            [
+                "retrieval augmented generation",
+                "检索增强生成与外部知识问答",
+                "古代园林建筑艺术研究",
             ]
         )
 
@@ -127,7 +142,7 @@ class TextSimilarityTests(unittest.TestCase):
         ):
             pipeline = create_default_pipeline(object())
         try:
-            self.assertEqual(pipeline.ranker.vectorizer.name, "tfidf")
+            self.assertEqual(pipeline.ranker.vectorizer.name, "multilingual_tfidf")
         finally:
             pipeline.close()
 
@@ -164,6 +179,61 @@ class TextSimilarityTests(unittest.TestCase):
 
 
 class MMRRankingTests(unittest.TestCase):
+    def test_multilingual_lexical_ranking_keeps_relevant_chinese_paper(self) -> None:
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="relevant-cn",
+                    title="面向外部知识问答的检索增强生成方法",
+                    abstract="研究检索质量、重排序与语言模型事实可靠性。",
+                    year=2025,
+                    url="https://example.org/relevant-cn",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="unrelated-cn",
+                    title="明清时期江南园林建筑艺术研究",
+                    abstract="讨论传统建筑空间布局与审美风格。",
+                    year=2026,
+                    url="https://example.org/unrelated-cn",
+                    source="test",
+                ),
+            ],
+            make_plan(),
+            limit=2,
+        )
+
+        self.assertEqual([paper.paper_id for paper in result.papers], ["relevant-cn"])
+        self.assertEqual(result.stats.vectorizer_backend, "multilingual_tfidf")
+        self.assertEqual(result.stats.low_relevance_filtered_count, 1)
+
+    def test_all_unrelated_lexical_candidates_are_rejected(self) -> None:
+        result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
+            [
+                PaperCandidate(
+                    paper_id="unrelated-cn",
+                    title="明清时期江南园林建筑艺术研究",
+                    abstract="讨论传统建筑空间布局与审美风格。",
+                    year=2026,
+                    url="https://example.org/unrelated-cn",
+                    source="test",
+                ),
+                PaperCandidate(
+                    paper_id="unrelated-en",
+                    title="Marine Sediment Transport in Coastal Waters",
+                    abstract="A study of coastal geology and ocean currents.",
+                    year=2025,
+                    url="https://example.org/unrelated-en",
+                    source="test",
+                ),
+            ],
+            make_plan(),
+            limit=2,
+        )
+
+        self.assertEqual(result.papers, [])
+        self.assertEqual(result.stats.low_relevance_filtered_count, 2)
+
     def test_canonical_paper_is_core_and_keeps_domain_role(self) -> None:
         result = WeightedPaperRanker(DomainOnboardingConfig()).rank(
             [

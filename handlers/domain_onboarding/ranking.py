@@ -20,7 +20,11 @@ from .schemas import (
     RankingResult,
     RankingStats,
 )
-from .text_similarity import TextVectorizer, TfidfTextVectorizer, cosine_similarity
+from .text_similarity import (
+    MultilingualEvidenceTextVectorizer,
+    TextVectorizer,
+    cosine_similarity,
+)
 
 
 class PaperRanker(Protocol):
@@ -47,11 +51,15 @@ class WeightedPaperRanker:
         canonical_registry: CanonicalPaperRegistry | None = None,
     ):
         self.config = config
-        self.vectorizer = vectorizer or TfidfTextVectorizer()
+        self.vectorizer = vectorizer or MultilingualEvidenceTextVectorizer()
         self.fallback_vectorizer = (
             fallback_vectorizer
             if fallback_vectorizer is not None
-            else (TfidfTextVectorizer() if vectorizer is not None else None)
+            else (
+                MultilingualEvidenceTextVectorizer()
+                if vectorizer is not None
+                else None
+            )
         )
         self.context_guard = context_guard or DomainContextGuard()
         self.canonical_registry = canonical_registry or CanonicalPaperRegistry()
@@ -236,9 +244,15 @@ class WeightedPaperRanker:
             if paper.is_canonical
             or paper.relevance_score >= self.config.ranking_min_relevance_score
         ]
-        if relevance_filtered:
-            low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
-            ranked = relevance_filtered
+        # Never let recency/diversity turn a batch with zero lexical or semantic
+        # grounding into plausible recommendations.  This used to retain every
+        # candidate when *all* papers missed the relevance threshold, which is
+        # especially harmful when a broad provider query returns unrelated
+        # Chinese-language records.  Returning no papers lets the pipeline
+        # supplement retrieval or report retrieval_failed instead of fabricating
+        # a credible-looking reading list.
+        low_relevance_filtered_count += len(ranked) - len(relevance_filtered)
+        ranked = relevance_filtered
         abstract_ready = [
             paper
             for paper in ranked
