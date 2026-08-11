@@ -68,7 +68,7 @@ class DomainOnboardingConfig(BaseModel):
     max_content_repairs: int = Field(default=1, ge=0, le=1)
     # Incremental clients receive validated sections before terminal completion.
     # The larger envelope also covers remote embedding and staged generation.
-    request_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=7200.0)
+    request_timeout_seconds: float = Field(default=4800.0, gt=0.0, le=7200.0)
     profile_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     # The stage deadline must exceed the model-call timeout so a timed-out LLM
     # call can return to StormLitePlanner and activate its deterministic fallback.
@@ -80,7 +80,7 @@ class DomainOnboardingConfig(BaseModel):
     # Remote qwen3 embeddings can legitimately take longer than a lexical
     # rank. Keep the stage bounded while allowing one real embedding batch.
     ranking_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
-    generation_timeout_seconds: float = Field(default=2400.0, gt=0.0, le=3600.0)
+    generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
     evaluation_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     relevance_weight: float = Field(default=0.70, ge=0.0, le=1.0)
@@ -119,7 +119,7 @@ class DomainOnboardingConfig(BaseModel):
     )
     max_development_stage_plans: int = Field(default=4, ge=3, le=6)
     staged_development_enabled: bool = True
-    generation_max_attempts: int = Field(default=2, ge=1, le=3)
+    generation_max_attempts: int = Field(default=3, ge=1, le=3)
     generation_development_workers: int = Field(default=1, ge=1, le=3)
     generation_section_workers: int = Field(default=1, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
@@ -127,7 +127,7 @@ class DomainOnboardingConfig(BaseModel):
     generation_landscape_max_tokens: int = Field(default=7000, ge=600, le=12000)
     generation_learning_path_max_tokens: int = Field(default=6500, ge=800, le=12000)
     # Incremental generation runs development first, then landscape/path in
-    # parallel. The default deadline fits two full attempts in both waves.
+    # parallel. The default deadline fits three full attempts in both waves.
     generation_section_timeout_seconds: float = Field(default=60.0, gt=0.0, le=120.0)
     generation_development_timeout_seconds: float = Field(
         default=360.0, gt=0.0, le=600.0

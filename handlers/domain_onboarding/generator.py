@@ -601,10 +601,12 @@ class StructuredOnboardingGenerator:
         stream_stage: str,
         on_delta: Callable[[str, str], None] | None,
     ) -> tuple[dict[str, Any], ModelCallStats]:
+        retry_instruction = ""
+
         def operation(candidate: Any, attempt_timeout: float | None):
             return invoke_json(
                 candidate,
-                system_prompt=system_prompt,
+                system_prompt=system_prompt + retry_instruction,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=max_tokens,
                 timeout_seconds=attempt_timeout,
@@ -614,7 +616,8 @@ class StructuredOnboardingGenerator:
 
         total_stats = ModelCallStats()
         last_error: StructuredLLMError | None = None
-        for _attempt in range(self.config.generation_max_attempts):
+        for attempt in range(self.config.generation_max_attempts):
+            retry_instruction = self._json_retry_instruction(attempt)
             try:
                 payload, attempt_stats = run_with_model_route(
                     model,
@@ -639,6 +642,17 @@ class StructuredOnboardingGenerator:
             if isinstance((value := payload.get(key)), dict)
         )
         return max(candidates, key=lambda item: len(item))
+
+    @staticmethod
+    def _json_retry_instruction(attempt: int) -> str:
+        if attempt <= 0:
+            return ""
+        return (
+            "\n\nThe previous response could not be parsed or validated. "
+            "Return exactly one complete JSON object matching the requested schema. "
+            "Do not include analysis, markdown fences, comments, or text before or "
+            "after the JSON object."
+        )
 
     @staticmethod
     def _add_stats(total: ModelCallStats, item: ModelCallStats) -> None:
@@ -713,10 +727,12 @@ class StructuredOnboardingGenerator:
         }[section]
         attempt_max_tokens = section_max_tokens
 
+        retry_instruction = ""
+
         def generate_candidate(candidate: Any, timeout_seconds: float | None):
             payload, stats = invoke_json(
                 candidate,
-                system_prompt=system_prompt,
+                system_prompt=system_prompt + retry_instruction,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 max_tokens=attempt_max_tokens,
                 timeout_seconds=timeout_seconds,
@@ -743,7 +759,8 @@ class StructuredOnboardingGenerator:
         }[section]
         total_stats = ModelCallStats()
         last_error: StructuredLLMError | GenerationError | None = None
-        for _attempt in range(self.config.generation_max_attempts):
+        for attempt in range(self.config.generation_max_attempts):
+            retry_instruction = self._json_retry_instruction(attempt)
             try:
                 completed, attempt_stats = run_with_model_route(
                     section_model,

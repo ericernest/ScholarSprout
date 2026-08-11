@@ -294,6 +294,10 @@ class GeneratorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(model.calls), 4)
+        self.assertIn(
+            "previous response could not be parsed or validated",
+            model.calls[1]["messages"][0]["content"].lower(),
+        )
         self.assertEqual(
             [item[0] for item in events],
             ["development_ready", "landscape_ready", "learning_path_ready"],
@@ -306,7 +310,9 @@ class GeneratorTests(unittest.TestCase):
             make_candidates(), make_plan(), limit=6
         ).papers
         payload = make_generation_payload([paper.paper_id for paper in ranked])
-        model = FakeJSONModel([payload, "not json", "not json", payload])
+        model = FakeJSONModel(
+            [payload, "not json", "not json", "not json", payload]
+        )
         events = []
 
         result = StructuredOnboardingGenerator(model, config).generate_incrementally(
