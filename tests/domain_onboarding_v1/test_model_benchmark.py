@@ -212,11 +212,20 @@ class ModelBenchmarkTests(unittest.TestCase):
         provider_timeout = transient.model_copy(
             update={"error": "The read operation timed out", "duration_ms": 380_000}
         )
+        throttled = transient.model_copy(
+            update={
+                "error": "Error code: 429 - rate limit exceeded (throttling_error)",
+                "duration_ms": 40_000,
+                "total_tokens": 1200,
+            }
+        )
 
         self.assertTrue(is_transient_infrastructure_failure(transient))
         self.assertFalse(is_resumable_complete(transient))
         self.assertFalse(is_transient_infrastructure_failure(provider_timeout))
         self.assertTrue(is_resumable_complete(provider_timeout))
+        self.assertTrue(is_transient_infrastructure_failure(throttled))
+        self.assertFalse(is_resumable_complete(throttled))
 
 
 if __name__ == "__main__":

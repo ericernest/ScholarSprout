@@ -342,8 +342,13 @@ def is_resumable_complete(run: ModelBenchmarkRun) -> bool:
 
 
 def is_transient_infrastructure_failure(run: ModelBenchmarkRun) -> bool:
-    """Identify calls that failed before reaching the configured model service."""
+    """Identify retryable connection and provider-throttling failures."""
     error = (run.error or "").casefold()
+    if not run.generation_succeeded and any(
+        marker in error
+        for marker in ("rate limit exceeded", "throttling_error", "code: 429")
+    ):
+        return True
     return (
         not run.generation_succeeded
         and run.total_tokens == 0

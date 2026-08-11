@@ -158,7 +158,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("Do not include paper IDs", model.calls[0]["messages"][0]["content"])
 
     def test_concepts_and_techniques_preserve_explanations_and_paper_links(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(
             make_candidates(), make_plan(), limit=6
         ).papers
@@ -212,7 +212,7 @@ class GeneratorTests(unittest.TestCase):
         )
 
     def test_incremental_generation_emits_validated_sections_in_display_order(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(make_candidates(), make_plan(), limit=6).papers
         payload = make_generation_payload([paper.paper_id for paper in ranked])
         model = FakeJSONModel([payload, payload, payload])
@@ -235,7 +235,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(result.output.learning_path[3].reproducibility_checklist)
 
     def test_incremental_generation_reports_failure_when_json_is_invalid(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(
             make_candidates(), make_plan(), limit=6
         ).papers
@@ -257,7 +257,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(len(model.calls), 1)
 
     def test_incremental_generation_identifies_development_failure(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(
             make_candidates(), make_plan(), limit=6
         ).papers
@@ -277,7 +277,7 @@ class GeneratorTests(unittest.TestCase):
             )
 
     def test_incremental_generation_retries_invalid_section_json(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(
             make_candidates(), make_plan(), limit=6
         ).papers
@@ -305,7 +305,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len(result.output.development_stages), 3)
 
     def test_incremental_generation_keeps_valid_sections_when_optional_section_fails(self) -> None:
-        config = DomainOnboardingConfig()
+        config = DomainOnboardingConfig(generation_retry_backoff_seconds=0)
         ranked = WeightedPaperRanker(config).rank(
             make_candidates(), make_plan(), limit=6
         ).papers

@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from .config import DomainOnboardingConfig
+from .execution import current_cancel_event
 from .learning_bindings import LearningPaperBinder
 from .llm import StructuredLLMError, invoke_json
 from .model_routing import routing_snapshot, run_with_model_route
@@ -627,6 +628,7 @@ class StructuredOnboardingGenerator:
             except StructuredLLMError as error:
                 last_error = error
                 self._add_stats(total_stats, error.stats)
+                self._wait_before_retry(attempt)
                 continue
             self._add_stats(total_stats, attempt_stats)
             return payload, total_stats
@@ -653,6 +655,24 @@ class StructuredOnboardingGenerator:
             "Do not include analysis, markdown fences, comments, or text before or "
             "after the JSON object."
         )
+
+    def _wait_before_retry(self, attempt: int) -> None:
+        if attempt + 1 >= self.config.generation_max_attempts:
+            return
+        delay = min(
+            60.0,
+            self.config.generation_retry_backoff_seconds * (attempt + 1),
+        )
+        if delay <= 0:
+            return
+        cancel_event = current_cancel_event()
+        if cancel_event is not None:
+            if cancel_event.wait(delay):
+                raise GenerationError("LLM call cancelled")
+            return
+        from time import sleep
+
+        sleep(delay)
 
     @staticmethod
     def _add_stats(total: ModelCallStats, item: ModelCallStats) -> None:
@@ -774,6 +794,7 @@ class StructuredOnboardingGenerator:
                     int(getattr(section_model, "last_attempt_count", 1)),
                 )
                 self._add_stats(total_stats, error.stats)
+                self._wait_before_retry(attempt)
                 continue
             attempt_stats.model_calls = max(
                 attempt_stats.model_calls,

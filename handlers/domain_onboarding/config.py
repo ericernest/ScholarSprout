@@ -120,6 +120,7 @@ class DomainOnboardingConfig(BaseModel):
     max_development_stage_plans: int = Field(default=4, ge=3, le=6)
     staged_development_enabled: bool = True
     generation_max_attempts: int = Field(default=3, ge=1, le=3)
+    generation_retry_backoff_seconds: float = Field(default=30.0, ge=0.0, le=60.0)
     generation_development_workers: int = Field(default=1, ge=1, le=3)
     generation_section_workers: int = Field(default=1, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)

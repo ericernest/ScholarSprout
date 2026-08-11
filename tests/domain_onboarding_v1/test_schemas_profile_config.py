@@ -68,6 +68,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertEqual(config.generation_timeout_seconds, 3600.0)
         self.assertEqual(config.generation_development_timeout_seconds, 360.0)
         self.assertEqual(config.generation_max_attempts, 3)
+        self.assertEqual(config.generation_retry_backoff_seconds, 30.0)
         self.assertEqual(config.generation_development_workers, 1)
         self.assertEqual(config.generation_section_workers, 1)
         self.assertEqual(config.quality_gate_enforcement, "warn")
