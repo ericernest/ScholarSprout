@@ -518,6 +518,39 @@ select option { color: #07120f; }
 }
 .compact-list { margin: .12rem 0; padding-left: 1rem; }
 .compact-text { margin: .14rem 0; color: var(--muted); font-size: .72rem; line-height: 1.42; }
+.method-pipeline-view { display: grid; gap: .65rem; }
+.method-panel {
+  padding: .68rem; border: 1px solid rgba(102,245,214,.13); border-radius: 10px;
+  background: rgba(2,12,10,.32);
+}
+.method-panel h4 { margin: 0 0 .55rem; color: #dffdf6; font-size: .76rem; line-height: 1.28; }
+.method-fields {
+  display: grid; grid-template-columns: minmax(76px,.24fr) minmax(0,1fr);
+  gap: .34rem .65rem; margin: 0;
+}
+.method-fields dt { color: rgba(216,238,232,.74); font-size: .68rem; font-weight: 700; line-height: 1.4; }
+.method-fields dd {
+  min-width: 0; margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.method-step-list { display: grid; gap: .5rem; }
+.method-step {
+  padding: .6rem; border: 1px solid rgba(154,194,183,.12); border-radius: 8px;
+  background: rgba(0,0,0,.16);
+}
+.method-step.is-core { border-color: rgba(102,245,214,.32); background: rgba(102,245,214,.06); }
+.method-step-header { display: flex; align-items: center; flex-wrap: wrap; gap: .38rem; margin-bottom: .35rem; }
+.method-step-header strong { color: #f2fffb; font-size: .78rem; line-height: 1.35; }
+.method-step-header em {
+  padding: .1rem .34rem; border-radius: 999px; color: var(--accent);
+  background: rgba(102,245,214,.1); font-size: .62rem; font-style: normal;
+}
+.method-step-index { color: rgba(102,245,214,.78); font-size: .68rem; font-weight: 800; }
+.method-step p, .method-inline {
+  margin: .18rem 0 0; color: var(--muted); font-size: .74rem; line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.method-inline span { color: rgba(216,238,232,.82); font-weight: 700; }
 .skill-tabs-nav { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .55rem; }
 .skill-tab { padding: .42rem .68rem; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); background: transparent; font-size: .7rem; }
 .skill-tab.is-active { border-color: var(--accent); color: #04110e; background: var(--accent); }
