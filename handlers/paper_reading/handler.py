@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from channels.base import ChannelMessage
 from runtime.agent_runner import AgentRunResult, run_agent_detailed
+from skills.models import CapabilitySelection
 
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
@@ -67,6 +68,14 @@ SURVEY_MAP_GROUP_KEYS = (
     "applications",
     "open_challenges",
 )
+
+
+class _NoOptionalSkillSelector:
+    def select(self, **kwargs: Any) -> CapabilitySelection:
+        return CapabilitySelection(skill=None, reason="section analysis uses the default Method Analyst skill")
+
+
+NO_OPTIONAL_SKILL_SELECTOR = _NoOptionalSkillSelector()
 
 
 def _utc_now_iso() -> str:
@@ -754,6 +763,7 @@ def _handle_start_reading(
         session_mgr.set_total_sections(session.session_id, len(paper_data.get("sections", []) or []))
 
     current_section = _select_current_section(request, session, paper_data)
+    interaction_type = str((request.metadata or {}).get("interaction_type") or "").strip()
     content_msg = _build_start_reading_context(
         request=request,
         session=session,
@@ -773,7 +783,11 @@ def _handle_start_reading(
         user_content=content_msg,
         tool_registry=app_state.tool_registry,
         skill_registry=app_state.skill_registry,
-        capability_selector=app_state.capability_selector,
+        capability_selector=(
+            NO_OPTIONAL_SKILL_SELECTOR
+            if interaction_type == "section_analysis"
+            else app_state.capability_selector
+        ),
         max_steps=PAPER_READING_AGENT_MAX_STEPS,
         on_text_delta=on_text_delta,
         on_reasoning_delta=on_reasoning_delta,
@@ -804,10 +818,14 @@ def _handle_start_reading(
             skill_outputs=[],
         )
 
-    active_skill_ids = _active_skill_ids_for_context(
-        session.active_skills,
-        current_section,
-        request.content,
+    active_skill_ids = (
+        ["reading.method_analyst"]
+        if interaction_type == "section_analysis"
+        else _active_skill_ids_for_context(
+            session.active_skills,
+            current_section,
+            request.content,
+        )
     )
     skill_outputs = postprocess_agent_output(
         result.text,
@@ -1251,6 +1269,13 @@ def _build_start_reading_context(
     selection_context = _selection_context_for_prompt(request, paper_data, current)
     section_index = _section_index_for_prompt(sections)
     active_skills = ", ".join(session.active_skills) if session.active_skills else "auto"
+    interaction_type = str((request.metadata or {}).get("interaction_type") or "").strip()
+    output_instruction = (
+        "请用自然语言分段回答，直接给出可读的章节精读分析。不要输出 JSON、代码围栏、"
+        "Method Analyst 结构化分析或任何 Skill 结构化字段。"
+        if interaction_type == "section_analysis"
+        else "如果输出某个 Skill 的结构化结果，请优先输出该 Skill 约定的 JSON。"
+    )
     return (
         "[论文元信息]\n"
         f"- paper_id: {paper_data.get('paper_id', session.paper_id)}\n"
@@ -1272,7 +1297,7 @@ def _build_start_reading_context(
         "[用户问题]\n"
         f"{user_question}\n\n"
         "请优先基于用户选区回答；如果选区不足，再使用同页附近文本、当前章节正文和论文元信息。"
-        "如果输出某个 Skill 的结构化结果，请优先输出该 Skill 约定的 JSON。"
+        f"{output_instruction}"
     )
 
 

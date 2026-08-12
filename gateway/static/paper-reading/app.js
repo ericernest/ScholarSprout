@@ -1138,8 +1138,8 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
   return guide
     ? `${pages}${quality}下方是面向科研新手的章节导读。`
     : strHasContent(section.content)
-      ? `${pages}${quality}本章节没有生成可展示的智能索引卡片，请点击“重新生成”。`
-      : `${pages}${quality}该条目只有目录标题，没有提取到独立正文；相关内容请查看其子章节或 PDF 原文。`;
+      ? `${pages}${quality}该小节暂无独立导读，可查看 PDF 原文或直接分析本节。`
+      : `${pages}${quality}该条目暂无独立正文，可查看子章节、PDF 原文或直接分析本节。`;
 }
 
 function sectionGuide(sectionId) {
@@ -1880,10 +1880,11 @@ function moveSection(offset) {
 async function startReading(content, sessionId = state.sessionId, options = {}) {
   if (!state.paperId || state.busy) return;
   state.busy = true;
+  const interactionType = options.sectionAnalysis ? "section_analysis" : "";
   const detail = options.sectionAnalysis
     ? `正在分析 ${sectionTitle(state.currentSection) || "当前章节"}…`
     : "正在分析…";
-  const streaming = showStreamingAnalysisCard(detail);
+  const streaming = showStreamingAnalysisCard(detail, { preferSkillOutput: options.sectionAnalysis });
   const controller = new AbortController();
   state.activeResponseController = controller;
   $("reading-stop-button").hidden = false;
@@ -1894,7 +1895,7 @@ async function startReading(content, sessionId = state.sessionId, options = {}) 
       body: JSON.stringify({
         action: "start_reading", session_id: sessionId || "", paper_id: state.paperId,
         target_section: state.currentSection || "", content,
-        metadata: selectionMetadata(),
+        metadata: { ...selectionMetadata(), interaction_type: interactionType },
       }),
       signal: controller.signal,
     });
@@ -1904,10 +1905,11 @@ async function startReading(content, sessionId = state.sessionId, options = {}) 
       (delta) => streaming.appendReasoning(delta),
     );
     const responseText = payload?.data?.agent_response || "";
-    streaming.finish(responseText, payload?.data?.reasoning || "");
+    streaming.finish(responseText, payload?.data?.reasoning || "", payload?.skill_outputs || []);
+    const visibleResponseText = extractReadableSkillBlocks(responseText).text;
     applyReadingPayload(payload, {
       appendAgent: false,
-      appendSkills: !parseStructuredAgentResponse(responseText),
+      appendSkills: !options.sectionAnalysis && !parseStructuredAgentResponse(visibleResponseText),
     });
     toast("章节分析已更新。");
     return payload;
@@ -1951,7 +1953,11 @@ async function analyzeCurrentSection() {
   );
 }
 
-function showStreamingAnalysisCard(detail, target = $("analysis-feed")) {
+function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-feed")) {
+  if (options instanceof Element) {
+    target = options;
+    options = {};
+  }
   const card = create("article", "analysis-card streaming-analysis-card");
   const header = create("header");
   header.append(create("strong", "", "Synapse Copilot"), create("span", "", detail || "正在分析…"));
@@ -1963,6 +1969,7 @@ function showStreamingAnalysisCard(detail, target = $("analysis-feed")) {
   let text = "";
   let reasoning = "";
   let streaming = true;
+  let mergedSkillOutputs = [];
   const render = () => {
     const inline = window.splitVisibleThinking?.(text) || { reasoning: "", answer: text };
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
@@ -1972,18 +1979,28 @@ function showStreamingAnalysisCard(detail, target = $("analysis-feed")) {
     } else if (streaming && !inline.answer) {
       body.append(create("p", "thinking-status", detail || "正在思考…"));
     }
-    if (inline.answer) body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
+    if (options.preferSkillOutput && !streaming) {
+      const methodOutput = mergedSkillOutputs.find((output) => output.skill_id === "reading.method_analyst");
+      if (inline.answer) {
+        body.append(renderAgentResponse(inline.answer, { allowStructured: true }));
+      } else if (methodOutput?.rendered) {
+        body.append(renderMarkdown(methodOutput.rendered));
+      }
+    } else if (inline.answer) {
+      body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
+    }
     target.scrollTop = target.scrollHeight;
   };
   return {
     append(delta) { text += String(delta || ""); render(); },
     appendReasoning(delta) { reasoning += String(delta || ""); render(); },
-    finish(finalText, finalReasoning = "") {
+    finish(finalText, finalReasoning = "", skillOutputs = []) {
       text = String(finalText || text || "后端没有返回内容。");
       reasoning = String(finalReasoning || reasoning || "");
+      mergedSkillOutputs = Array.isArray(skillOutputs) ? skillOutputs : [];
       streaming = false;
       card.classList.remove("streaming-analysis-card");
-      header.lastElementChild.textContent = "Agent";
+      header.lastElementChild.textContent = options.preferSkillOutput ? "章节分析" : "Agent";
       render();
       requestAnimationFrame(() => scrollAnalysisCardToTop(target, card));
     },
@@ -2036,7 +2053,7 @@ function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
 }
 
 function renderSkillOutputs(outputs, target) {
-  outputs.forEach((output) => {
+  dedupeSkillOutputs(outputs).forEach((output) => {
     const card = create("article", "skill-output-card");
     const header = create("header");
     header.append(create("strong", "", output.skill_name || skillLabel(output.skill_id)), create("span", "", output.output_type || output.parse_status || "Skill"));
@@ -2049,10 +2066,114 @@ function renderSkillOutputs(outputs, target) {
   });
 }
 
+function dedupeSkillOutputs(outputs = []) {
+  const seen = new Set();
+  return (outputs || []).filter((output) => {
+    const key = output?.skill_id || output?.output_type || "";
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function renderSkillContent(output) {
-  const content = output.output_type === "math_derivation" ? renderMathTabs(output.content) : renderStructuredValue(output.content);
+  const content = output.output_type === "method_pipeline"
+      ? renderMethodPipeline(output.content)
+      : output.output_type === "math_derivation"
+      ? renderMathTabs(output.content)
+      : renderStructuredValue(output.content);
   typesetResponseMath(content);
   return content;
+}
+
+function renderMethodPipeline(content = {}) {
+  const wrap = create("div", "method-pipeline-view");
+  const problem = content.problem_formulation || {};
+  const innovation = content.core_innovation_analysis || {};
+
+  if (Object.keys(problem).length) {
+    const section = create("section", "method-panel");
+    section.append(create("h4", "", "问题定义"));
+    const fields = create("dl", "method-fields");
+    [
+      ["输入", problem.input],
+      ["输出", problem.output],
+      ["约束", problem.constraints],
+      ["形式化定义", problem.formal_definition],
+    ].forEach(([label, value]) => appendMethodField(fields, label, value));
+    section.append(fields);
+    wrap.append(section);
+  }
+
+  const steps = Array.isArray(content.pipeline) ? content.pipeline : [];
+  if (steps.length) {
+    const section = create("section", "method-panel");
+    section.append(create("h4", "", "方法 Pipeline"));
+    const list = create("div", "method-step-list");
+    steps.forEach((step, index) => {
+      const item = create("article", `method-step${step.is_core_innovation ? " is-core" : ""}`);
+      const header = create("div", "method-step-header");
+      header.append(create("span", "method-step-index", String(index + 1).padStart(2, "0")));
+      header.append(create("strong", "", step.name || step.step_id || `Step ${index + 1}`));
+      if (step.is_core_innovation) header.append(create("em", "", "核心创新"));
+      item.append(header);
+      if (step.description) item.append(create("p", "", step.description));
+      if (step.motivation) item.append(methodInlineBlock("动机", step.motivation));
+      if (Array.isArray(step.connects_to) && step.connects_to.length) {
+        item.append(methodInlineBlock("连接到", step.connects_to.join("、")));
+      }
+      list.append(item);
+    });
+    section.append(list);
+    wrap.append(section);
+  }
+
+  if (Object.keys(innovation).length) {
+    const section = create("section", "method-panel");
+    section.append(create("h4", "", "核心创新"));
+    const fields = create("dl", "method-fields");
+    [
+      ["是什么", innovation.what],
+      ["与前人差异", innovation.difference_from_prior],
+      ["为什么有效", innovation.why_it_works],
+    ].forEach(([label, value]) => appendMethodField(fields, label, value));
+    section.append(fields);
+    wrap.append(section);
+  }
+
+  const checkpoints = Array.isArray(content.novice_checkpoints) ? content.novice_checkpoints : [];
+  if (checkpoints.length) {
+    const section = create("section", "method-panel");
+    section.append(create("h4", "", "理解检查"));
+    const list = create("ul", "compact-list");
+    checkpoints.forEach((item) => list.append(create("li", "", String(item))));
+    section.append(list);
+    wrap.append(section);
+  }
+
+  if (!wrap.childNodes.length) wrap.append(renderStructuredValue(content));
+  return wrap;
+}
+
+function appendMethodField(fields, label, value) {
+  if (value == null || value === "" || (Array.isArray(value) && !value.length)) return;
+  fields.append(create("dt", "", label));
+  const dd = create("dd");
+  if (Array.isArray(value)) {
+    const list = create("ul", "compact-list");
+    value.forEach((item) => list.append(create("li", "", String(item))));
+    dd.append(list);
+  } else {
+    dd.textContent = String(value);
+  }
+  fields.append(dd);
+}
+
+function methodInlineBlock(label, value) {
+  const block = create("p", "method-inline");
+  block.append(create("span", "", `${label}：`), document.createTextNode(String(value)));
+  return block;
 }
 
 function renderMathTabs(content) {
@@ -2235,21 +2356,161 @@ function parseStructuredAgentResponse(source) {
   }
 }
 
+function extractReadableSkillBlocks(source) {
+  let text = String(source || "");
+  const outputs = [];
+  const extracted = extractSkillJsonObjects(text);
+  text = extracted.text;
+  outputs.push(...extracted.outputs);
+  const titlePattern = /(?:^|\n)[^\n]*Method Analyst\s*结构化(?:输出|分析)[^\n]*(?:\n|$)/i;
+  let match = titlePattern.exec(text);
+  while (match) {
+    let removeStart = match.index;
+    if (text[removeStart] === "\n") removeStart += 1;
+    const beforeTitle = text.slice(0, match.index);
+    const hrMatch = beforeTitle.match(/(?:^|\n)[ \t]*[-*_]{3,}[ \t]*\n[ \t]*$/);
+    if (hrMatch) removeStart = beforeTitle.length - hrMatch[0].length + (hrMatch[0].startsWith("\n") ? 1 : 0);
+
+    let cursor = match.index + match[0].length;
+    while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
+    let removeEnd = cursor;
+    if (text.startsWith("```", cursor)) {
+      const fenceEnd = text.indexOf("```", cursor + 3);
+      removeEnd = fenceEnd >= 0 ? fenceEnd + 3 : text.length;
+    } else {
+      const objectStart = text.indexOf("{", cursor);
+      if (objectStart >= 0) {
+        removeEnd = findBalancedJsonObjectEnd(text, objectStart);
+        const output = skillOutputFromJson(text.slice(objectStart, removeEnd));
+        if (output) outputs.push(output);
+      }
+    }
+    text = `${text.slice(0, removeStart)}\n${text.slice(removeEnd)}`;
+    match = titlePattern.exec(text);
+  }
+  return {
+    text: text.replace(/\n{3,}/g, "\n\n").trim(),
+    outputs: dedupeSkillOutputs(outputs),
+  };
+}
+
+function extractSkillJsonObjects(source) {
+  let text = String(source || "");
+  const outputs = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf("{", cursor);
+    if (start < 0) break;
+    const end = findBalancedJsonObjectEnd(text, start);
+    if (end <= start || end > text.length) break;
+    const candidate = text.slice(start, end);
+    const output = skillOutputFromJson(candidate);
+    if (output) {
+      outputs.push(output);
+      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+      const prefix = text.slice(lineStart, start);
+      const removeStart = /^[\s>]*$/.test(prefix) ? lineStart : start;
+      let removeEnd = end;
+      while (removeEnd < text.length && /[ \t]/.test(text[removeEnd])) removeEnd += 1;
+      if (text[removeEnd] === "\n") removeEnd += 1;
+      text = `${text.slice(0, removeStart)}\n${text.slice(removeEnd)}`;
+      cursor = Math.max(0, removeStart - 1);
+    } else {
+      cursor = end;
+    }
+  }
+  return { text, outputs: dedupeSkillOutputs(outputs) };
+}
+
+function skillOutputFromJson(candidate) {
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const isMethodAnalyst = parsed.problem_formulation && Array.isArray(parsed.pipeline);
+    const isMathVerifier = parsed.formula
+      && parsed.layer_1_intuition
+      && Array.isArray(parsed.layer_2_derivation);
+    if (isMethodAnalyst) {
+      return {
+        skill_id: "reading.method_analyst",
+        skill_name: "方法论拆解",
+        output_type: "method_pipeline",
+        parse_status: "parsed",
+        content: parsed,
+      };
+    }
+    if (isMathVerifier) {
+      return {
+        skill_id: "reading.math_verifier",
+        skill_name: "公式推导验证者",
+        output_type: "math_derivation",
+        parse_status: "parsed",
+        content: parsed,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function findBalancedJsonObjectEnd(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+      continue;
+    }
+    if (char === "\"") inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return text.length;
+}
+
 function renderAgentResponse(source, options = {}) {
+  const extracted = extractReadableSkillBlocks(source);
+  source = extracted.text;
   const structured = options.allowStructured === false
     ? null
     : parseStructuredAgentResponse(source);
+  const wrap = create("div", "agent-response-content");
+  const appendExtracted = () => {
+    extracted.outputs.forEach((output) => {
+      if (output.skill_id === "reading.method_analyst") return;
+      const card = create("article", "skill-output-card inline-skill-output-card");
+      const header = create("header");
+      header.append(create("strong", "", output.skill_name || skillLabel(output.skill_id)), create("span", "", output.output_type || "Skill"));
+      card.append(header, renderSkillContent(output));
+      wrap.append(card);
+    });
+  };
   if (Array.isArray(structured)) {
     const content = renderStructuredArray(structured);
     typesetResponseMath(content);
-    return content;
+    wrap.append(content);
+    appendExtracted();
+    return wrap;
   }
   if (structured) {
     const content = renderStructuredValue(structured);
     typesetResponseMath(content);
-    return content;
+    wrap.append(content);
+    appendExtracted();
+    return wrap;
   }
-  return renderMarkdown(source);
+  if (source.trim()) wrap.append(renderMarkdown(source));
+  appendExtracted();
+  if (!wrap.childNodes.length) wrap.append(renderMarkdown("暂无可展示内容。"));
+  return wrap;
 }
 
 function renderSkillControls() {
@@ -2336,8 +2597,6 @@ async function handleSelectionAction(event) {
   $("selection-toolbar").hidden = true;
   const quoted = `\n\n选中内容：\n${state.selectedText}`;
   if (action === "explain") await startReading(`请解释这段内容的直觉、上下文和关键假设。${quoted}`);
-  if (action === "concept") await startReading(`请把选中概念整理为简洁概念卡片：定义、本文语境、必要前置知识、与当前方法的关系、一个易混淆概念。${quoted}`);
-  if (action === "formula") openFork("请对选中公式做直觉、逐步推导和数值例子三层分析。");
   if (action === "fork") openFork("请围绕选中内容进行深入探索。");
   if (action === "highlight") addPdfMarkFromSelection("highlight");
   if (action === "note") addPdfMarkFromSelection("note");
@@ -2629,9 +2888,22 @@ function selectionRectForMetadata(selection, pdfPage) {
 function openFork(question) {
   if (!state.sessionId) return toast("请先开始章节阅读，再创建 Fork。", true);
   $("fork-context-input").value = state.selectedText || sectionTitle(state.currentSection);
-  $("fork-question-input").value = question || "请深入分析这段内容。";
+  $("fork-question-input").value = question || defaultForkQuestion(state.selectedText);
   $("fork-modal").hidden = false;
   $("fork-question-input").focus();
+}
+
+function defaultForkQuestion(context = "") {
+  return looksLikeFormula(context)
+    ? "请对选中公式做直觉、逐步推导和数值例子三层分析。"
+    : "请围绕选中内容进行深入探索。";
+}
+
+function looksLikeFormula(text = "") {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  const mathTokens = (value.match(/[=∑∏∫√∞≈≤≥≠→←↔∀∃∈∉⊂⊆⊕⊗πθλμστΩαβγΔ_{}^\\]/g) || []).length;
+  return mathTokens >= 2 || /\b(?:argmax|argmin|softmax|log|exp|Pr|p\(|E\[|R\(|\\frac|\\sum|\\prod|\\theta|\\pi)\b/.test(value);
 }
 
 function closeFork() {
@@ -2669,9 +2941,7 @@ async function createFork() {
       target_section: state.currentSection, content: `${question}\n\n上下文：${context}`,
     }, fork.feedEl, `正在分析 ${fork.label}…`);
     if (!result) return;
-    if (!parseStructuredAgentResponse(result.data?.agent_response || "")) {
-      renderSkillOutputs(result.skill_outputs || [], fork.feedEl);
-    }
+    renderSkillOutputs(unrenderedSkillOutputs(result.skill_outputs || [], result.data?.agent_response || ""), fork.feedEl);
     toast("Fork 分支已创建，可在此选项卡继续追问。");
   } catch (error) {
     thinking.remove();
@@ -2685,9 +2955,12 @@ async function runForkTurn(fork, question) {
     action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
     target_section: state.currentSection, content: question,
   }, fork.feedEl, `正在追问 ${fork.label}…`);
-  if (payload && !parseStructuredAgentResponse(payload.data?.agent_response || "")) {
-    renderSkillOutputs(payload.skill_outputs || [], fork.feedEl);
-  }
+  if (payload) renderSkillOutputs(unrenderedSkillOutputs(payload.skill_outputs || [], payload.data?.agent_response || ""), fork.feedEl);
+}
+
+function unrenderedSkillOutputs(outputs = [], agentResponse = "") {
+  const inlineIds = new Set(extractReadableSkillBlocks(agentResponse).outputs.map((output) => output.skill_id));
+  return (outputs || []).filter((output) => !inlineIds.has(output.skill_id));
 }
 
 async function streamPaperTurn(body, target, detail) {
