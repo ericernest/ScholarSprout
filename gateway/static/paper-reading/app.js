@@ -996,7 +996,7 @@ function syncReadingMapPanelState() {
   panel.classList.toggle("is-collapsed", !expanded);
   const ribbonButton = $("research-overview-button");
   if (ribbonButton) {
-    ribbonButton.textContent = expanded ? `收起${label} ↑` : `展开${label} ↓`;
+    ribbonButton.textContent = expanded ? `收起${label}` : `展开${label}`;
     ribbonButton.setAttribute("aria-expanded", String(expanded));
   }
   const panelButton = $("reading-map-toggle-button");

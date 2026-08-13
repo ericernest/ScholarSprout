@@ -426,7 +426,8 @@ select option { color: #07120f; }
 
 .copilot-panel { display: grid; grid-template-rows: auto auto minmax(0,1fr) auto; min-height: 0; }
 .copilot-heading { padding: .9rem; border-bottom: 1px solid var(--line); }
-.copilot-heading-actions { display: flex; align-items: center; gap: .45rem; }
+.copilot-heading > div:first-child { min-width: 0; }
+.copilot-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .45rem; }
 .copilot-tabs { display: flex; gap: .3rem; padding: .55rem .8rem 0; overflow-x: auto; scrollbar-width: thin; }
 .copilot-tab {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: .4rem; padding: .42rem .68rem;
