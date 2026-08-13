@@ -35,6 +35,7 @@ const state = {
   currentSection: "", progress: {}, activeSkills: [], skillOutputs: [],
   selectedText: "", selectedPage: null, selectedRect: null, sourceView: "pdf", uploadSummary: null,
   sessionState: "", restored: false, busy: false,
+  readingMapExpanded: false,
   forks: [], activeFeedId: "main",
   readerMode: "pdf", pdfDoc: null, pdfDocUrl: "", pdfRenderedKey: "", pdfjsLoading: null,
   pdfZoom: null, pdfMarks: [], pdfMarkColor: "yellow", pdfMarkHistory: [],
@@ -108,9 +109,9 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
-  $("research-overview-button")?.addEventListener("click", () => {
-    $("reading-map-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
+  $("research-overview-button")?.addEventListener("click", () => toggleReadingMapPanel());
+  $("reading-map-toggle-button")?.addEventListener("click", () => toggleReadingMapPanel());
+  syncReadingMapPanelState();
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   $("reading-chat-form").addEventListener("submit", (event) => {
@@ -618,6 +619,7 @@ async function enterWorkbench() {
   }
   $("paper-intake").hidden = true;
   $("paper-workbench").hidden = false;
+  state.readingMapExpanded = false;
   $("workspace-status").textContent = "论文精读 · 阅读中";
   $("paper-ready-card").classList.remove("is-entering");
   renderPaperWorkspace();
@@ -976,6 +978,32 @@ function renderOutlineSourceWarning() {
 function readingMapGenerationStatus() {
   const map = state.readingMap || state.paper?.reading_map || {};
   return state.readingMapStatus === "llm_running" ? "llm_running" : (map.status || state.parseStatus || "pending");
+}
+
+function toggleReadingMapPanel(forceExpanded) {
+  state.readingMapExpanded = typeof forceExpanded === "boolean" ? forceExpanded : !state.readingMapExpanded;
+  syncReadingMapPanelState();
+  if (state.readingMapExpanded) $("reading-map-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function syncReadingMapPanelState() {
+  const panel = $("reading-map-panel");
+  if (!panel) return;
+  const map = state.readingMap || state.paper?.reading_map || {};
+  const isSurvey = map.map_variant === "survey";
+  const expanded = Boolean(state.readingMapExpanded);
+  const label = isSurvey ? "综述地图" : "研究总览";
+  panel.classList.toggle("is-collapsed", !expanded);
+  const ribbonButton = $("research-overview-button");
+  if (ribbonButton) {
+    ribbonButton.textContent = expanded ? `收起${label} ↑` : `展开${label} ↓`;
+    ribbonButton.setAttribute("aria-expanded", String(expanded));
+  }
+  const panelButton = $("reading-map-toggle-button");
+  if (panelButton) {
+    panelButton.textContent = expanded ? "收起" : "展开";
+    panelButton.setAttribute("aria-expanded", String(expanded));
+  }
 }
 
 function isReadingMapReady() {
@@ -1834,9 +1862,9 @@ function jumpToPdfPage(page, sectionId = "") {
 }
 
 function scrollPageToPdfReader() {
-  // The reading map sits below the fixed-height workbench. Returning every
-  // possible outer scroll root to zero is deterministic across browsers and
-  // guarantees that the PDF reader is visible after a source jump.
+  // Source jumps should return to the top workbench area so the PDF reader is
+  // visible even when the overview panel is expanded above it.
+  const target = $("workbench-grid") || $("pdf-reader");
   const scrollRoots = [
     document.scrollingElement,
     document.documentElement,
@@ -1848,6 +1876,7 @@ function scrollPageToPdfReader() {
     if (typeof root.scrollTo === "function") root.scrollTo({ top: 0, left: 0, behavior: "auto" });
   });
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  target?.scrollIntoView({ behavior: "auto", block: "start", inline: "nearest" });
 }
 
 async function selectSection(sectionId, analyze) {
@@ -3158,7 +3187,7 @@ function renderReadingMap() {
   grid.replaceChildren();
   if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "Survey reading map" : "Research overview";
   if ($("reading-map-title")) $("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览";
-  if ($("research-overview-button")) $("research-overview-button").textContent = isSurvey ? "综述地图 ↓" : "研究总览 ↓";
+  syncReadingMapPanelState();
   if (detail) {
     detail.replaceChildren(
       create("p", "panel-label", isSurvey ? "Survey guide" : "Research overview"),
