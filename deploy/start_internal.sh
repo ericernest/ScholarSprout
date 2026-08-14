@@ -8,6 +8,8 @@ cd "${REPO_ROOT}"
 
 HOST="${NOVICESYNAPSE_HOST:-0.0.0.0}"
 PORT="${NOVICESYNAPSE_PORT:-8000}"
+PYTHON_BIN="${NOVICESYNAPSE_PYTHON:-python3}"
 
 echo "Starting NoviceSynapse on ${HOST}:${PORT}"
-exec python3 -m cli.main gateway --host "${HOST}" --port "${PORT}"
+echo "Python: ${PYTHON_BIN}"
+exec "${PYTHON_BIN}" -m cli.main gateway --host "${HOST}" --port "${PORT}"
