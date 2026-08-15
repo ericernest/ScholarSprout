@@ -123,6 +123,8 @@ novicesynapse doctor
 novicesynapse gateway --host 127.0.0.1 --port 8000
 ```
 
+校园网部署请使用 `deploy/start_campus.sh`，服务默认监听 `0.0.0.0:8000`，具体启动命令和网络放行要求见 [`deploy/campus-network.md`](deploy/campus-network.md)。
+
 ## Gateway 接口命令
 
 启动 gateway 后，可以用命令行直接访问当前三个功能入口。
