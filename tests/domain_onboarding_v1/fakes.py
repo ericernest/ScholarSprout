@@ -40,6 +40,8 @@ def make_profile(preference: str = "balanced") -> LearnerProfile:
 def make_plan() -> DomainResearchPlan:
     return DomainResearchPlan(
         normalized_domain="检索增强生成",
+        translated_domain="retrieval-augmented generation",
+        expanded_terms=["RAG", "retrieval augmented generation"],
         perspectives=[
             ResearchPerspective(name="基础", description="理论基础", questions=["是什么"]),
             ResearchPerspective(name="方法", description="主要方法", questions=["怎么做"]),

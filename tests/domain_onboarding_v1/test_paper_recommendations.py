@@ -6,6 +6,7 @@ from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.paper_recommendations import SurveyRecommendationPolicy
 from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.schemas import PaperCandidate
+from handlers.domain_onboarding.schemas import DomainResearchPlan, ResearchPerspective
 
 from .fakes import make_plan
 
@@ -17,18 +18,19 @@ def candidate(
     year: int,
     citations: int,
     survey_sources: list[str] | None = None,
+    matched_queries: list[str] | None = None,
+    abstract: str | None = None,
 ) -> PaperCandidate:
     return PaperCandidate(
         paper_id=paper_id,
         title=title,
-        abstract=(
-            "retrieval augmented generation methods architectures evaluation benchmark"
-        ),
+        abstract=abstract or "retrieval augmented generation methods architectures evaluation benchmark",
         year=year,
         url=f"https://example.org/{paper_id}",
         citation_count=citations,
         source="semantic_scholar",
         survey_source_ids=survey_sources or [],
+        matched_queries=matched_queries or [],
     )
 
 
@@ -44,6 +46,88 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
             self.config,
         )
         self.plan = make_plan()
+
+    def test_candidate_queries_use_dynamic_terms_and_skip_generic_fallback_branches(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="多智能体",
+            translated_domain="multi-agent systems",
+            expanded_terms=["LLM-based multi-agent collaboration"],
+            perspectives=[
+                ResearchPerspective(name="基础", description="基础", questions=[]),
+                ResearchPerspective(name="方法", description="方法", questions=[]),
+                ResearchPerspective(name="评测", description="评测", questions=[]),
+            ],
+            search_queries=["multi-agent systems"],
+            expected_subdirections=["理论与基础", "核心方法", "评测与前沿"],
+        )
+
+        queries = [query.query for query in self.policy.queries(plan)]
+
+        self.assertTrue(any("LLM-based multi-agent collaboration" in query for query in queries))
+        self.assertFalse(any("theoretical foundations" in query for query in queries))
+
+    def test_query_validation_keeps_only_queries_with_real_survey_results(self) -> None:
+        good = '"LLM-based multi-agent systems" survey systematic review taxonomy'
+        bad = '"multi-agent systems" survey systematic review taxonomy'
+        queries = [
+            self.policy.queries(self.plan)[0].model_copy(update={"query": good}),
+            self.policy.queries(self.plan)[0].model_copy(update={"query": bad}),
+        ]
+        papers = [
+            candidate(
+                "survey",
+                "A Survey of LLM-Based Multi-Agent Systems",
+                year=2025,
+                citations=50,
+                matched_queries=[good],
+            ),
+            candidate(
+                "method",
+                "Multi-Agent Coordination Method",
+                year=2024,
+                citations=10,
+                matched_queries=[bad],
+            ),
+        ]
+
+        selected, audit = self.policy.validate_queries(queries, papers, self.plan)
+
+        self.assertEqual([query.query for query in selected], [good])
+        self.assertEqual(sum(item["selected"] for item in audit), 1)
+        self.assertEqual(next(item for item in audit if item["query"] == bad)["reason"], "no_verified_survey")
+
+    def test_real_paper_text_bootstraps_long_tail_query_terms(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="多智能体",
+            translated_domain="multi-agent systems",
+            perspectives=[
+                ResearchPerspective(name="基础", description="基础", questions=[]),
+                ResearchPerspective(name="方法", description="方法", questions=[]),
+                ResearchPerspective(name="评测", description="评测", questions=[]),
+            ],
+            search_queries=["multi-agent systems"],
+            expected_subdirections=["理论与基础", "核心方法", "评测与前沿"],
+        )
+        papers = [
+            candidate(
+                "camel",
+                "LLM Based Multi Agent Collaboration",
+                year=2023,
+                citations=100,
+                abstract="Large language models enable LLM based multi agent collaboration.",
+            ),
+            candidate(
+                "autogen",
+                "Large Language Model Multi Agent Conversation",
+                year=2023,
+                citations=100,
+                abstract="LLM based multi agent collaboration supports autonomous agents.",
+            ),
+        ]
+
+        terms = self.policy.discover_terms(plan, papers)
+
+        self.assertTrue(any("multi agent" in term for term in terms), terms)
 
     def test_recent_surveys_are_visible_before_older_influential_surveys(self) -> None:
         surveys, candidate_count = self.policy.select_surveys(

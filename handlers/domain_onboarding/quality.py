@@ -194,6 +194,9 @@ class CompositeQualityEvaluator:
         output: DomainOnboardingOutput,
         issues: list[QualityIssue],
     ) -> float:
+        recommendation_may_be_empty = output.reproducibility.get(
+            "recommendation_strategy"
+        ) == "survey_degraded_no_result"
         checks = [
             bool(output.domain.strip()),
             len(output.text.strip()) >= 40,
@@ -202,7 +205,7 @@ class CompositeQualityEvaluator:
             bool(output.current_landscape.problems),
             len(output.current_landscape.subdirections) >= self.config.min_subdirections,
             len(output.learning_path) >= self.config.min_learning_steps,
-            bool(output.papers),
+            bool(output.papers) or recommendation_may_be_empty,
         ]
         if not all(checks):
             issues.append(
@@ -395,6 +398,24 @@ class CompositeQualityEvaluator:
     ) -> float:
         allowed = {paper.paper_id: paper for paper in allowed_papers}
         selected = [allowed[paper.paper_id] for paper in output.papers if paper.paper_id in allowed]
+        recommendation_degraded = output.reproducibility.get(
+            "recommendation_strategy"
+        ) == "survey_degraded_no_result"
+        if not selected and recommendation_degraded:
+            issues.append(
+                QualityIssue(
+                    issue_type="recommendation_unavailable",
+                    severity="warning",
+                    target_path="papers",
+                    message="Survey 专项检索及一次动态扩展未找到可验证综述，推荐清单保持为空。",
+                    recommended_action="检查查询审计或稍后重试；不要用证据论文冒充综述推荐。",
+                )
+            )
+            selected = [
+                allowed[paper.paper_id]
+                for paper in output.evidence_papers
+                if paper.paper_id in allowed
+            ]
         if not selected:
             score = 0.0
             low_ids: list[str] = []
@@ -458,9 +479,7 @@ class CompositeQualityEvaluator:
                                 recommended_action="补充检索该领域的奠基或核心方法论文。",
                             )
                         )
-            if output.reproducibility.get("recommendation_strategy") == (
-                "survey_first_then_survey_references"
-            ):
+            if output.reproducibility.get("recommendation_strategy") == "survey_success":
                 reason_coverage = _average(
                     float(bool(paper.recommendation_reason.strip()))
                     for paper in output.papers

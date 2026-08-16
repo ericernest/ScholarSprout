@@ -20,7 +20,15 @@ RecommendationCategory = Literal[
     "recent_survey",
     "influential_survey",
     "survey_reference",
+    # Accepted only when replaying v1.9-and-earlier outputs.
     "fallback_evidence",
+]
+RecommendationStrategy = Literal[
+    "not_run",
+    "disabled",
+    "survey_success",
+    "survey_degraded_no_result",
+    "legacy_selected_papers",
 ]
 LearningUse = Literal[
     "concept_introduction",
@@ -80,6 +88,7 @@ QualityIssueType = Literal[
     "missing_core_paper",
     "language_mismatch",
     "generation_fallback",
+    "recommendation_unavailable",
 ]
 RetryStatus = Literal[
     "not_needed",
@@ -110,6 +119,7 @@ _ISSUE_DIMENSIONS: dict[str, QualityDimension] = {
     "missing_core_paper": "paper_relevance",
     "language_mismatch": "language_alignment",
     "generation_fallback": "structure",
+    "recommendation_unavailable": "paper_relevance",
     "missing_coverage": "topic_coverage",
     "weak_development_stage": "development_coherence",
     "route_conflict": "learning_path",
@@ -146,6 +156,7 @@ _ISSUE_REPAIRABILITY: dict[str, Repairability] = {
     "missing_core_paper": "retrieval",
     "language_mismatch": "llm",
     "generation_fallback": "none",
+    "recommendation_unavailable": "retrieval",
 }
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
@@ -314,12 +325,24 @@ class DomainResearchPlan(OnboardingModel):
     development_stage_plans: list[DevelopmentStageResearchPlan] = Field(
         default_factory=list
     )
+    planning_mode: Literal["model", "fallback"] = "model"
+    planning_fallback_reason: str | None = None
+    recommendation_strategy: RecommendationStrategy = "not_run"
+    recommendation_expanded_terms: list[str] = Field(default_factory=list)
+    recommendation_query_audit: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def deduplicate(self) -> "DomainResearchPlan":
         self.translated_domain = self.translated_domain.strip()
         self.expanded_terms = list(
             dict.fromkeys(term.strip() for term in self.expanded_terms if term.strip())
+        )
+        self.recommendation_expanded_terms = list(
+            dict.fromkeys(
+                term.strip()
+                for term in self.recommendation_expanded_terms
+                if term.strip()
+            )
         )
         used_path_ids: set[str] = set()
         for index, perspective in enumerate(self.perspectives, start=1):

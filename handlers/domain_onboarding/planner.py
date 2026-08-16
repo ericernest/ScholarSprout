@@ -52,15 +52,10 @@ _DOMAIN_EXPANSIONS = {
     "retrieval-augmented generation": [
         "RAG",
         "retrieval augmented generation",
-        "knowledge-grounded generation",
-        "dense retrieval",
-        "reranking",
     ],
-    "graph neural networks": ["GNN", "graph representation learning", "message passing neural networks"],
-    "diffusion models": ["denoising diffusion probabilistic models", "score-based generative models"],
-    "multi-agent systems": ["MAS", "agent collaboration", "agent coordination"],
-    "multi-agent debate": ["multi-agent deliberation", "LLM debate", "agent collaboration"],
-    "multimodal large language models": ["MLLM", "vision-language models", "multimodal foundation models"],
+    "graph neural networks": ["GNN", "graph neural network"],
+    "diffusion models": ["DDPM", "denoising diffusion probabilistic models"],
+    "multimodal large language models": ["MLLM"],
 }
 
 
@@ -105,11 +100,19 @@ class StormLitePlanner:
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
             plan = self._expand_plan_queries(plan)
+            plan.planning_mode = "model"
+            plan.planning_fallback_reason = None
             return PlanningResult(plan=plan, stats=stats)
         except StructuredLLMError as error:
-            return PlanningResult(plan=self._fallback_plan(domain_query), stats=error.stats)
+            plan = self._fallback_plan(domain_query)
+            plan.planning_mode = "fallback"
+            plan.planning_fallback_reason = "structured_llm_error"
+            return PlanningResult(plan=plan, stats=error.stats)
         except (ValidationError, ValueError):
-            return PlanningResult(plan=self._fallback_plan(domain_query), stats=stats)
+            plan = self._fallback_plan(domain_query)
+            plan.planning_mode = "fallback"
+            plan.planning_fallback_reason = "invalid_or_incomplete_plan"
+            return PlanningResult(plan=plan, stats=stats)
 
     def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
         domain = self._extract_domain(query)

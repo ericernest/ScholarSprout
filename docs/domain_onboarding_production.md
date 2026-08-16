@@ -99,15 +99,23 @@ Pipeline 内部保留两个论文集合：`evidence_papers` 为发展阶段、�
 概念和技术说明提供证据；`papers` 是面向用户展示的精选阅读清单。
 证据论文不会因为没有进入推荐清单而丢失，也不会全部堆到用户界面。
 
-推荐流程使用全领域 Survey 查询和 3 个子方向 Survey 查询。Survey 排序为：
+推荐流程从规划模型给出的标准英文领域名、别名和真实子方向生成候选 Survey 查询。
+固定扩展表只保存 RAG、GNN 等基础且不易混淆的标准别名；长尾或歧义领域不依赖静态领域词表。
+候选查询先进行小规模真实检索，并按照相关性、Survey 命中率、摘要完整度、近期论文比例和来源覆盖评分；
+只有包含真实 Survey 且达到阈值的查询可以进入推荐候选池。
+
+第一轮没有合格 Survey 时，Pipeline 从已经验证的证据论文标题和摘要中提取领域锚定短语，
+执行最多一轮动态扩展查询。该步骤只使用证据论文发现搜索词，不会把证据论文混入推荐候选。
+Survey 排序为：
 相关性 45%、时效性 25%、按发表年限归一化的引用表现 20%、摘要完整度 10%；
 结果中较新 Survey 优先于较旧高引 Survey。入选 Survey 再通过
 Semantic Scholar `GET /graph/v1/paper/{paper_id}/references` 获取参考文献，
 以相关性 65%、引用表现 20%、时效性 15% 筛选代表方法论文。
 每篇来自综述参考文献的推荐都保留 `survey_source_ids`，可追溯它来自哪篇综述。
 
-Survey 检索或参考文献接口失败时，Pipeline 会保留已验证高相关论文作为降级阅读入口，
-并在指标中记录 `recommendation_degraded_count`，不会因推荐扩展失败而让领域入门任务失败。
+Survey 初搜和动态补搜都失败时，用户推荐 `papers` 保持为空，内部 `evidence_papers` 继续支持其他模块；
+Pipeline 不再把发展路径证据标记为推荐。结果通过 `recommendation_strategy=survey_degraded_no_result`
+和逐查询审计说明失败原因，并在指标中记录查询数、验证通过数、扩展轮次和降级次数。
 
 仓库提供 `Dockerfile` 与 `deploy/docker-compose.yml`。复制
 `deploy/domain-onboarding.env.example` 为部署系统的受保护环境配置后，可从

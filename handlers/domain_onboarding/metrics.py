@@ -63,6 +63,10 @@ class DomainOnboardingRequestTrace:
     recommendation_reference_candidate_count: int = 0
     recommendation_selected_reference_count: int = 0
     recommendation_degraded_count: int = 0
+    recommendation_validated_query_count: int = 0
+    recommendation_expansion_round_count: int = 0
+    recommendation_strategy: str = "not_run"
+    recommendation_query_audit: list[dict[str, Any]] = field(default_factory=list)
     development_stage_count: int = 0
     stage_retrieval_query_count: int = 0
     stage_bound_paper_count: int = 0
@@ -269,6 +273,8 @@ class DomainOnboardingMetrics:
                 "recommendation_reference_candidate_count",
                 "recommendation_selected_reference_count",
                 "recommendation_degraded_count",
+                "recommendation_validated_query_count",
+                "recommendation_expansion_round_count",
             ):
                 self._paper_totals[field_name] += int(getattr(trace, field_name))
             for provider, values in trace.retrieval_provider_stats.items():

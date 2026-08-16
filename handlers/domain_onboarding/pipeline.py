@@ -319,20 +319,46 @@ class DomainOnboardingPipeline:
                 for paper in ranked
             ]
             if self.config.paper_recommendations_enabled:
-                ranked = self._build_paper_recommendations(
-                    request,
-                    plan,
-                    all_candidates,
-                    ranked,
-                    trace,
-                    context,
-                )
+                try:
+                    ranked = self._build_paper_recommendations(
+                        request,
+                        plan,
+                        all_candidates,
+                        ranked,
+                        trace,
+                        context,
+                    )
+                except PipelineExecutionHalted:
+                    raise
+                except Exception as error:
+                    trace.recommendation_degraded_count += 1
+                    trace.recommendation_strategy = "survey_degraded_no_result"
+                    plan.recommendation_strategy = "survey_degraded_no_result"
+                    plan.recommendation_query_audit.append(
+                        {
+                            "query": "",
+                            "source": "recommendation_pipeline",
+                            "result_count": 0,
+                            "survey_count": 0,
+                            "score": 0.0,
+                            "selected": False,
+                            "reason": f"internal_degradation:{type(error).__name__}",
+                        }
+                    )
+                    trace.recommendation_query_audit = list(
+                        plan.recommendation_query_audit
+                    )
+            else:
+                plan.recommendation_strategy = "disabled"
+                trace.recommendation_strategy = "disabled"
 
             visible_papers = [
                 paper
                 for paper in ranked
                 if paper.paper_usage in {"recommendation", "both"}
-            ] or ranked
+            ]
+            if not self.config.paper_recommendations_enabled:
+                visible_papers = ranked
             trace.selected_paper_count = len(visible_papers)
 
             self._emit(
@@ -400,6 +426,15 @@ class DomainOnboardingPipeline:
                         getattr(self.ranker, "canonical_registry", None),
                         "version",
                         "unknown",
+                    ),
+                    "planning_mode": plan.planning_mode,
+                    "planning_fallback_reason": plan.planning_fallback_reason,
+                    "recommendation_strategy": trace.recommendation_strategy,
+                    "recommendation_expanded_terms": list(
+                        plan.recommendation_expanded_terms
+                    ),
+                    "recommendation_query_audit": list(
+                        trace.recommendation_query_audit
                     ),
                 }
             )
@@ -1287,26 +1322,83 @@ class DomainOnboardingPipeline:
     ) -> list[Any]:
         """Build a survey-led display list while preserving all generation evidence."""
 
-        queries = self.recommendation_policy.queries(plan)
-        trace.search_query_count += len(queries)
-        trace.recommendation_survey_query_count += len(queries)
-        survey_candidates = list(candidates)
-        try:
-            result, duration = context.call(
-                "retrieval",
-                self.config.retrieval_stage_timeout_seconds,
-                self.retriever.search,
-                [query.query for query in queries],
-                limit_per_query=self.config.papers_per_query,
+        query_audit: list[dict[str, Any]] = []
+        survey_candidates: list[Any] = []
+        discovery_candidates = [*evidence, *candidates]
+
+        def search_and_validate(
+            queries: list[Any],
+        ) -> tuple[list[Any], list[Any]]:
+            if not queries:
+                return [], []
+            trace.search_query_count += len(queries)
+            trace.recommendation_survey_query_count += len(queries)
+            try:
+                result, duration = context.call(
+                    "retrieval",
+                    self.config.retrieval_stage_timeout_seconds,
+                    self.retriever.search,
+                    [query.query for query in queries],
+                    limit_per_query=self.config.recommendation_probe_limit_per_query,
+                )
+                trace.retrieval_duration_ms += duration
+                self._record_retrieval_stats(trace, result.stats, accumulate=True)
+                found = self._annotate_candidate_query_hints(result.papers, queries)
+                trace.retrieved_paper_count += len(found)
+                validation_result, ranking_duration = context.call(
+                    "ranking",
+                    self.config.ranking_timeout_seconds,
+                    self.recommendation_policy.validate_queries,
+                    queries,
+                    found,
+                    plan,
+                )
+                trace.ranking_duration_ms += ranking_duration
+                selected_queries, audits = validation_result
+                query_audit.extend(audits)
+                trace.recommendation_validated_query_count += len(selected_queries)
+                return (
+                    self.recommendation_policy.candidates_for_queries(
+                        found,
+                        selected_queries,
+                    ),
+                    found,
+                )
+            except PaperRetrievalError as error:
+                self._record_retrieval_stats(trace, error.stats, accumulate=True)
+                trace.recommendation_degraded_count += 1
+                query_audit.extend(
+                    {
+                        "query": query.query,
+                        "source": "retrieval_error",
+                        "result_count": 0,
+                        "survey_count": 0,
+                        "score": 0.0,
+                        "selected": False,
+                        "reason": "retrieval_error",
+                    }
+                    for query in queries
+                )
+                return [], []
+
+        initial_queries = self.recommendation_policy.queries(plan)
+        survey_candidates, initial_found = search_and_validate(initial_queries)
+
+        if not survey_candidates:
+            expansion_queries, expanded_terms = (
+                self.recommendation_policy.discovered_queries(
+                    plan,
+                    [*discovery_candidates, *initial_found],
+                )
             )
-            trace.retrieval_duration_ms += duration
-            self._record_retrieval_stats(trace, result.stats, accumulate=True)
-            found = self._annotate_candidate_query_hints(result.papers, queries)
-            trace.retrieved_paper_count += len(found)
-            survey_candidates.extend(found)
-        except PaperRetrievalError as error:
-            self._record_retrieval_stats(trace, error.stats, accumulate=True)
-            trace.recommendation_degraded_count += 1
+            if expansion_queries:
+                trace.recommendation_expansion_round_count += 1
+                expanded_candidates, _ = search_and_validate(expansion_queries)
+                survey_candidates.extend(expanded_candidates)
+                plan.recommendation_expanded_terms = expanded_terms
+
+        trace.recommendation_query_audit = query_audit
+        plan.recommendation_query_audit = list(query_audit)
 
         survey_candidates = self._enrich_citations(
             survey_candidates,
@@ -1363,21 +1455,11 @@ class DomainOnboardingPipeline:
         recommendations = [*surveys, *references]
         if not recommendations:
             trace.recommendation_degraded_count += 1
-            recommendations = [
-                paper.model_copy(
-                    update={
-                        "paper_usage": "recommendation",
-                        "recommendation_category": "fallback_evidence",
-                        "recommendation_reason": (
-                            "Survey 专项检索暂不可用，保留与领域最相关的已验证论文作为降级阅读入口。"
-                            if request.language == "zh-CN"
-                            else "Survey retrieval was unavailable; retained a verified relevant paper as a fallback reading entry."
-                        ),
-                        "recommendation_rank_score": paper.final_score,
-                    }
-                )
-                for paper in evidence[: self.config.recommendation_survey_limit]
-            ]
+            plan.recommendation_strategy = "survey_degraded_no_result"
+            trace.recommendation_strategy = "survey_degraded_no_result"
+        else:
+            plan.recommendation_strategy = "survey_success"
+            trace.recommendation_strategy = "survey_success"
         return self.recommendation_policy.merge_with_evidence(
             evidence,
             recommendations,
