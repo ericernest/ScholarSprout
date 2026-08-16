@@ -137,9 +137,7 @@ class DomainOnboardingConfig(BaseModel):
     generation_max_attempts: int = Field(default=3, ge=1, le=3)
     generation_retry_backoff_seconds: float = Field(default=30.0, ge=0.0, le=60.0)
     generation_development_workers: int = Field(default=1, ge=1, le=3)
-    # Landscape and the standard learning path are independent once the
-    # development narrative is ready, so run both remote calls concurrently.
-    generation_section_workers: int = Field(default=2, ge=1, le=2)
+    generation_section_workers: int = Field(default=1, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
     stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
     # Incremental generation runs development first, then landscape/path in
