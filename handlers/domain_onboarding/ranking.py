@@ -148,16 +148,12 @@ class WeightedPaperRanker:
             * self.config.ranking_path_pool_multiplier,
         )
         path_memberships: dict[str, list[str]] = {paper.paper_id: [] for paper in valid}
-        rrf_scores: dict[str, float] = {paper.paper_id: 0.0 for paper in valid}
         per_path_candidate_counts: dict[str, int] = {}
         for perspective in plan.perspectives:
             path_id = perspective.path_id
             path_ranking = sorted(
                 valid,
-                key=lambda paper: (
-                    path_scores_by_paper[paper.paper_id][path_id],
-                    paper.citation_count or 0,
-                ),
+                key=lambda paper: path_scores_by_paper[paper.paper_id][path_id],
                 reverse=True,
             )
             path_pool = [
@@ -167,14 +163,17 @@ class WeightedPaperRanker:
                 >= self.config.ranking_min_path_relevance_score
             ]
             per_path_candidate_counts[path_id] = len(path_pool)
-            for rank, paper in enumerate(path_pool, start=1):
+            for paper in path_pool:
                 path_memberships[paper.paper_id].append(path_id)
-                rrf_scores[paper.paper_id] += 1.0 / (self.config.ranking_rrf_k + rank)
-        max_rrf = len(plan.perspectives) / (self.config.ranking_rrf_k + 1)
-        path_fusion_scores = {
-            paper_id: min(1.0, score / max_rrf) if max_rrf else 0.0
-            for paper_id, score in rrf_scores.items()
+        query_matches = {
+            paper.paper_id: (
+                set(paper.matched_queries)
+                if paper.matched_queries
+                else set(paper.matched_path_hints)
+            )
+            for paper in valid
         }
+        available_query_signals = set().union(*query_matches.values())
         ranked: list[RankedPaper] = []
         vector_by_id = {
             paper.paper_id: vector for paper, vector in zip(valid, document_vectors, strict=True)
@@ -182,22 +181,13 @@ class WeightedPaperRanker:
         for paper, paper_vector in zip(valid, document_vectors, strict=True):
             global_relevance = cosine_similarity(query_vector, paper_vector)
             paper_path_scores = path_scores_by_paper[paper.paper_id]
-            # Path similarity affects coverage/fusion below, but cannot replace
-            # domain grounding. A paper matching only generic path words must
-            # still fail the main relevance gate.
+            # Path similarity supports research-path coverage diagnostics, but
+            # cannot replace domain grounding. A paper matching only generic
+            # path words must still fail the main relevance gate.
             semantic_relevance = global_relevance
             context_score = self.context_guard.score(paper, plan)
             relevance = semantic_relevance * context_score
             recency = self._recency_score(paper.year)
-            nearest_neighbor = max(
-                (
-                    cosine_similarity(paper_vector, other_vector)
-                    for other_id, other_vector in vector_by_id.items()
-                    if other_id != paper.paper_id
-                ),
-                default=0.0,
-            )
-            diversity = 1.0 - nearest_neighbor
             canonical = self.canonical_registry.match(paper, plan.normalized_domain)
             if canonical is not None:
                 relevance = max(
@@ -205,17 +195,17 @@ class WeightedPaperRanker:
                 )
             role = canonical.role if canonical else self._classify_role(paper)
             reading_priority = self._reading_priority(role, canonical is not None)
-            base_score = (
-                self.config.relevance_weight * relevance
-                + self.config.recency_weight * recency
-                + self.config.diversity_weight * diversity
+            query_coverage = (
+                len(query_matches[paper.paper_id]) / len(available_query_signals)
+                if available_query_signals
+                else 0.0
             )
-            if not (paper.abstract or "").strip() and canonical is None:
-                base_score *= self.config.ranking_missing_abstract_penalty
-            path_fusion_score = path_fusion_scores[paper.paper_id]
+            metadata_completeness = self._metadata_completeness(paper)
             final = (
-                (1.0 - self.config.ranking_path_fusion_weight) * base_score
-                + self.config.ranking_path_fusion_weight * path_fusion_score
+                self.config.paper_score_relevance_weight * relevance
+                + self.config.paper_score_query_coverage_weight * query_coverage
+                + self.config.paper_score_recency_weight * recency
+                + self.config.paper_score_metadata_weight * metadata_completeness
             )
             ranked.append(
                 RankedPaper(
@@ -223,10 +213,14 @@ class WeightedPaperRanker:
                     relevance_score=round(relevance, 6),
                     context_score=round(context_score, 6),
                     recency_score=round(recency, 6),
-                    diversity_score=round(diversity, 6),
                     final_score=round(min(1.0, final), 6),
-                    base_score=round(min(1.0, base_score), 6),
-                    path_fusion_score=round(path_fusion_score, 6),
+                    score_version="paper-score-v2",
+                    score_breakdown={
+                        "topic_relevance": round(relevance, 6),
+                        "query_coverage": round(query_coverage, 6),
+                        "recency": round(recency, 6),
+                        "metadata_completeness": round(metadata_completeness, 6),
+                    },
                     path_relevance_scores={
                         path_id: round(score, 6)
                         for path_id, score in paper_path_scores.items()
@@ -237,7 +231,7 @@ class WeightedPaperRanker:
                     is_canonical=canonical is not None,
                 )
             )
-        ranked.sort(key=lambda item: (item.final_score, item.citation_count or 0), reverse=True)
+        ranked.sort(key=lambda item: item.final_score, reverse=True)
         context_filtered = [paper for paper in ranked if paper.context_score > 0.0]
         low_relevance_filtered_count = len(ranked) - len(context_filtered)
         ranked = context_filtered
@@ -277,6 +271,7 @@ class WeightedPaperRanker:
             vector_by_id,
             min(limit, self.config.selected_paper_limit),
         )
+        selected.sort(key=lambda paper: paper.final_score, reverse=True)
         selected_path_counts = {
             perspective.path_id: sum(
                 perspective.path_id in paper.matched_research_paths for paper in selected
@@ -299,7 +294,7 @@ class WeightedPaperRanker:
                     for role in self.config.ranking_required_roles
                     if role not in {paper.paper_role for paper in selected}
                 ],
-                ranking_strategy="role_stratified_per_path_rrf_then_global_mmr",
+                ranking_strategy="unified_explainable_score_then_role_mmr",
                 per_path_candidate_counts=per_path_candidate_counts,
                 selected_path_counts=selected_path_counts,
                 per_role_candidate_counts=per_role_candidate_counts,
@@ -477,6 +472,21 @@ class WeightedPaperRanker:
         current = datetime.now(timezone.utc).year
         return max(0.0, min(1.0, 1.0 - max(0, current - year) / 15.0))
 
+    @staticmethod
+    def _metadata_completeness(paper: PaperCandidate) -> float:
+        stable_identity = bool(
+            paper.doi
+            or paper.arxiv_id
+            or paper.url.startswith(("http://", "https://"))
+        )
+        return min(
+            1.0,
+            0.50 * float(bool((paper.abstract or "").strip()))
+            + 0.15 * float(bool(paper.authors))
+            + 0.15 * float(paper.year is not None)
+            + 0.20 * float(stable_identity),
+        )
+
     def _classify_role(self, paper: PaperCandidate) -> PaperRole:
         title = paper.title.lower()
         text = f"{title} {paper.abstract or ''}".lower()
@@ -497,8 +507,6 @@ class WeightedPaperRanker:
         year = paper.year or 0
         current = datetime.now(timezone.utc).year
         if "foundational" in paper.matched_role_hints and year <= current - 3:
-            return "foundational"
-        if year and year <= current - 8 and (paper.citation_count or 0) >= 100:
             return "foundational"
         if "frontier" in paper.matched_role_hints and year >= current - 2:
             return "frontier"

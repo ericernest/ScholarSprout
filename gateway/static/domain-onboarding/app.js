@@ -644,9 +644,9 @@ function renderPapers(data) {
       ${priority === "all" ? "全部" : PRIORITY_LABELS[priority]}
     </button>
   `).join("");
-  const papers = state.paperFilter === "all"
-    ? data.papers
-    : data.papers.filter((paper) => paper.reading_priority === state.paperFilter);
+  const papers = data.papers
+    .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
+    .sort((left, right) => Number(right.final_score || 0) - Number(left.final_score || 0));
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length
@@ -833,13 +833,22 @@ function renderPaperDetail(paper) {
   const readingFocus = (paper.reading_focus || []).length
     ? paper.reading_focus
     : guidance.reading_focus;
-  const scoreRows = [
-    ["综合推荐度", paper.final_score],
-    ["主题相关", paper.relevance_score],
-    ["领域语境", paper.context_score],
-    ["时效性", paper.recency_score],
-    ["内容差异性", paper.diversity_score],
-  ].filter(([, value]) => value != null && Number.isFinite(Number(value)));
+  const scoreBreakdown = paper.score_breakdown;
+  const explainableScore = paper.score_version === "paper-score-v2"
+    && scoreBreakdown
+    && typeof scoreBreakdown === "object";
+  const scoreRows = explainableScore
+    ? [
+        ["综合推荐度", paper.final_score],
+        ["主题相关 · 65%", scoreBreakdown.topic_relevance],
+        ["检索覆盖 · 15%", scoreBreakdown.query_coverage],
+        ["时效性 · 10%", scoreBreakdown.recency],
+        ["信息完整度 · 10%", scoreBreakdown.metadata_completeness],
+      ]
+    : [["旧版综合推荐度", paper.final_score]];
+  const scoreNote = explainableScore
+    ? "总分由下列四项严格加权计算；引用数仅作元数据展示，不参与推荐度"
+    : "历史任务使用旧版评分口径；重新生成后可查看完整分项";
   const citationKnown = paper.citation_count != null
     && Number.isFinite(Number(paper.citation_count));
   const metadata = [
@@ -868,7 +877,7 @@ function renderPaperDetail(paper) {
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
       <div class="detail-block">
-        <h3>推荐依据 <span class="score-note">引用数仅作元数据参考，不参与推荐度</span></h3>
+        <h3>推荐依据 <span class="score-note">${escapeHtml(scoreNote)}</span></h3>
         <div class="paper-score-grid">
           ${scoreRows.map(([label, value]) => `
             <div class="paper-score-row">

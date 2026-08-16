@@ -473,6 +473,15 @@ class RankingTests(unittest.TestCase):
                 paper.paper_role,
                 {"survey", "foundational", "method", "evaluation", "application", "frontier", "other"},
             )
+            breakdown = paper.score_breakdown
+            expected = (
+                0.65 * breakdown.topic_relevance
+                + 0.15 * breakdown.query_coverage
+                + 0.10 * breakdown.recency
+                + 0.10 * breakdown.metadata_completeness
+            )
+            self.assertEqual(paper.score_version, "paper-score-v2")
+            self.assertAlmostEqual(paper.final_score, expected, places=5)
 
     def test_citation_count_does_not_affect_ranking_scores(self) -> None:
         paper = make_candidates(1)[0]
@@ -486,9 +495,32 @@ class RankingTests(unittest.TestCase):
             [with_many_citations], make_plan(), limit=1
         ).papers[0]
 
-        self.assertEqual(without_score.base_score, with_score.base_score)
+        self.assertEqual(
+            without_score.score_breakdown,
+            with_score.score_breakdown,
+        )
         self.assertEqual(without_score.final_score, with_score.final_score)
+        self.assertEqual(without_score.score_version, "paper-score-v2")
         self.assertNotIn("citation_score", without_score.model_dump())
+
+    def test_query_coverage_is_fraction_of_observed_retrieval_queries(self) -> None:
+        papers = make_candidates(2)
+        papers[0].matched_queries = ["query-a", "query-b"]
+        papers[1].matched_queries = ["query-c"]
+
+        ranked = self.ranker.rank(papers, make_plan(), limit=2).papers
+        by_id = {paper.paper_id: paper for paper in ranked}
+
+        self.assertAlmostEqual(
+            by_id[papers[0].paper_id].score_breakdown.query_coverage,
+            2 / 3,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            by_id[papers[1].paper_id].score_breakdown.query_coverage,
+            1 / 3,
+            places=5,
+        )
 
     def test_canonical_match_has_relevance_floor_when_tfidf_has_no_overlap(self) -> None:
         class ZeroVectorizer:

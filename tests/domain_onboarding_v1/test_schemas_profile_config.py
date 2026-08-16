@@ -123,7 +123,17 @@ class ConfigAndSchemaTests(unittest.TestCase):
 
     def test_ranking_weights_must_sum_to_one(self) -> None:
         with self.assertRaises(ValidationError):
-            DomainOnboardingConfig(relevance_weight=0.8)
+            DomainOnboardingConfig(paper_score_relevance_weight=0.8)
+
+    def test_legacy_ranking_weights_are_ignored(self) -> None:
+        config = DomainOnboardingConfig(
+            relevance_weight=1.0,
+            recency_weight=0.0,
+            diversity_weight=0.0,
+        )
+
+        self.assertEqual(config.paper_score_relevance_weight, 0.65)
+        self.assertNotIn("relevance_weight", config.model_dump())
 
     def test_selected_limit_cannot_exceed_candidates(self) -> None:
         with self.assertRaises(ValidationError):

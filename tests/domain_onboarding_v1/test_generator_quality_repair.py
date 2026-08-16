@@ -196,7 +196,7 @@ class GeneratorTests(unittest.TestCase):
             ranked,
         ).output
 
-        self.assertEqual(output.schema_version, "domain-onboarding-output-v1.9")
+        self.assertEqual(output.schema_version, "domain-onboarding-output-v1.10")
         self.assertEqual(output.prerequisites[0].key_points[0].explanation, "把查询和文档映射到同一向量空间并寻找近邻。")
         self.assertEqual(output.prerequisites[0].key_points[0].related_paper_ids, [paper_id])
         self.assertTrue(output.development_stages[0].core_concepts[0].explanation)
@@ -557,6 +557,12 @@ class GeneratorTests(unittest.TestCase):
 
     def test_generator_uses_only_canonical_candidate_metadata(self) -> None:
         payload = make_generation_payload([paper.paper_id for paper in self.ranked])
+        core_paper = next(
+            paper for paper in self.ranked if paper.reading_priority == "core"
+        )
+        payload["development_stages"][0]["related_paper_ids"] = [
+            core_paper.paper_id
+        ]
         payload["development_stages"][0]["related_paper_ids"].append("invented-paper")
         payload["papers"] = [{"paper_id": "invented-paper", "title": "Fake"}]
         generator = StructuredOnboardingGenerator(FakeJSONModel([payload]), self.config)

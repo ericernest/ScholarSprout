@@ -18,7 +18,6 @@ def ranked_paper(paper_id: str, title: str, abstract: str, role: str) -> RankedP
         source="test",
         relevance_score=0.8,
         recency_score=0.5,
-        diversity_score=0.5,
         final_score=0.7,
         paper_role=role,
     )

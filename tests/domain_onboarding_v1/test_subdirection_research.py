@@ -27,7 +27,6 @@ def ranked_paper(
         source="test",
         relevance_score=0.9,
         recency_score=0.9,
-        diversity_score=0.5,
         final_score=0.85,
         paper_role=role,
     )
@@ -132,12 +131,12 @@ class SubdirectionPaperRankerTests(unittest.TestCase):
     def test_large_citation_count_does_not_override_branch_relevance(self) -> None:
         relevant = ranked_paper("relevant", role="method")
         relevant.relevance_score = 0.95
-        relevant.path_fusion_score = 0.9
+        relevant.final_score = 0.9
         relevant.citation_count = 0
         relevant.citation_status = "known"
         weak = ranked_paper("weak", role="method")
         weak.relevance_score = 0.25
-        weak.path_fusion_score = 0.2
+        weak.final_score = 0.2
         weak.citation_count = 100_000
         weak.citation_status = "known"
         config = DomainOnboardingConfig(
@@ -160,7 +159,7 @@ class SubdirectionPaperRankerTests(unittest.TestCase):
         self.assertEqual(result.papers[0].paper_id, "relevant")
         self.assertEqual(
             result.stats.ranking_strategy,
-            "subdirection_relevance_role_recency_metadata_citation",
+            "subdirection_unified_score_role_gate",
         )
 
 

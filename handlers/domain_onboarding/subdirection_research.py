@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-from datetime import datetime, timezone
 from typing import Any
 
 from .config import DomainOnboardingConfig
@@ -20,7 +18,7 @@ from .schemas import (
 
 
 class SubdirectionPaperRanker:
-    """Re-rank a grounded candidate set for one branch with a small citation signal."""
+    """Apply branch role coverage without creating a second paper score."""
 
     def __init__(self, base_ranker: Any, config: DomainOnboardingConfig) -> None:
         self.base_ranker = base_ranker
@@ -43,80 +41,32 @@ class SubdirectionPaperRanker:
             base.stats.ranking_strategy = "subdirection_grounded_rank"
             return base
 
-        citation_values = {
-            paper.paper_id: self._citation_velocity(paper)
-            for paper in base.papers
-        }
-        max_citation = max(citation_values.values(), default=0.0)
-        rescored: list[RankedPaper] = []
-        for paper in base.papers:
-            role_fit = (
-                1.0
-                if paper.paper_role in {"method", "evaluation", "survey"}
-                else 0.8
-                if paper.paper_role in {"frontier", "foundational"}
-                else 0.4
-            )
-            metadata = 1.0 if (paper.abstract or "").strip() else 0.0
-            citation = (
-                citation_values[paper.paper_id] / max_citation
-                if max_citation > 0
-                else 0.0
-            )
-            score = (
-                0.55 * paper.relevance_score
-                + 0.15 * paper.path_fusion_score
-                + 0.10 * role_fit
-                + 0.10 * paper.recency_score
-                + 0.05 * metadata
-                + 0.05 * citation
-            )
-            rescored.append(
-                paper.model_copy(update={"final_score": round(min(1.0, score), 6)})
-            )
-        rescored.sort(
-            key=lambda paper: (
-                paper.final_score,
-                paper.citation_status == "known",
-                paper.citation_count or 0,
-            ),
-            reverse=True,
-        )
+        ranked = sorted(base.papers, key=lambda paper: paper.final_score, reverse=True)
         selected: list[RankedPaper] = []
         for roles in ({"method"}, {"survey", "evaluation"}):
             candidate = next(
                 (
                     paper
-                    for paper in rescored
+                    for paper in ranked
                     if paper.paper_role in roles and paper not in selected
                 ),
                 None,
             )
             if candidate is not None and len(selected) < limit:
                 selected.append(candidate)
-        for paper in rescored:
+        for paper in ranked:
             if len(selected) >= limit:
                 break
             if paper not in selected:
                 selected.append(paper)
         base.papers = selected
-        base.stats.ranking_strategy = (
-            "subdirection_relevance_role_recency_metadata_citation"
-        )
+        selected.sort(key=lambda paper: paper.final_score, reverse=True)
+        base.stats.ranking_strategy = "subdirection_unified_score_role_gate"
         base.stats.selected_role_counts = {
             role: sum(paper.paper_role == role for paper in selected)
             for role in sorted({paper.paper_role for paper in selected})
         }
         return base
-
-    @staticmethod
-    def _citation_velocity(paper: RankedPaper) -> float:
-        if paper.citation_count is None:
-            return 0.0
-        current_year = datetime.now(timezone.utc).year
-        age = max(0.5, float(current_year - (paper.year or current_year) + 1))
-        return math.log1p(paper.citation_count / age)
-
 
 class SubdirectionResearchPolicy:
     def __init__(self, config: DomainOnboardingConfig) -> None:

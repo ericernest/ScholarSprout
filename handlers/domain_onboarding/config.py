@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,6 +20,25 @@ from .schemas import QualityDimension, QualityIssueType
 
 class DomainOnboardingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_paper_score_weights(cls, value: Any) -> Any:
+        """Accept old local configs without reviving the retired score formula."""
+
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        for key in (
+            "relevance_weight",
+            "recency_weight",
+            "diversity_weight",
+            "ranking_path_fusion_weight",
+            "ranking_missing_abstract_penalty",
+            "ranking_rrf_k",
+        ):
+            migrated.pop(key, None)
+        return migrated
 
     search_queries_limit: int = Field(default=6, ge=1, le=12)
     papers_per_query: int = Field(default=10, ge=1, le=50)
@@ -87,20 +106,17 @@ class DomainOnboardingConfig(BaseModel):
     generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
     evaluation_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
-    # Relevance owns the paper score. Recency is a small tie-breaker, while
-    # diversity is handled once by MMR instead of rewarding off-topic outliers
-    # in both the base score and the final selection.
-    relevance_weight: float = Field(default=0.90, ge=0.0, le=1.0)
-    ranking_missing_abstract_penalty: float = Field(default=0.80, ge=0.0, le=1.0)
-    recency_weight: float = Field(default=0.10, ge=0.0, le=1.0)
-    diversity_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    # One public paper score is used everywhere. Context, identity, paper type,
+    # and minimum relevance remain non-compensating gates outside this formula.
+    paper_score_relevance_weight: float = Field(default=0.65, ge=0.0, le=1.0)
+    paper_score_query_coverage_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    paper_score_recency_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+    paper_score_metadata_weight: float = Field(default=0.10, ge=0.0, le=1.0)
     mmr_lambda: float = Field(default=0.70, ge=0.0, le=1.0)
     mmr_role_bonus: float = Field(default=0.05, ge=0.0, le=0.25)
-    ranking_path_fusion_weight: float = Field(default=0.10, ge=0.0, le=0.5)
     ranking_min_path_relevance_score: float = Field(default=0.03, ge=0.0, le=1.0)
     ranking_path_pool_multiplier: int = Field(default=2, ge=1, le=5)
     ranking_role_pool_multiplier: int = Field(default=2, ge=1, le=5)
-    ranking_rrf_k: int = Field(default=60, ge=1, le=200)
     ranking_required_roles: list[Literal["survey", "foundational", "method", "evaluation", "application", "frontier"]] = Field(
         default_factory=lambda: ["survey", "foundational", "method", "evaluation", "frontier"]
     )
@@ -196,12 +212,13 @@ class DomainOnboardingConfig(BaseModel):
                 "subdirection_min_abstract_papers must not exceed subdirection_papers_per_direction"
             )
         total = (
-            self.relevance_weight
-            + self.recency_weight
-            + self.diversity_weight
+            self.paper_score_relevance_weight
+            + self.paper_score_query_coverage_weight
+            + self.paper_score_recency_weight
+            + self.paper_score_metadata_weight
         )
         if abs(total - 1.0) > 1e-9:
-            raise ValueError("ranking weights must sum to 1.0")
+            raise ValueError("paper score weights must sum to 1.0")
         if self.retrieval_max_backoff_seconds < self.retrieval_backoff_seconds:
             raise ValueError("retrieval_max_backoff_seconds must not be smaller than base backoff")
         if self.planning_model_timeout_seconds >= self.planning_timeout_seconds:
