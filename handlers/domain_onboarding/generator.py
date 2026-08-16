@@ -1321,7 +1321,11 @@ class StructuredOnboardingGenerator:
                 for paper in selected_papers
                 if paper.paper_usage in {"evidence", "both"}
             ]
-            if not recommended_papers:
+            if (
+                not recommended_papers
+                and plan.recommendation_strategy
+                not in {"survey_degraded_no_result", "survey_success"}
+            ):
                 recommended_papers = list(selected_papers)
             if not evidence_papers:
                 evidence_papers = list(selected_papers)
@@ -1348,7 +1352,9 @@ class StructuredOnboardingGenerator:
                         paper.paper_id for paper in recommended_papers
                     ],
                     "recommendation_strategy": (
-                        "survey_first_then_survey_references"
+                        plan.recommendation_strategy
+                        if plan.recommendation_strategy != "not_run"
+                        else "survey_success"
                         if has_recommendation_contract
                         else "legacy_selected_papers"
                     ),

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -23,30 +25,252 @@ class RecommendationBuildResult:
 
 
 class SurveyRecommendationPolicy:
+    _generic_branch_names = {
+        "theoretical foundations and problem formulation",
+        "core methods and architectures",
+        "evaluation benchmarks and research frontiers",
+    }
+    _term_stopwords = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+        "in", "into", "is", "of", "on", "or", "our", "paper", "the", "this",
+        "to", "using", "via", "we", "with", "approach", "framework", "method",
+        "methods", "model", "models", "new", "study", "system", "systems",
+    }
+
     def __init__(self, ranker: Any, config: DomainOnboardingConfig) -> None:
         self.ranker = ranker
         self.config = config
 
     def queries(self, plan: DomainResearchPlan) -> list[PaperSearchQuery]:
+        """Build candidate queries from model-proposed and safe fixed aliases."""
+
         domain = plan.translated_domain or plan.normalized_domain
-        queries = [
-            PaperSearchQuery(
-                query=f'"{domain}" survey systematic review recent advances',
-                role_hint="survey",
-                path_id="recommendation-survey-global",
-                priority=1,
-            )
-        ]
-        for branch in plan.subdirection_plans:
+        terms = list(dict.fromkeys([domain, *plan.expanded_terms]))
+        queries: list[PaperSearchQuery] = []
+        for index, term in enumerate(terms, start=1):
+            if not self._usable_term(term):
+                continue
             queries.append(
                 PaperSearchQuery(
-                    query=f'"{domain}" "{branch.name_en}" survey review taxonomy',
+                    query=f'"{term.strip()}" survey systematic review taxonomy',
+                    role_hint="survey",
+                    path_id=f"recommendation-survey-term-{index}",
+                    priority=1 if index == 1 else 2,
+                )
+            )
+        for branch in plan.subdirection_plans:
+            branch_name = branch.name_en.strip()
+            if (
+                branch_name.casefold() in self._generic_branch_names
+                or not self._usable_term(branch_name)
+            ):
+                continue
+            queries.append(
+                PaperSearchQuery(
+                    query=f'"{domain}" "{branch_name}" survey review taxonomy',
                     role_hint="survey",
                     path_id=branch.subdirection_id,
                     priority=2,
                 )
             )
-        return queries[: self.config.recommendation_survey_query_limit]
+        deduplicated = {query.query.casefold(): query for query in queries}
+        return list(deduplicated.values())[
+            : self.config.recommendation_query_candidate_limit
+        ]
+
+    def discovered_queries(
+        self,
+        plan: DomainResearchPlan,
+        evidence_candidates: list[PaperCandidate],
+    ) -> tuple[list[PaperSearchQuery], list[str]]:
+        terms = self.discover_terms(plan, evidence_candidates)
+        queries = [
+            PaperSearchQuery(
+                query=f'"{term}" survey systematic review taxonomy',
+                role_hint="survey",
+                path_id=f"recommendation-survey-discovered-{index}",
+                priority=1,
+            )
+            for index, term in enumerate(terms, start=1)
+        ]
+        return queries, terms
+
+    def discover_terms(
+        self,
+        plan: DomainResearchPlan,
+        candidates: list[PaperCandidate],
+    ) -> list[str]:
+        """Extract domain-anchored phrases from real titles and abstracts."""
+
+        domain = (plan.translated_domain or plan.normalized_domain).casefold()
+        domain_tokens = {
+            token
+            for token in re.findall(r"[a-z][a-z0-9]+", domain)
+            if token not in self._term_stopwords
+        }
+        if not domain_tokens:
+            domain_tokens = set(re.findall(r"[a-z][a-z0-9]+", domain))
+        document_frequency: Counter[str] = Counter()
+        title_frequency: Counter[str] = Counter()
+        for paper in candidates[:30]:
+            title = paper.title.casefold().replace("-", " ")
+            abstract = (paper.abstract or "").casefold().replace("-", " ")[:1200]
+            phrases_in_document: set[str] = set()
+            for text, title_weight in ((title, True), (abstract, False)):
+                tokens = re.findall(r"[a-z][a-z0-9]+", text)
+                for size in range(2, min(5, len(tokens)) + 1):
+                    for start in range(0, len(tokens) - size + 1):
+                        words = tokens[start : start + size]
+                        if words[0] in self._term_stopwords or words[-1] in self._term_stopwords:
+                            continue
+                        if not domain_tokens.intersection(words):
+                            continue
+                        if sum(word not in self._term_stopwords for word in words) < 2:
+                            continue
+                        phrase = " ".join(words)
+                        if phrase == domain:
+                            continue
+                        phrases_in_document.add(phrase)
+                        if title_weight:
+                            title_frequency[phrase] += 1
+            document_frequency.update(phrases_in_document)
+        ranked = sorted(
+            document_frequency,
+            key=lambda phrase: (
+                document_frequency[phrase] * 3 + title_frequency[phrase] * 2,
+                len(phrase.split()),
+                phrase,
+            ),
+            reverse=True,
+        )
+        selected: list[str] = []
+        for phrase in ranked:
+            if any(phrase in existing or existing in phrase for existing in selected):
+                continue
+            selected.append(phrase)
+            if len(selected) >= self.config.recommendation_discovered_term_limit:
+                break
+        return selected
+
+    def validate_queries(
+        self,
+        queries: list[PaperSearchQuery],
+        candidates: list[PaperCandidate],
+        plan: DomainResearchPlan,
+    ) -> tuple[list[PaperSearchQuery], list[dict[str, Any]]]:
+        unique_candidates = list(
+            {paper.paper_id: paper for paper in candidates}.values()
+        )
+        ranked_candidates = (
+            self.ranker.rank(
+                unique_candidates,
+                plan,
+                limit=min(
+                    len(unique_candidates),
+                    self.config.candidate_paper_limit,
+                ),
+            ).papers
+            if unique_candidates
+            else []
+        )
+        relevance_by_id = {
+            paper.paper_id: paper.relevance_score for paper in ranked_candidates
+        }
+        audits: list[dict[str, Any]] = []
+        for query in queries:
+            matched = [
+                paper for paper in candidates if query.query in paper.matched_queries
+            ]
+            surveys = [paper for paper in matched if self._is_survey_candidate(paper)]
+            relevance = (
+                sum(relevance_by_id.get(paper.paper_id, 0.0) for paper in matched)
+                / len(matched)
+                if matched
+                else 0.0
+            )
+            survey_yield = min(1.0, len(surveys) / 2.0)
+            abstract_ratio = (
+                sum(bool((paper.abstract or "").strip()) for paper in surveys)
+                / len(surveys)
+                if surveys
+                else 0.0
+            )
+            current_year = datetime.now(timezone.utc).year
+            recent_ratio = (
+                sum(
+                    bool(
+                        paper.year
+                        and paper.year
+                        >= current_year - self.config.recommendation_recent_year_window
+                    )
+                    for paper in surveys
+                )
+                / len(surveys)
+                if surveys
+                else 0.0
+            )
+            citation_ratio = (
+                sum(paper.citation_count is not None for paper in surveys)
+                / len(surveys)
+                if surveys
+                else 0.0
+            )
+            source_coverage = min(1.0, len({paper.source for paper in surveys}) / 2.0)
+            score = (
+                0.30 * relevance
+                + 0.25 * survey_yield
+                + 0.15 * abstract_ratio
+                + 0.15 * recent_ratio
+                + 0.10 * citation_ratio
+                + 0.05 * source_coverage
+            )
+            audits.append(
+                {
+                    "query": query.query,
+                    "source": self._query_source(query),
+                    "result_count": len(matched),
+                    "survey_count": len(surveys),
+                    "citation_metadata_ratio": round(citation_ratio, 6),
+                    "score": round(score, 6),
+                    "selected": False,
+                    "reason": (
+                        "validated_survey_results"
+                        if surveys and score >= self.config.recommendation_min_query_score
+                        else "no_verified_survey"
+                        if not surveys
+                        else "below_query_score_threshold"
+                    ),
+                }
+            )
+        eligible = [
+            item
+            for item in audits
+            if item["survey_count"] > 0
+            and item["score"] >= self.config.recommendation_min_query_score
+        ]
+        eligible.sort(
+            key=lambda item: (item["score"], item["survey_count"], item["result_count"]),
+            reverse=True,
+        )
+        selected_text = {
+            item["query"]
+            for item in eligible[: self.config.recommendation_survey_query_limit]
+        }
+        for item in audits:
+            item["selected"] = item["query"] in selected_text
+        return [query for query in queries if query.query in selected_text], audits
+
+    @staticmethod
+    def candidates_for_queries(
+        candidates: list[PaperCandidate],
+        queries: list[PaperSearchQuery],
+    ) -> list[PaperCandidate]:
+        selected = {query.query for query in queries}
+        return [
+            paper
+            for paper in candidates
+            if selected.intersection(paper.matched_queries)
+        ]
 
     def select_surveys(
         self,
@@ -196,11 +420,28 @@ class SurveyRecommendationPolicy:
 
     @staticmethod
     def _is_survey(paper: RankedPaper) -> bool:
+        return SurveyRecommendationPolicy._is_survey_candidate(paper)
+
+    @staticmethod
+    def _is_survey_candidate(paper: PaperCandidate) -> bool:
         text = f"{paper.title} {' '.join(paper.publication_types)}".casefold()
-        return paper.paper_role == "survey" or any(
+        return getattr(paper, "paper_role", "other") == "survey" or any(
             marker in text
             for marker in ("survey", "systematic review", "literature review", "overview")
         )
+
+    @staticmethod
+    def _usable_term(term: str) -> bool:
+        value = term.strip()
+        return bool(value and re.search(r"[A-Za-z]{2}", value) and len(value) <= 100)
+
+    @staticmethod
+    def _query_source(query: PaperSearchQuery) -> str:
+        if "discovered" in query.path_id:
+            return "retrieval_discovered"
+        if "term" in query.path_id:
+            return "planner_or_fixed_term"
+        return "model_subdirection"
 
     @staticmethod
     def _citation_velocity(paper: RankedPaper) -> float:

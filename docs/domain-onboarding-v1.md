@@ -109,6 +109,17 @@ Pipeline 不再只从全局论文池反推子方向：它会逐方向检索、�
 每条推荐包含 `recommendation_category`、`recommendation_reason`、
 `recommendation_rank_score` 和可选的 `survey_source_ids`。
 
+Survey 搜索词采用“候选—验证—扩展”流程。规划模型提出标准英文词、别名和真实子方向；
+代码只为 RAG、GNN 等基础且不易混淆的领域补充少量稳定别名，不维护覆盖所有领域的静态词表。
+每条候选查询必须用真实搜索结果验证，并综合相关性、Survey 命中、摘要完整度、时效性和来源覆盖打分。
+若第一轮没有合格 Survey，Pipeline 会从已验证证据论文的标题和摘要中提取领域相关英文短语，
+再执行一次独立补搜。证据论文只参与术语发现，不会进入 Survey 候选池。
+
+若补搜后仍无合格 Survey，`papers` 保持为空，`evidence_papers` 仍供其他模块生成和质量验证使用；
+系统不会再把发展路径论文标成 `fallback_evidence` 冒充推荐。最终结果在 `reproducibility` 中记录
+`planning_mode`、`planning_fallback_reason`、`recommendation_strategy`、
+`recommendation_expanded_terms` 和逐查询 `recommendation_query_audit`。
+
 固定排序基准保存在 `tests/domain_onboarding_v1/fixtures/ranking_benchmark.json`，使用
 人工相关性等级持续检查 Precision@K、Recall@K、NDCG@K 和论文角色覆盖率。修改
 权重、向量器或 MMR 策略时必须同时通过该基准，避免只凭单次示例主观调参。

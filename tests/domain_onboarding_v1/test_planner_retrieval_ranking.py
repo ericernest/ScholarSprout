@@ -160,6 +160,9 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(any("ARXIV:2303.17760" == query for query in plan.search_queries))
         self.assertTrue(any("ARXIV:2308.08155" == query for query in plan.search_queries))
         self.assertTrue(any("multi-agent systems" in query for query in plan.search_queries))
+        self.assertEqual(plan.expanded_terms, ["multi-agent systems"])
+        self.assertEqual(plan.planning_mode, "fallback")
+        self.assertEqual(plan.planning_fallback_reason, "structured_llm_error")
 
     def test_query_expansion_allocates_queries_across_paths(self) -> None:
         planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
@@ -167,7 +170,7 @@ class PlannerTests(unittest.TestCase):
         plan = planner.plan("扩散模型", make_profile()).plan
 
         self.assertEqual(plan.translated_domain, "diffusion models")
-        self.assertIn("score-based generative models", plan.expanded_terms)
+        self.assertIn("DDPM", plan.expanded_terms)
         self.assertEqual(
             [path.path_id for path in plan.perspectives],
             ["foundations", "methods", "evaluation-frontier"],

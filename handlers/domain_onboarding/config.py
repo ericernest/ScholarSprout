@@ -120,6 +120,10 @@ class DomainOnboardingConfig(BaseModel):
     citation_enrichment_batch_size: int = Field(default=50, ge=1, le=500)
     paper_recommendations_enabled: bool = True
     recommendation_survey_query_limit: int = Field(default=4, ge=1, le=8)
+    recommendation_query_candidate_limit: int = Field(default=10, ge=2, le=24)
+    recommendation_probe_limit_per_query: int = Field(default=5, ge=1, le=20)
+    recommendation_discovered_term_limit: int = Field(default=6, ge=1, le=12)
+    recommendation_min_query_score: float = Field(default=0.35, ge=0.0, le=1.0)
     recommendation_survey_limit: int = Field(default=3, ge=1, le=6)
     recommendation_reference_limit: int = Field(default=3, ge=0, le=8)
     recommendation_references_per_survey: int = Field(default=40, ge=1, le=100)

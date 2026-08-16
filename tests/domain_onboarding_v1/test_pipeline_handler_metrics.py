@@ -22,6 +22,7 @@ from handlers.domain_onboarding.schemas import (
     DomainOnboardingRequest,
     GenerationResult,
     ModelCallStats,
+    PaperCandidate,
     PaperSearchQuery,
     PlanningResult,
     QualityGateResult,
@@ -54,7 +55,15 @@ class FakeRetriever:
                 "all paper queries failed",
                 stats=RetrievalStats(errors=["offline"]),
             )
-        return RetrievalResult(papers=[] if self.empty else make_candidates())
+        papers = [] if self.empty else make_candidates()
+        if papers and any("survey" in query.casefold() for query in queries):
+            papers = [
+                paper.model_copy(
+                    update={"matched_queries": [queries[index % len(queries)]]}
+                )
+                for index, paper in enumerate(papers)
+            ]
+        return RetrievalResult(papers=papers)
 
 
 def make_pipeline(
@@ -83,6 +92,95 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_full_pipeline_reports_empty_recommendations_after_validated_survey_miss(self) -> None:
+        source_papers = [
+            paper for paper in make_candidates() if "Survey" not in paper.title
+        ]
+        paper_ids = [paper.paper_id for paper in source_papers]
+        pipeline = make_pipeline(
+            [make_generation_payload(paper_ids)],
+            config=DomainOnboardingConfig(enforce_core_paper_coverage=False),
+        )
+
+        class NoSurveyPipelineRetriever:
+            def search(self, queries, *, limit_per_query):
+                return RetrievalResult(
+                    papers=[
+                        paper.model_copy(
+                            update={
+                                "matched_queries": [queries[index % len(queries)]]
+                            }
+                        )
+                        for index, paper in enumerate(source_papers)
+                    ]
+                )
+
+        pipeline.retriever = NoSurveyPipelineRetriever()
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+        )
+
+        self.assertIn(result.status, {"ok", "quality_warning"}, result.error)
+        self.assertEqual(result.output.papers, [])
+        self.assertTrue(result.output.evidence_papers)
+        self.assertEqual(
+            result.output.reproducibility["recommendation_strategy"],
+            "survey_degraded_no_result",
+        )
+        self.assertTrue(
+            any(
+                issue.issue_type == "recommendation_unavailable"
+                for issue in result.quality.issues
+            )
+        )
+
+    def test_survey_failure_keeps_evidence_out_of_user_recommendations(self) -> None:
+        config = DomainOnboardingConfig(enforce_core_paper_coverage=False)
+        pipeline = make_pipeline([make_generation_payload(["paper-0"])], config=config)
+
+        class NoSurveyRetriever:
+            def search(self, queries, *, limit_per_query):
+                return RetrievalResult(
+                    papers=[
+                        PaperCandidate(
+                            paper_id=f"method-{index}",
+                            title="A Method for Retrieval Augmented Generation",
+                            abstract="retrieval augmented generation architecture and evaluation",
+                            year=2025,
+                            url=f"https://example.org/method-{index}",
+                            source="semantic_scholar",
+                            matched_queries=[query],
+                        )
+                        for index, query in enumerate(queries)
+                    ]
+                )
+
+        pipeline.retriever = NoSurveyRetriever()
+        plan = make_plan()
+        evidence = WeightedPaperRanker(config).rank(
+            [paper for paper in make_candidates() if "Survey" not in paper.title],
+            plan,
+            limit=3,
+        ).papers
+        trace = DomainOnboardingRequestTrace()
+
+        merged = pipeline._build_paper_recommendations(
+            DomainOnboardingRequest(query="RAG"),
+            plan,
+            list(evidence),
+            evidence,
+            trace,
+            PipelineExecutionContext(timeout_seconds=30.0),
+        )
+
+        self.assertEqual(plan.recommendation_strategy, "survey_degraded_no_result")
+        self.assertEqual(trace.recommendation_strategy, "survey_degraded_no_result")
+        self.assertEqual(trace.recommendation_expansion_round_count, 1)
+        self.assertTrue(trace.recommendation_query_audit)
+        self.assertTrue(all(paper.paper_usage == "evidence" for paper in merged))
+
     def test_embedding_degraded_evidence_gate_skips_full_llm_repair(self) -> None:
         paper_ids = [paper.paper_id for paper in make_candidates()]
         payload = make_generation_payload(paper_ids)
@@ -365,8 +463,10 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(result_b.status, {"ok", "quality_warning"}, result_b.error)
         self.assertEqual(trace_a.first_usage.total_tokens, 112)
         self.assertEqual(trace_b.first_usage.total_tokens, 224)
-        self.assertEqual(trace_a.retrieval_cache_hit_count, 11)
-        self.assertEqual(trace_b.retrieval_cache_hit_count, 12)
+        self.assertEqual(trace_a.retrieval_cache_hit_count, 13)
+        self.assertEqual(trace_b.retrieval_cache_hit_count, 14)
+        self.assertEqual(trace_a.recommendation_expansion_round_count, 1)
+        self.assertEqual(trace_b.recommendation_expansion_round_count, 1)
         self.assertEqual(trace_a.subdirection_retrieval_query_count, 6)
         self.assertEqual(trace_b.subdirection_retrieval_query_count, 6)
 
@@ -426,6 +526,21 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(
             result.output.reproducibility["ranking_selected_role_counts"],
             trace.ranking_selected_role_counts,
+        )
+        self.assertEqual(
+            result.output.reproducibility["recommendation_strategy"],
+            "survey_success",
+        )
+        self.assertTrue(
+            result.output.reproducibility["recommendation_query_audit"]
+        )
+        self.assertTrue(
+            any(
+                item["selected"]
+                for item in result.output.reproducibility[
+                    "recommendation_query_audit"
+                ]
+            )
         )
         self.assertGreater(trace.supplemental_query_count, 0)
         self.assertEqual(
@@ -819,6 +934,8 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("retrieval_retry_count", snapshot["papers"])
         self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
         self.assertIn("recommendation_survey_query_count", snapshot["papers"])
+        self.assertIn("recommendation_validated_query_count", snapshot["papers"])
+        self.assertIn("recommendation_expansion_round_count", snapshot["papers"])
         self.assertIn("recommendation_selected_survey_count", snapshot["papers"])
         self.assertIn("recommendation_degraded_count", snapshot["papers"])
         self.assertIn("retrieval_source_failure_count", snapshot["papers"])
@@ -896,7 +1013,7 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertIn("quality", response)
         self.assertTrue(response["papers"])
         self.assertEqual(metrics.snapshot()["statuses"]["quality_warning"], 1)
-        self.assertTrue(metrics.snapshot()["repair"]["actions"])
+        self.assertTrue(metrics.snapshot()["repair"]["selection_reasons"])
 
     def test_empty_input_is_recorded(self) -> None:
         metrics = DomainOnboardingMetrics()
