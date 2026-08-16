@@ -65,6 +65,10 @@ class ClaimEvidenceValidator:
         claim_scores: list[float] = []
         cited_ids: set[str] = set()
         validation_modes: dict[str, int] = {}
+        primary_backend = str(
+            getattr(self.vectorizer, "name", type(self.vectorizer).__name__)
+        ).lower()
+        embedding_circuit_open = False
         for index, claim in enumerate(output.evidence_claims):
             invalid = [paper_id for paper_id in claim.supporting_paper_ids if paper_id not in allowed]
             valid_ids = [paper_id for paper_id in claim.supporting_paper_ids if paper_id in allowed]
@@ -98,12 +102,24 @@ class ClaimEvidenceValidator:
                 self._support_text(claim.support_type, allowed[paper_id])
                 for paper_id in valid_ids
             ]
+            used_embedding_fallback = False
             active_vectorizer = self.vectorizer
-            try:
-                vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
-            except Exception:
+            if embedding_circuit_open:
                 active_vectorizer = self.fallback_vectorizer
                 vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
+                used_embedding_fallback = True
+            else:
+                try:
+                    vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
+                except Exception:
+                    if primary_backend.startswith("embedding"):
+                        # One remote timeout is enough evidence for this
+                        # evaluation pass. Do not pay the same timeout once per
+                        # remaining claim; use the deterministic fallback.
+                        embedding_circuit_open = True
+                        used_embedding_fallback = True
+                    active_vectorizer = self.fallback_vectorizer
+                    vectors = active_vectorizer.vectorize([claim.claim, *support_texts])
             similarities = [
                 cosine_similarity(vectors[0], vector) for vector in vectors[1:]
             ]
@@ -132,6 +148,10 @@ class ClaimEvidenceValidator:
                 else backend
             )
             validation_modes[mode] = validation_modes.get(mode, 0) + 1
+            if used_embedding_fallback:
+                validation_modes["embedding_fallback"] = (
+                    validation_modes.get("embedding_fallback", 0) + 1
+                )
             resolved_cross_language = semantic_cross_language or bridged_cross_language
             missing_abstract_ids = [
                 paper_id

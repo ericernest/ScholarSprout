@@ -17,12 +17,15 @@ from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
 from handlers.domain_onboarding.retrieval import PaperRetrievalError
 from handlers.domain_onboarding.schemas import (
+    ContentQuality,
     DevelopmentStageResearchPlan,
     DomainOnboardingRequest,
     GenerationResult,
     ModelCallStats,
     PaperSearchQuery,
     PlanningResult,
+    QualityGateResult,
+    QualityIssue,
     RetrievalResult,
     RetrievalStats,
 )
@@ -80,6 +83,64 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_embedding_degraded_evidence_gate_skips_full_llm_repair(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        payload = make_generation_payload(paper_ids)
+        pipeline = make_pipeline([payload, payload, payload])
+
+        issue = QualityIssue(
+            issue_type="unsupported_claim",
+            severity="error",
+            target_path="evidence_claims[0].claim",
+            message="embedding 降级后证据相似度不足",
+            recommended_action="稍后重新进行语义校验",
+        )
+
+        class DegradedEvaluator:
+            def evaluate(self, output, papers):
+                return ContentQuality(
+                    score=0.85,
+                    threshold=0.75,
+                    passed_hard_gates=False,
+                    dimensions={"evidence_grounding": 0.45},
+                    issues=[issue],
+                    hard_gates=[
+                        QualityGateResult(
+                            gate="evidence_support",
+                            status="failed",
+                            issue_ids=[issue.issue_id],
+                            score=0.45,
+                            threshold=0.7,
+                        )
+                    ],
+                    evidence_validation_modes={
+                        "terminology_bridge": 2,
+                        "embedding_fallback": 2,
+                    },
+                )
+
+        class ForbiddenRepairer:
+            def repair(self, *args, **kwargs):
+                raise AssertionError("degraded evidence must not trigger full repair")
+
+        pipeline.evaluator = DegradedEvaluator()
+        pipeline.repairer = ForbiddenRepairer()
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertEqual(result.status, "quality_warning")
+        self.assertEqual(len(result.quality_attempts), 1)
+        self.assertFalse(result.repair_record.triggered)
+        self.assertEqual(
+            result.repair_record.decision.reasons,
+            ["evidence_validation_degraded"],
+        )
+        self.assertEqual(
+            result.final_quality.selection_reason,
+            "evidence_validation_degraded",
+        )
+
     def test_retrieved_papers_are_annotated_with_query_role_and_path(self) -> None:
         paper = make_candidates(1)[0].model_copy(
             update={"matched_queries": ["RAG survey"]}

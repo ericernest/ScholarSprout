@@ -63,6 +63,7 @@ RepairDecisionReason = Literal[
     "critical_dimension_regressed",
     "repair_execution_failed",
     "repair_output_invalid",
+    "evidence_validation_degraded",
 ]
 QualityIssueType = Literal[
     "structure_error",
