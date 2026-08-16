@@ -1041,10 +1041,10 @@ class QualityTests(unittest.TestCase):
         quality = evaluator.evaluate(self.output, self.ranked)
 
         self.assertTrue(quality.passed_hard_gates)
-        self.assertEqual(embedding.calls, 1)
+        self.assertEqual(embedding.calls, 2)
         self.assertEqual(
             quality.evidence_validation_modes,
-            {"terminology_bridge": 2, "embedding_fallback": 2},
+            {"terminology_bridge": 2},
         )
 
     def test_named_remote_embedding_resolves_cross_language_evidence(self) -> None:

@@ -80,8 +80,6 @@ Ranker 在截取候选上限时同时轮询论文角色与来源，避免某个�
 提供批处理和有界缓存，embedding 服务异常时 Ranker 自动降级到 TF-IDF，
 并记录实际模型、fallback、路径/角色候选数和最终路径/角色覆盖。至少存在一篇达到相关性下限的论文时，明显
 低于下限的候选会在 MMR 前过滤，避免高引用但无关的论文仅凭多样性进入结果。
-同一次质量评估中，远程 embedding 首次失败后会对剩余论述打开请求级熔断，
-统一使用多语言 TF-IDF，避免每条论述重复支付远程超时。
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
@@ -177,8 +175,7 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 - `hard_gate_failed`；
 - `improvement_too_small`；
 - `critical_dimension_regressed`；
-- `repair_execution_failed`；
-- `evidence_validation_degraded`：语义后端已降级、总分达标且只有证据支持硬门失败，保留首次结果并跳过整篇 LLM 修复。
+- `repair_execution_failed`。
 
 输出中的关键技术与历史论述通过 `evidence_claims` 绑定已验证 `paper_id`，并区分
 `abstract_explicit`、`metadata_inference` 和 `background_synthesis`。质量评估会检查

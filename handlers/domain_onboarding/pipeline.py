@@ -461,59 +461,6 @@ class DomainOnboardingPipeline:
                     ),
                 )
 
-            failed_gate_names = {
-                gate.gate for gate in first_quality.hard_gates if gate.status == "failed"
-            }
-            hard_issues = [issue for issue in first_quality.issues if issue.hard_gate]
-            degraded_evidence_only = (
-                first_quality.score >= first_quality.threshold
-                and failed_gate_names == {"evidence_support"}
-                and bool(hard_issues)
-                and all(issue.issue_type == "unsupported_claim" for issue in hard_issues)
-                and first_quality.evidence_validation_modes.get(
-                    "embedding_fallback", 0
-                )
-                > 0
-            )
-            if degraded_evidence_only:
-                # When the semantic backend was unavailable, a low lexical
-                # evidence score is not a sound reason to spend another full
-                # LLM call rewriting otherwise threshold-passing content.
-                record = RepairRecord(
-                    triggered=False,
-                    policy_version=self.policy.policy_version,
-                    policy_fingerprint=self.policy.fingerprint,
-                    decision=RepairDecision(
-                        selected_attempt=1,
-                        decision="initial_retained",
-                        reasons=["evidence_validation_degraded"],
-                    ),
-                )
-                self._record_final(trace, first_quality, record)
-                final_quality = self._final_quality_summary(
-                    first_quality, quality_attempts, record
-                )
-                self._emit(
-                    progress_callback,
-                    "final_quality_ready",
-                    0.98,
-                    False,
-                    ["final_quality"],
-                    {"final_quality": final_quality.model_dump(mode="json")},
-                )
-                return self._result(
-                    status="quality_warning",
-                    query=request.query,
-                    output=output,
-                    quality=first_quality,
-                    quality_attempts=quality_attempts,
-                    repair_record=record,
-                    final_quality=final_quality,
-                    knowledge_graph=self._build_knowledge_graph(
-                        output, first_quality, trace
-                    ),
-                )
-
             partial_repair_record = RepairRecord(
                 triggered=True,
                 policy_version=self.policy.policy_version,
