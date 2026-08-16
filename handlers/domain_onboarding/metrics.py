@@ -50,6 +50,19 @@ class DomainOnboardingRequestTrace:
     initial_coverage_gap_count: int = 0
     final_coverage_gap_count: int = 0
     supplemental_query_count: int = 0
+    subdirection_retrieval_query_count: int = 0
+    subdirection_supplemental_query_count: int = 0
+    subdirection_bound_paper_count: int = 0
+    subdirection_limited_count: int = 0
+    citation_enrichment_known_count: int = 0
+    citation_enrichment_unknown_count: int = 0
+    citation_enrichment_failure_count: int = 0
+    recommendation_survey_query_count: int = 0
+    recommendation_survey_candidate_count: int = 0
+    recommendation_selected_survey_count: int = 0
+    recommendation_reference_candidate_count: int = 0
+    recommendation_selected_reference_count: int = 0
+    recommendation_degraded_count: int = 0
     development_stage_count: int = 0
     stage_retrieval_query_count: int = 0
     stage_bound_paper_count: int = 0
@@ -244,7 +257,18 @@ class DomainOnboardingMetrics:
                 "retrieval_source_failure_count", "retrieval_rate_limit_count",
                 "retrieval_stale_cache_hit_count", "retrieval_circuit_open_count",
                 "initial_coverage_gap_count", "final_coverage_gap_count",
-                "supplemental_query_count",
+                "supplemental_query_count", "subdirection_retrieval_query_count",
+                "subdirection_supplemental_query_count",
+                "subdirection_bound_paper_count", "subdirection_limited_count",
+                "citation_enrichment_known_count",
+                "citation_enrichment_unknown_count",
+                "citation_enrichment_failure_count",
+                "recommendation_survey_query_count",
+                "recommendation_survey_candidate_count",
+                "recommendation_selected_survey_count",
+                "recommendation_reference_candidate_count",
+                "recommendation_selected_reference_count",
+                "recommendation_degraded_count",
             ):
                 self._paper_totals[field_name] += int(getattr(trace, field_name))
             for provider, values in trace.retrieval_provider_stats.items():

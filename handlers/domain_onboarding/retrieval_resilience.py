@@ -118,12 +118,41 @@ class ResilientHTTPClient:
         self.rate_limit_count = 0
 
     def get(self, url: str, *, params: dict[str, Any]) -> Any:
+        return self._request("GET", url, params=params)
+
+    def post(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any],
+        json: dict[str, Any],
+    ) -> Any:
+        return self._request("POST", url, params=params, json=json)
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any],
+        json: dict[str, Any] | None = None,
+    ) -> Any:
         last_error: httpx.HTTPError | None = None
         for attempt in range(1, self.retry_policy.max_attempts + 1):
             self._wait_for_slot()
             self.request_count += 1
             try:
-                response = self.client.get(url, params=params)
+                if method == "GET":
+                    response = self.client.get(url, params=params)
+                elif method == "POST":
+                    response = self.client.post(url, params=params, json=json)
+                else:
+                    response = self.client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json,
+                    )
             except httpx.TransportError as error:
                 last_error = error
                 if attempt >= self.retry_policy.max_attempts:

@@ -6,9 +6,11 @@ import re
 import xml.etree.ElementTree as ET
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic, perf_counter, sleep
 from typing import Any, Callable, Protocol
+from urllib.parse import quote
 
 import httpx
 from pydantic import ValidationError
@@ -120,6 +122,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
         retry_policy: RetrievalRetryPolicy | None = None,
         cache_ttl_seconds: float = 3600.0,
         cache_max_entries: int = 256,
+        min_interval_seconds: float = 0.0,
         sleep_func: Callable[[float], None] = sleep,
         clock: Callable[[], float] = monotonic,
     ) -> None:
@@ -133,8 +136,13 @@ class SemanticScholarRetriever(_ResilientRetriever):
             retry_policy=retry_policy,
             cache_ttl_seconds=cache_ttl_seconds,
             cache_max_entries=cache_max_entries,
-            min_interval_seconds=0.0,
+            min_interval_seconds=min_interval_seconds,
             sleep_func=sleep_func,
+            clock=clock,
+        )
+        self._citation_cache: TTLQueryCache[dict[str, int | None]] = TTLQueryCache(
+            ttl_seconds=cache_ttl_seconds,
+            max_entries=cache_max_entries,
             clock=clock,
         )
 
@@ -157,7 +165,11 @@ class SemanticScholarRetriever(_ResilientRetriever):
                         query,
                         re.IGNORECASE,
                     )
-                    fields = "paperId,title,abstract,year,url,citationCount,authors,externalIds,publicationTypes"
+                    fields = (
+                        "paperId,title,abstract,year,url,citationCount,"
+                        "influentialCitationCount,referenceCount,authors,externalIds,"
+                        "publicationTypes"
+                    )
                     if exact_arxiv:
                         response = self._http.get(
                             f"{self.paper_endpoint}/ARXIV:{exact_arxiv.group(1)}",
@@ -204,6 +216,18 @@ class SemanticScholarRetriever(_ResilientRetriever):
                 year=item.get("year"),
                 url=url,
                 citation_count=item.get("citationCount"),
+                influential_citation_count=item.get("influentialCitationCount"),
+                reference_count=item.get("referenceCount"),
+                citation_source=(
+                    "semantic_scholar"
+                    if item.get("citationCount") is not None
+                    else None
+                ),
+                citation_observed_at=(
+                    datetime.now(timezone.utc)
+                    if item.get("citationCount") is not None
+                    else None
+                ),
                 source="semantic_scholar",
                 matched_queries=[query],
                 doi=external.get("DOI"),
@@ -212,6 +236,143 @@ class SemanticScholarRetriever(_ResilientRetriever):
             )
         except ValidationError:
             return None
+
+    def enrich_citations(
+        self,
+        papers: list[PaperCandidate],
+        *,
+        batch_size: int = 50,
+    ) -> tuple[list[PaperCandidate], RetrievalStats]:
+        """Best-effort citation hydration; missing metadata never drops a paper."""
+
+        with self._search_lock:
+            self._begin_search()
+            enriched = [paper.model_copy(deep=True) for paper in papers]
+            errors: list[str] = []
+            cache_hits = 0
+            pending: list[tuple[int, str]] = []
+            for index, paper in enumerate(enriched):
+                identifier = self._citation_identifier(paper)
+                if identifier is None:
+                    continue
+                cached = self._citation_cache.get(identifier)
+                if cached is None:
+                    pending.append((index, identifier))
+                    continue
+                cache_hits += 1
+                self._apply_citation_metadata(paper, cached)
+
+            size = max(1, min(500, batch_size))
+            for offset in range(0, len(pending), size):
+                batch = pending[offset : offset + size]
+                ids = [identifier for _, identifier in batch]
+                try:
+                    response = self._http.post(
+                        f"{self.paper_endpoint}/batch",
+                        params={
+                            "fields": (
+                                "paperId,citationCount,influentialCitationCount,"
+                                "referenceCount"
+                            )
+                        },
+                        json={"ids": ids},
+                    )
+                    payload = response.json()
+                    rows = payload if isinstance(payload, list) else []
+                    for (paper_index, identifier), row in zip(batch, rows, strict=False):
+                        if not isinstance(row, dict):
+                            continue
+                        metadata = {
+                            "citation_count": row.get("citationCount"),
+                            "influential_citation_count": row.get(
+                                "influentialCitationCount"
+                            ),
+                            "reference_count": row.get("referenceCount"),
+                        }
+                        self._citation_cache.set(identifier, metadata)
+                        self._apply_citation_metadata(
+                            enriched[paper_index], metadata
+                        )
+                except (httpx.HTTPError, ValueError, TypeError) as error:
+                    errors.append(f"citation batch: {error}")
+
+            return enriched, self._finish_search(
+                errors=errors,
+                cache_hits=cache_hits,
+            )
+
+    def fetch_references(
+        self,
+        survey_papers: list[PaperCandidate],
+        *,
+        limit_per_paper: int = 40,
+    ) -> tuple[list[PaperCandidate], RetrievalStats]:
+        """Fetch cited papers for verified surveys through the S2 graph API."""
+
+        with self._search_lock:
+            self._begin_search()
+            results: list[PaperCandidate] = []
+            errors: list[str] = []
+            limit = max(1, min(100, limit_per_paper))
+            fields = (
+                "paperId,title,abstract,year,url,citationCount,"
+                "influentialCitationCount,referenceCount,authors,externalIds,"
+                "publicationTypes"
+            )
+            for survey in survey_papers:
+                identifier = self._citation_identifier(survey)
+                if identifier is None:
+                    continue
+                try:
+                    response = self._http.get(
+                        f"{self.paper_endpoint}/{quote(identifier, safe=':')}/references",
+                        params={"fields": fields, "limit": limit},
+                    )
+                    payload = response.json()
+                    rows = payload.get("data", []) if isinstance(payload, dict) else []
+                    for row in rows:
+                        cited = row.get("citedPaper") if isinstance(row, dict) else None
+                        if not isinstance(cited, dict):
+                            continue
+                        paper = self._parse_paper(cited, f"references:{survey.paper_id}")
+                        if paper is None:
+                            continue
+                        paper.survey_source_ids = [survey.paper_id]
+                        results.append(paper)
+                except (httpx.HTTPError, ValueError, TypeError) as error:
+                    errors.append(f"references {survey.paper_id}: {error}")
+            return results, self._finish_search(errors=errors, cache_hits=0)
+
+    @staticmethod
+    def _citation_identifier(paper: PaperCandidate) -> str | None:
+        if paper.doi:
+            return f"DOI:{paper.doi}"
+        if paper.arxiv_id:
+            return f"ARXIV:{paper.arxiv_id}"
+        if paper.source == "semantic_scholar" and paper.paper_id.strip():
+            return paper.paper_id.strip()
+        return None
+
+    @staticmethod
+    def _apply_citation_metadata(
+        paper: PaperCandidate,
+        metadata: dict[str, int | None],
+    ) -> None:
+        citation_count = metadata.get("citation_count")
+        if citation_count is None:
+            return
+        paper.citation_count = max(0, int(citation_count))
+        influential = metadata.get("influential_citation_count")
+        references = metadata.get("reference_count")
+        paper.influential_citation_count = (
+            max(0, int(influential)) if influential is not None else None
+        )
+        paper.reference_count = (
+            max(0, int(references)) if references is not None else None
+        )
+        paper.citation_status = "known"
+        paper.citation_source = "semantic_scholar"
+        paper.citation_observed_at = datetime.now(timezone.utc)
 
     def close(self) -> None:
         if self._owns_client:
@@ -589,6 +750,89 @@ class CompositePaperRetriever:
                 stats=combined_stats,
             )
         return RetrievalResult(papers=results, stats=combined_stats)
+
+    def enrich_citations(
+        self,
+        papers: list[PaperCandidate],
+        *,
+        batch_size: int = 50,
+    ) -> RetrievalResult:
+        """Use the first citation-capable provider without making it a hard dependency."""
+
+        for retriever in self.retrievers:
+            enrich = getattr(retriever, "enrich_citations", None)
+            if not callable(enrich):
+                continue
+            source_name = self._source_name(retriever)
+            started = perf_counter()
+            try:
+                enriched, stats = enrich(papers, batch_size=batch_size)
+            except Exception as error:
+                return RetrievalResult(
+                    papers=list(papers),
+                    stats=RetrievalStats(
+                        errors=[f"{source_name} citation enrichment: {error}"],
+                        source_failure_count=1,
+                    ),
+                )
+            provider = self._provider_stats(
+                source_name,
+                stats,
+                success=not stats.errors,
+                result_count=sum(
+                    paper.citation_status == "known" for paper in enriched
+                ),
+                latency_ms=round((perf_counter() - started) * 1000, 3),
+            )
+            combined = RetrievalStats(errors=list(stats.errors))
+            self._add_provider_stats(combined, provider)
+            return RetrievalResult(papers=enriched, stats=combined)
+        return RetrievalResult(
+            papers=list(papers),
+            stats=RetrievalStats(
+                errors=["no configured provider supports citation enrichment"],
+                source_failure_count=1,
+            ),
+        )
+
+    def fetch_references(
+        self,
+        survey_papers: list[PaperCandidate],
+        *,
+        limit_per_paper: int = 40,
+    ) -> RetrievalResult:
+        """Expand references with the first capable provider and degrade to empty."""
+
+        for retriever in self.retrievers:
+            fetch = getattr(retriever, "fetch_references", None)
+            if not callable(fetch):
+                continue
+            source_name = self._source_name(retriever)
+            started = perf_counter()
+            try:
+                papers, stats = fetch(
+                    survey_papers,
+                    limit_per_paper=limit_per_paper,
+                )
+            except Exception as error:
+                return RetrievalResult(
+                    papers=[],
+                    stats=RetrievalStats(
+                        errors=[f"{source_name} reference expansion: {error}"],
+                        source_failure_count=1,
+                    ),
+                )
+            provider = self._provider_stats(
+                source_name,
+                stats,
+                success=not stats.errors,
+                result_count=len(papers),
+                latency_ms=round((perf_counter() - started) * 1000, 3),
+            )
+            combined = RetrievalStats(errors=list(stats.errors))
+            self._add_provider_stats(combined, provider)
+            return RetrievalResult(papers=papers, stats=combined)
+        return RetrievalResult(papers=[], stats=RetrievalStats())
 
     def _queries_for_source(self, queries: list[str], source_index: int) -> list[str]:
         """Rotate capped query windows so role buckets are covered across providers."""

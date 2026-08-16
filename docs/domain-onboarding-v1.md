@@ -80,6 +80,8 @@ Ranker 在截取候选上限时同时轮询论文角色与来源，避免某个�
 提供批处理和有界缓存，embedding 服务异常时 Ranker 自动降级到 TF-IDF，
 并记录实际模型、fallback、路径/角色候选数和最终路径/角色覆盖。至少存在一篇达到相关性下限的论文时，明显
 低于下限的候选会在 MMR 前过滤，避免高引用但无关的论文仅凭多样性进入结果。
+同一次质量评估中，远程 embedding 首次失败后会对剩余论述打开请求级熔断，
+统一使用多语言 TF-IDF，避免每条论述重复支付远程超时。
 DOI 与 arXiv ID 会统一移除解析器前缀和版本号并校验格式；Crossref 与 arXiv
 记录还必须满足来源、`paper_id`、标识符和 URL 一致。Crossref 仅接收论文型 work
 type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会进入排序。
@@ -92,6 +94,20 @@ type，Semantic Scholar 中的数据集、社论、来信和新闻记录不会�
 `subdirection_id`、缺失角色、原因和补充查询的 `CoverageGap`。Pipeline 最多执行
 一轮补充检索，而且只发送这些缺口对应的查询；补充结果仍需经过同一套验证、去重、
 排序和 MMR 选择，不会直接进入生成器。
+
+结构化的 `subdirection_plans` 固定保留 3 个子方向。每个方向都有稳定 ID、
+中英文名称、范围、包含/排除词、研究问题以及 2 条独立英文查询。
+Pipeline 不再只从全局论文池反推子方向：它会逐方向检索、排序、检查证据覆盖，
+必要时最多补搜一次，然后轮询合并各方向论文，避免某一个热门方向占满论文清单。
+
+子方向证据的引用数由 Semantic Scholar 批量补全，并保留数据源和观测时间。
+引用数只占方向内排序的 5%，主要依据仍是语义相关性、路径命中、论文角色和时效性。
+补全接口限流或不可用时，引用状态为 `unknown`，原论文仍保留并继续生成。
+
+输出的 `evidence_papers` 保留所有用于生成和质量验证的论文，`papers` 只保留用户可见推荐。
+推荐以近期 Survey 为主，再从入选 Survey 的参考文献中补充代表方法或奠基工作。
+每条推荐包含 `recommendation_category`、`recommendation_reason`、
+`recommendation_rank_score` 和可选的 `survey_source_ids`。
 
 固定排序基准保存在 `tests/domain_onboarding_v1/fixtures/ranking_benchmark.json`，使用
 人工相关性等级持续检查 Precision@K、Recall@K、NDCG@K 和论文角色覆盖率。修改
@@ -161,7 +177,8 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 - `hard_gate_failed`；
 - `improvement_too_small`；
 - `critical_dimension_regressed`；
-- `repair_execution_failed`。
+- `repair_execution_failed`；
+- `evidence_validation_degraded`：语义后端已降级、总分达标且只有证据支持硬门失败，保留首次结果并跳过整篇 LLM 修复。
 
 输出中的关键技术与历史论述通过 `evidence_claims` 绑定已验证 `paper_id`，并区分
 `abstract_explicit`、`metadata_inference` 和 `background_synthesis`。质量评估会检查
@@ -172,7 +189,7 @@ Pipeline 状态与最终质量保持一致：只有通过硬门槛且达到阈�
 
 ## Deadline 与取消
 
-Pipeline 默认共享一个请求级 90 秒 deadline，并为画像、规划、检索、排序、生成、
+Pipeline 默认共享一个请求级 4800 秒 deadline，并为画像、规划、检索、排序、生成、
 评估和修复设置独立阶段预算。调用方可以传入 `PipelineExecutionContext`，并通过其
 `cancel()` 方法发出协作式取消信号。超时返回 `timeout`，取消返回 `cancelled`；
 Metrics 会记录中断阶段。第三方阻塞调用仍由各自的原生网络 timeout 负责终止，

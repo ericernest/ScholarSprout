@@ -405,8 +405,23 @@ class WeightedPaperRanker:
                         [*existing.matched_path_hints, *paper.matched_path_hints]
                     )
                 )
-                if (paper.citation_count or 0) > (existing.citation_count or 0):
+                existing.survey_source_ids = list(
+                    dict.fromkeys(
+                        [*existing.survey_source_ids, *paper.survey_source_ids]
+                    )
+                )
+                if paper.citation_count is not None and (
+                    existing.citation_count is None
+                    or paper.citation_count > existing.citation_count
+                ):
                     existing.citation_count = paper.citation_count
+                    existing.influential_citation_count = (
+                        paper.influential_citation_count
+                    )
+                    existing.reference_count = paper.reference_count
+                    existing.citation_status = "known"
+                    existing.citation_source = paper.citation_source or paper.source
+                    existing.citation_observed_at = paper.citation_observed_at
                 if not existing.abstract and paper.abstract:
                     existing.abstract = paper.abstract
             for key in keys:

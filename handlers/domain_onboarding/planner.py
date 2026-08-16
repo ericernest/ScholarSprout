@@ -20,6 +20,7 @@ from .schemas import (
     PaperRole,
     PaperSearchQuery,
     ResearchPerspective,
+    SubdirectionResearchPlan,
 )
 
 
@@ -145,7 +146,30 @@ class StormLitePlanner:
             expanded_terms=self._expanded_terms(english),
             perspectives=perspectives,
             search_queries=queries[: self.config.search_queries_limit],
-            expected_subdirections=["理论与基础", "核心方法", "评测与应用", "开放问题与前沿"],
+            expected_subdirections=["理论与基础", "核心方法", "评测与前沿"],
+            subdirection_plans=[
+                SubdirectionResearchPlan(
+                    name_zh="理论与基础",
+                    name_en="theoretical foundations and problem formulation",
+                    scope="研究领域的基本任务、理论假设与问题定义。",
+                    include_terms=["foundations", "problem formulation"],
+                    research_questions=["What assumptions define the research problem?"],
+                ),
+                SubdirectionResearchPlan(
+                    name_zh="核心方法",
+                    name_en="core methods and architectures",
+                    scope="研究实现领域核心能力的方法、模型与系统架构。",
+                    include_terms=["methods", "models", "architectures"],
+                    research_questions=["Which methods define the main research paradigms?"],
+                ),
+                SubdirectionResearchPlan(
+                    name_zh="评测与前沿",
+                    name_en="evaluation benchmarks and research frontiers",
+                    scope="研究评测方法、数据集、开放问题与近期进展。",
+                    include_terms=["evaluation", "benchmarks", "open challenges"],
+                    research_questions=["How should progress and limitations be evaluated?"],
+                ),
+            ],
         )
         return self._expand_plan_queries(plan)
 
@@ -234,7 +258,71 @@ class StormLitePlanner:
                 ]
         plan.paper_queries = self._build_role_queries(plan, english)
         plan.search_queries = [query.query for query in plan.paper_queries]
+        plan.subdirection_plans = self._build_subdirection_plans(plan, english)
         return DomainResearchPlan.model_validate(plan.model_dump())
+
+    @staticmethod
+    def _build_subdirection_plans(
+        plan: DomainResearchPlan,
+        english_domain: str,
+    ) -> list[SubdirectionResearchPlan]:
+        branches: list[SubdirectionResearchPlan] = []
+        fallback_english_names = (
+            "theoretical foundations and problem formulation",
+            "core methods and architectures",
+            "evaluation benchmarks and research frontiers",
+        )
+        for index, branch in enumerate(plan.subdirection_plans[:3], start=1):
+            branch_name = branch.name_en.strip()
+            if not re.search(r"[A-Za-z]{3}", branch_name):
+                branch_name = fallback_english_names[index - 1]
+            queries = list(branch.search_queries[:2])
+            if any(
+                not re.search(r"[A-Za-z]{3}", query.query)
+                or re.search(r"[\u4e00-\u9fff]", query.query)
+                for query in queries
+            ):
+                queries = []
+            defaults = [
+                PaperSearchQuery(
+                    query=(
+                        f'"{english_domain}" "{branch_name}" '
+                        "methods framework architecture"
+                    ),
+                    role_hint="method",
+                    path_id=branch.subdirection_id,
+                    priority=1,
+                ),
+                PaperSearchQuery(
+                    query=(
+                        f'"{english_domain}" "{branch_name}" '
+                        "benchmark evaluation recent advances"
+                    ),
+                    role_hint="evaluation",
+                    path_id=branch.subdirection_id,
+                    priority=2,
+                ),
+            ]
+            present_roles = {item.role_hint for item in queries}
+            for default in defaults:
+                if len(queries) >= 2:
+                    break
+                if default.role_hint not in present_roles:
+                    queries.append(default)
+                    present_roles.add(default.role_hint)
+            branches.append(
+                SubdirectionResearchPlan.model_validate(
+                    {
+                        **branch.model_dump(),
+                        "subdirection_id": branch.subdirection_id or f"sub-{index}",
+                        "name_en": branch_name,
+                        "search_queries": [
+                            query.model_dump() for query in queries[:2]
+                        ],
+                    }
+                )
+            )
+        return branches
 
     def _build_role_queries(
         self,

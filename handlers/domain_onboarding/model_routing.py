@@ -98,8 +98,14 @@ class RoutedChatModel:
                 last_error = error
         raise RuntimeError(f"all streaming models failed for route {self.route_name}") from last_error
 
-    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
-        return self.delegate.embed(texts, model=model)
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        model: str,
+        timeout: float | None = None,
+    ) -> list[list[float]]:
+        return self.delegate.embed(texts, model=model, timeout=timeout)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -145,8 +151,14 @@ class ModelOverrideChatModel:
     def chat_stream(self, **kwargs: Any) -> Any:
         return self.delegate.chat_stream(**kwargs, model_name=self.model_name)
 
-    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
-        return self.delegate.embed(texts, model=model)
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        model: str,
+        timeout: float | None = None,
+    ) -> list[list[float]]:
+        return self.delegate.embed(texts, model=model, timeout=timeout)
 
 
 def run_with_model_route(

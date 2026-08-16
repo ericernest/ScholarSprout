@@ -17,8 +17,8 @@ DOMAIN_ONBOARDING_AUDIT_FSYNC=1
 DOMAIN_ONBOARDING_EMBEDDING_BASE_URL=<openai-compatible-embedding-base-url>
 # 覆盖远程模型 ID：DOMAIN_ONBOARDING_EMBEDDING_MODEL=<embedding-model>
 # 显式关闭 embedding 并只使用 TF-IDF：DOMAIN_ONBOARDING_EMBEDDING_ENABLED=false
-SEMANTIC_SCHOLAR_API_KEY=<optional>
-CROSSREF_MAILTO=<operations-email>
+SEMANTIC_SCHOLAR_API_KEY=<optional-higher-quota-key>
+CROSSREF_MAILTO=<deployment-contact-email>
 ```
 
 ### 分模块模型路由
@@ -49,11 +49,16 @@ curl -f http://127.0.0.1:8000/ready
 
 `/health` 只表示进程存活；`/ready` 只有在模型、V1 pipeline、指标和审计均已装配时返回 200。部署滚动更新应以 `/ready` 为就绪探针。
 
-互动链路默认对每个论文源最多发送 4 条查询，单个外部请求最多 8 秒且不串行重试。
-规划和整体生成分别限制为 1000 和 6000 tokens；阶段提纲限制为 550 tokens。发展基础块
-限制为 2200 tokens，三个发展阶段各 2600 tokens 并行生成；全景和学习路径分别限制为
-3600 和 3400 tokens 并行生成。规划阶段/模型调用为 120/110 秒，生成阶段总 deadline
-为 450 秒，请求总 deadline 为 600 秒。已通过 SSE 发布的分段不等待任务终态。
+互动链路默认对每个论文源最多发送 4 条查询，单个外部请求最多 8 秒。
+检索源对 429 和短暂网络错误最多尝试 3 次，默认按 2 秒、4 秒有界退避，
+并尊重服务端 `Retry-After`。结果存入 TTL 缓存；当某个论文源失效时，
+其他数据源和已有证据仍可继续生成，不会因引用数补全失败而丢弃论文。
+规划阶段/模型调用预算为 300/280 秒；单次检索和排序阶段预算均为 180 秒；
+远程 embedding 单批最多等待 30 秒。发展基础块预算为 240 秒，发展阶段按顺序生成、
+单阶段预算为 300 秒；全景和学习路径使用两个 worker 并行生成，单模块预算为 300 秒。
+整体生成、修复和请求总预算分别为 3600、300 和 4800 秒。已通过 SSE 发布的分段不等待任务终态。
+同一质量评估中 embedding 首次失败后，其余证据论述直接使用多语言 TF-IDF；如果总分已达标、
+且只有因语义降级产生的证据支持硬门失败，则保留首次结果并跳过完整 LLM 修复。
 修改这些边界后应重跑六领域受控回归，不应只为单个慢请求无界提高 deadline。
 
 ## 监控
@@ -69,6 +74,40 @@ curl -f http://127.0.0.1:8000/ready
 发布前运行 `python -m unittest discover -s tests`，再执行六领域受控在线回归。知识图谱保持 shadow mode，只有 `graph_path_evaluation` 的 `promotion_recommended` 为真且人工检查通过后才能设计主动模式变更。
 
 密钥不得写入日志、审计、提交或容器镜像。审计目录需使用持久卷并限制为服务账户可读写。
+`CROSSREF_MAILTO` 也应只在本地 shell、密钥管理器或受保护的部署环境文件中设置，
+不要把真实邮箱写入仓库。
+
+## 子方向证据检索与引用数
+
+规划器固定产生 3 个可检索子方向，每个方向包含中英文名称、范围、包含词、
+排除词、研究问题和 2 条英文查询。Pipeline 会对每个方向独立检索和排序；
+如果论文数、摘要或方法/综述/评测角色覆盖不足，最多再发送 1 条定向补搜查询。
+补搜仍失败时，该方向标记为 `limited`，但不会让整个任务失败。
+
+子方向排序以相关性为主：相关性 55%、路径命中 15%、论文角色 10%、
+时效性 10%、摘要完整度 5%、按发表年限归一化的引用数 5%。
+因此高引用但不相关的论文不能仅凭引用数进入结果。引用数为 `0` 会标记为
+`known`，查不到才标记为 `unknown`，避免把“真实为 0”和“接口没返回”混在一起。
+
+Semantic Scholar 批量接口用于补全引用数，默认可以无 Key 调用；
+`SEMANTIC_SCHOLAR_API_KEY` 只是获取更高配额的可选配置。Crossref 作为独立检索源，
+`CROSSREF_MAILTO` 仅用于 polite pool 联系信息，不是 API Key。
+
+## 证据论文与用户推荐分离
+
+Pipeline 内部保留两个论文集合：`evidence_papers` 为发展阶段、子方向、
+概念和技术说明提供证据；`papers` 是面向用户展示的精选阅读清单。
+证据论文不会因为没有进入推荐清单而丢失，也不会全部堆到用户界面。
+
+推荐流程使用全领域 Survey 查询和 3 个子方向 Survey 查询。Survey 排序为：
+相关性 45%、时效性 25%、按发表年限归一化的引用表现 20%、摘要完整度 10%；
+结果中较新 Survey 优先于较旧高引 Survey。入选 Survey 再通过
+Semantic Scholar `GET /graph/v1/paper/{paper_id}/references` 获取参考文献，
+以相关性 65%、引用表现 20%、时效性 15% 筛选代表方法论文。
+每篇来自综述参考文献的推荐都保留 `survey_source_ids`，可追溯它来自哪篇综述。
+
+Survey 检索或参考文献接口失败时，Pipeline 会保留已验证高相关论文作为降级阅读入口，
+并在指标中记录 `recommendation_degraded_count`，不会因推荐扩展失败而让领域入门任务失败。
 
 仓库提供 `Dockerfile` 与 `deploy/docker-compose.yml`。复制
 `deploy/domain-onboarding.env.example` 为部署系统的受保护环境配置后，可从

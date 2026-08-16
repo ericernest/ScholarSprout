@@ -76,10 +76,14 @@ class DomainOnboardingConfig(BaseModel):
     planning_model_timeout_seconds: float = Field(
         default=280.0, gt=0.0, le=590.0
     )
-    retrieval_stage_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
-    # Remote qwen3 embeddings can legitimately take longer than a lexical
-    # rank. Keep the stage bounded while allowing one real embedding batch.
-    ranking_timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
+    # A composite retrieval call may process four queries per source and retry
+    # transient 429/5xx responses. The old 45 s budget expired after the call
+    # returned, discarding otherwise usable degraded results on real networks.
+    retrieval_stage_timeout_seconds: float = Field(default=180.0, gt=0.0, le=300.0)
+    # Remote qwen3 embeddings can legitimately take much longer than a lexical
+    # rank, especially for the larger per-stage evidence pools. Keep the stage
+    # bounded by the request deadline without discarding a successful batch.
+    ranking_timeout_seconds: float = Field(default=180.0, gt=0.0, le=300.0)
     generation_timeout_seconds: float = Field(default=3600.0, gt=0.0, le=4800.0)
     evaluation_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
     repair_timeout_seconds: float = Field(default=300.0, gt=0.0, le=600.0)
@@ -106,8 +110,25 @@ class DomainOnboardingConfig(BaseModel):
     ranking_max_evaluation_papers: int = Field(default=3, ge=0, le=10)
     ranking_max_method_papers: int = Field(default=4, ge=0, le=10)
     ranking_min_abstract_candidates: int = Field(default=6, ge=0, le=40)
+    subdirection_retrieval_enabled: bool = True
+    subdirection_queries_per_direction: int = Field(default=2, ge=1, le=4)
+    subdirection_papers_per_direction: int = Field(default=4, ge=1, le=8)
+    subdirection_min_papers: int = Field(default=3, ge=1, le=8)
+    subdirection_min_abstract_papers: int = Field(default=2, ge=0, le=8)
+    subdirection_max_supplemental_queries: int = Field(default=1, ge=0, le=2)
+    citation_enrichment_enabled: bool = True
+    citation_enrichment_batch_size: int = Field(default=50, ge=1, le=500)
+    paper_recommendations_enabled: bool = True
+    recommendation_survey_query_limit: int = Field(default=4, ge=1, le=8)
+    recommendation_survey_limit: int = Field(default=3, ge=1, le=6)
+    recommendation_reference_limit: int = Field(default=3, ge=0, le=8)
+    recommendation_references_per_survey: int = Field(default=40, ge=1, le=100)
+    recommendation_recent_year_window: int = Field(default=5, ge=2, le=10)
     embedding_batch_size: int = Field(default=32, ge=1, le=128)
     embedding_cache_max_entries: int = Field(default=2048, ge=0, le=32768)
+    # Embeddings improve relevance but must never become a single point of
+    # failure. A timed-out remote batch falls back to multilingual TF-IDF.
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0.0, le=120.0)
     development_stage_planning_timeout_seconds: float = Field(
         default=65.0, gt=0.0, le=120.0
     )
@@ -116,7 +137,9 @@ class DomainOnboardingConfig(BaseModel):
     generation_max_attempts: int = Field(default=3, ge=1, le=3)
     generation_retry_backoff_seconds: float = Field(default=30.0, ge=0.0, le=60.0)
     generation_development_workers: int = Field(default=1, ge=1, le=3)
-    generation_section_workers: int = Field(default=1, ge=1, le=2)
+    # Landscape and the standard learning path are independent once the
+    # development narrative is ready, so run both remote calls concurrently.
+    generation_section_workers: int = Field(default=2, ge=1, le=2)
     stage_queries_per_stage: int = Field(default=2, ge=1, le=4)
     stage_papers_per_stage: int = Field(default=3, ge=1, le=6)
     # Incremental generation runs development first, then landscape/path in
@@ -139,9 +162,9 @@ class DomainOnboardingConfig(BaseModel):
     )
     generation_paper_abstract_max_chars: int = Field(default=700, ge=200, le=4000)
     retrieval_timeout_seconds: float = Field(default=8.0, gt=0.0, le=60.0)
-    retrieval_max_attempts: int = Field(default=1, ge=1, le=5)
+    retrieval_max_attempts: int = Field(default=3, ge=1, le=5)
     retrieval_queries_per_source: int = Field(default=4, ge=1, le=12)
-    retrieval_backoff_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
+    retrieval_backoff_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
     retrieval_max_backoff_seconds: float = Field(default=8.0, ge=0.0, le=60.0)
     retrieval_cache_ttl_seconds: float = Field(default=3600.0, ge=0.0, le=86400.0)
     retrieval_cache_max_entries: int = Field(default=256, ge=0, le=4096)
@@ -150,6 +173,9 @@ class DomainOnboardingConfig(BaseModel):
     retrieval_circuit_cooldown_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
     retrieval_stale_cache_seconds: float = Field(default=86400.0, ge=0.0, le=604800.0)
     arxiv_min_interval_seconds: float = Field(default=3.0, ge=0.0, le=10.0)
+    semantic_scholar_min_interval_seconds: float = Field(
+        default=1.05, ge=0.0, le=10.0
+    )
     knowledge_graph_enabled: bool = False
     knowledge_graph_shadow_mode: bool = True
 
@@ -157,6 +183,14 @@ class DomainOnboardingConfig(BaseModel):
     def validate_settings(self) -> "DomainOnboardingConfig":
         if self.selected_paper_limit > self.candidate_paper_limit:
             raise ValueError("selected_paper_limit must not exceed candidate_paper_limit")
+        if self.subdirection_min_papers > self.subdirection_papers_per_direction:
+            raise ValueError(
+                "subdirection_min_papers must not exceed subdirection_papers_per_direction"
+            )
+        if self.subdirection_min_abstract_papers > self.subdirection_papers_per_direction:
+            raise ValueError(
+                "subdirection_min_abstract_papers must not exceed subdirection_papers_per_direction"
+            )
         total = (
             self.relevance_weight
             + self.recency_weight

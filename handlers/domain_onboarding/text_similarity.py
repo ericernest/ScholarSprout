@@ -22,17 +22,37 @@ class EmbeddingProvider(Protocol):
 class OpenAIEmbeddingProvider:
     """Adapter for OpenAI-compatible clients with an explicit embedding model."""
 
-    def __init__(self, model: object, embedding_model: str) -> None:
+    def __init__(
+        self,
+        model: object,
+        embedding_model: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
         if not embedding_model.strip():
             raise ValueError("embedding_model must not be empty")
         self.model = model
         self.embedding_model = embedding_model.strip()
+        self.timeout_seconds = timeout_seconds
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         method = getattr(self.model, "embed", None)
         if not callable(method):
             raise TypeError("configured model does not support embeddings")
-        return method(texts, model=self.embedding_model)
+        if self.timeout_seconds is None:
+            return method(texts, model=self.embedding_model)
+        try:
+            return method(
+                texts,
+                model=self.embedding_model,
+                timeout=self.timeout_seconds,
+            )
+        except TypeError as error:
+            # Preserve compatibility with simple/local embedding adapters that
+            # predate the optional timeout keyword.
+            if "timeout" not in str(error):
+                raise
+            return method(texts, model=self.embedding_model)
 
 
 class FastEmbedProvider:

@@ -1,0 +1,236 @@
+"""Build a user-facing survey-led reading list separately from evidence papers."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+from .config import DomainOnboardingConfig
+from .schemas import DomainResearchPlan, PaperCandidate, PaperSearchQuery, RankedPaper
+
+
+@dataclass(slots=True)
+class RecommendationBuildResult:
+    papers: list[RankedPaper] = field(default_factory=list)
+    survey_candidates: int = 0
+    selected_surveys: int = 0
+    reference_candidates: int = 0
+    selected_references: int = 0
+    degraded: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+class SurveyRecommendationPolicy:
+    def __init__(self, ranker: Any, config: DomainOnboardingConfig) -> None:
+        self.ranker = ranker
+        self.config = config
+
+    def queries(self, plan: DomainResearchPlan) -> list[PaperSearchQuery]:
+        domain = plan.translated_domain or plan.normalized_domain
+        queries = [
+            PaperSearchQuery(
+                query=f'"{domain}" survey systematic review recent advances',
+                role_hint="survey",
+                path_id="recommendation-survey-global",
+                priority=1,
+            )
+        ]
+        for branch in plan.subdirection_plans:
+            queries.append(
+                PaperSearchQuery(
+                    query=f'"{domain}" "{branch.name_en}" survey review taxonomy',
+                    role_hint="survey",
+                    path_id=branch.subdirection_id,
+                    priority=2,
+                )
+            )
+        return queries[: self.config.recommendation_survey_query_limit]
+
+    def select_surveys(
+        self,
+        candidates: list[PaperCandidate],
+        plan: DomainResearchPlan,
+        *,
+        language: str,
+    ) -> tuple[list[RankedPaper], int]:
+        if not candidates:
+            return [], 0
+        ranked = self.ranker.rank(
+            candidates,
+            plan,
+            limit=min(self.config.candidate_paper_limit, max(12, len(candidates))),
+        ).papers
+        surveys = [paper for paper in ranked if self._is_survey(paper)]
+        if not surveys:
+            return [], 0
+        max_citations = max(
+            (self._citation_velocity(paper) for paper in surveys),
+            default=0.0,
+        )
+        current_year = datetime.now(timezone.utc).year
+        rescored: list[RankedPaper] = []
+        for paper in surveys:
+            citation = self._citation_velocity(paper)
+            citation_score = citation / max_citations if max_citations else 0.0
+            metadata_score = float(bool((paper.abstract or "").strip()))
+            score = (
+                0.45 * paper.relevance_score
+                + 0.25 * paper.recency_score
+                + 0.20 * citation_score
+                + 0.10 * metadata_score
+            )
+            recent = bool(
+                paper.year
+                and paper.year >= current_year - self.config.recommendation_recent_year_window
+            )
+            category = "recent_survey" if recent else "influential_survey"
+            reason = self._survey_reason(paper, recent=recent, language=language)
+            rescored.append(
+                paper.model_copy(
+                    update={
+                        "paper_usage": "recommendation",
+                        "recommendation_category": category,
+                        "recommendation_reason": reason,
+                        "recommendation_rank_score": round(min(1.0, score), 6),
+                        "reading_priority": "core" if recent else "recommended",
+                    }
+                )
+            )
+        rescored.sort(
+            key=lambda paper: (
+                paper.recommendation_category == "recent_survey",
+                paper.recommendation_rank_score,
+                paper.citation_status == "known",
+                paper.citation_count or 0,
+            ),
+            reverse=True,
+        )
+        return rescored[: self.config.recommendation_survey_limit], len(surveys)
+
+    def select_references(
+        self,
+        candidates: list[PaperCandidate],
+        plan: DomainResearchPlan,
+        *,
+        language: str,
+    ) -> tuple[list[RankedPaper], int]:
+        if not candidates or self.config.recommendation_reference_limit <= 0:
+            return [], 0
+        ranked = self.ranker.rank(
+            candidates,
+            plan,
+            limit=min(self.config.candidate_paper_limit, max(12, len(candidates))),
+        ).papers
+        references = [paper for paper in ranked if not self._is_survey(paper)]
+        max_citations = max(
+            (self._citation_velocity(paper) for paper in references),
+            default=0.0,
+        )
+        rescored: list[RankedPaper] = []
+        for paper in references:
+            citation = self._citation_velocity(paper)
+            citation_score = citation / max_citations if max_citations else 0.0
+            score = (
+                0.65 * paper.relevance_score
+                + 0.20 * citation_score
+                + 0.15 * paper.recency_score
+            )
+            sources = list(dict.fromkeys(paper.survey_source_ids))
+            if not sources:
+                continue
+            reason = self._reference_reason(paper, sources=sources, language=language)
+            rescored.append(
+                paper.model_copy(
+                    update={
+                        "paper_usage": "recommendation",
+                        "recommendation_category": "survey_reference",
+                        "recommendation_reason": reason,
+                        "recommendation_rank_score": round(min(1.0, score), 6),
+                        "reading_priority": "recommended",
+                    }
+                )
+            )
+        rescored.sort(
+            key=lambda paper: (
+                paper.recommendation_rank_score,
+                paper.citation_status == "known",
+                paper.citation_count or 0,
+            ),
+            reverse=True,
+        )
+        return (
+            rescored[: self.config.recommendation_reference_limit],
+            len(references),
+        )
+
+    @staticmethod
+    def merge_with_evidence(
+        evidence: list[RankedPaper],
+        recommendations: list[RankedPaper],
+    ) -> list[RankedPaper]:
+        merged = [paper.model_copy(deep=True) for paper in evidence]
+        indexes = {paper.paper_id: index for index, paper in enumerate(merged)}
+        for recommendation in recommendations:
+            index = indexes.get(recommendation.paper_id)
+            if index is None:
+                indexes[recommendation.paper_id] = len(merged)
+                merged.append(recommendation.model_copy(deep=True))
+                continue
+            existing = merged[index]
+            merged[index] = existing.model_copy(
+                update={
+                    "paper_usage": "both",
+                    "recommendation_category": recommendation.recommendation_category,
+                    "recommendation_reason": recommendation.recommendation_reason,
+                    "recommendation_rank_score": recommendation.recommendation_rank_score,
+                    "survey_source_ids": list(
+                        dict.fromkeys(
+                            [*existing.survey_source_ids, *recommendation.survey_source_ids]
+                        )
+                    ),
+                }
+            )
+        return merged
+
+    @staticmethod
+    def _is_survey(paper: RankedPaper) -> bool:
+        text = f"{paper.title} {' '.join(paper.publication_types)}".casefold()
+        return paper.paper_role == "survey" or any(
+            marker in text
+            for marker in ("survey", "systematic review", "literature review", "overview")
+        )
+
+    @staticmethod
+    def _citation_velocity(paper: RankedPaper) -> float:
+        if paper.citation_count is None:
+            return 0.0
+        current_year = datetime.now(timezone.utc).year
+        age = max(1, current_year - (paper.year or current_year) + 1)
+        return math.log1p(paper.citation_count / age)
+
+    @staticmethod
+    def _survey_reason(paper: RankedPaper, *, recent: bool, language: str) -> str:
+        citation = (
+            f"引用数 {paper.citation_count}"
+            if paper.citation_status == "known"
+            else "引用数暂未获取"
+        )
+        if language == "zh-CN":
+            timing = "较新的综述" if recent else "影响力较高的综述"
+            return f"这是{timing}，适合先建立领域全景；{citation}。"
+        timing = "a recent survey" if recent else "an influential survey"
+        return f"Selected as {timing} for building a field overview; {citation}."
+
+    @staticmethod
+    def _reference_reason(
+        paper: RankedPaper,
+        *,
+        sources: list[str],
+        language: str,
+    ) -> str:
+        source_text = "、".join(sources[:2])
+        if language == "zh-CN":
+            return f"该论文出现在入选综述的参考文献中（{source_text}），可用于追踪代表方法的原始工作。"
+        return f"Cited by selected survey {source_text}; useful for tracing an original representative method."

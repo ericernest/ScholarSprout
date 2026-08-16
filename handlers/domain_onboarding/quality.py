@@ -223,11 +223,12 @@ class CompositeQualityEvaluator:
         issues: list[QualityIssue],
     ) -> float:
         allowed = {paper.paper_id: paper for paper in allowed_papers}
-        output_ids = {paper.paper_id for paper in output.papers}
+        all_output_papers = [*output.papers, *output.evidence_papers]
+        output_ids = {paper.paper_id for paper in all_output_papers}
         referenced = set(self._all_reference_ids(output))
         invalid = sorted((output_ids | referenced) - set(allowed))
         metadata_mismatches: list[str] = []
-        for paper in output.papers:
+        for paper in all_output_papers:
             source = allowed.get(paper.paper_id)
             if source is None:
                 continue
@@ -246,7 +247,7 @@ class CompositeQualityEvaluator:
         if not output.papers:
             return 0.0
         valid_count = len(output_ids & set(allowed)) - len(metadata_mismatches)
-        return max(0.0, valid_count / len(output.papers))
+        return max(0.0, valid_count / max(1, len(output_ids)))
 
     def evaluate_topic_coverage(
         self,
@@ -432,9 +433,13 @@ class CompositeQualityEvaluator:
             if self.config.enforce_core_paper_coverage:
                 canonical_specs = self.canonical_registry.specs(output.domain)
                 if canonical_specs:
+                    evidence_ids = {
+                        paper.paper_id for paper in output.evidence_papers
+                    } or {paper.paper_id for paper in output.papers}
                     canonical_count = sum(
                         self.canonical_registry.match(paper, output.domain) is not None
-                        for paper in selected
+                        for paper_id, paper in allowed.items()
+                        if paper_id in evidence_ids
                     )
                     target = min(self.config.min_core_papers, len(canonical_specs))
                     if target > 0:
@@ -453,6 +458,26 @@ class CompositeQualityEvaluator:
                                 recommended_action="补充检索该领域的奠基或核心方法论文。",
                             )
                         )
+            if output.reproducibility.get("recommendation_strategy") == (
+                "survey_first_then_survey_references"
+            ):
+                reason_coverage = _average(
+                    float(bool(paper.recommendation_reason.strip()))
+                    for paper in output.papers
+                )
+                category_coverage = _average(
+                    float(paper.recommendation_category is not None)
+                    for paper in output.papers
+                )
+                has_survey = any(
+                    paper.recommendation_category
+                    in {"recent_survey", "influential_survey"}
+                    for paper in output.papers
+                )
+                recommendation_quality = _average(
+                    [reason_coverage, category_coverage, float(has_survey)]
+                )
+                score = 0.8 * score + 0.2 * recommendation_quality
         if score < self.config.quality_paper_relevance_threshold:
             severity = "error" if not selected or len(low_ids) * 2 >= len(selected) else "warning"
             issues.append(
@@ -598,9 +623,10 @@ class CompositeQualityEvaluator:
                     recommended_action="丢弃非字符串列表项，并重新生成对应学习步骤。",
                 )
             )
-        role_by_id = {paper.paper_id: paper.paper_role for paper in output.papers}
+        quality_papers = [*output.evidence_papers, *output.papers]
+        role_by_id = {paper.paper_id: paper.paper_role for paper in quality_papers}
         priority_by_id = {
-            paper.paper_id: paper.reading_priority for paper in output.papers
+            paper.paper_id: paper.reading_priority for paper in quality_papers
         }
         early_ids = {
             paper_id
