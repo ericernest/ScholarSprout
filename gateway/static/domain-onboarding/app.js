@@ -697,7 +697,7 @@ function showDetail(kind, id) {
   const data = currentData();
   if (!data) return;
   state.selected = { kind, id };
-  const papers = new Map((data.papers || []).map((paper) => [String(paper.paper_id), paper]));
+  const papers = paperIndex(data);
   let title = "学习详情";
   let subtitle = "与当前学习地图保持关联";
   let summary = "";
@@ -1188,6 +1188,15 @@ function detailPaperIds(value) {
   return value && typeof value === "object" && Array.isArray(value.related_paper_ids)
     ? value.related_paper_ids
     : [];
+}
+
+function paperIndex(data) {
+  return new Map(
+    [
+      ...(data?.evidence_papers || []),
+      ...(data?.papers || []),
+    ].map((paper) => [String(paper.paper_id), paper]),
+  );
 }
 
 function paperMini(paper) {
