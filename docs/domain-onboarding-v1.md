@@ -101,13 +101,15 @@ Pipeline 不再只从全局论文池反推子方向：它会逐方向检索、�
 必要时最多补搜一次，然后轮询合并各方向论文，避免某一个热门方向占满论文清单。
 
 子方向证据的引用数由 Semantic Scholar 批量补全，并保留数据源和观测时间。
-引用数只占方向内排序的 5%，主要依据仍是语义相关性、路径命中、论文角色和时效性。
-补全接口限流或不可用时，引用状态为 `unknown`，原论文仍保留并继续生成。
+引用数仅作为元数据展示，不进入得分、排序或论文角色判断。补全接口限流或不可用时，
+引用状态为 `unknown`，原论文仍保留并继续生成。
 
 输出的 `evidence_papers` 保留所有用于生成和质量验证的论文，`papers` 只保留用户可见推荐。
 推荐以近期 Survey 为主，再从入选 Survey 的参考文献中补充代表方法或奠基工作。
-每条推荐包含 `recommendation_category`、`recommendation_reason`、
-`recommendation_rank_score` 和可选的 `survey_source_ids`。
+每条推荐包含 `recommendation_category`、`recommendation_reason`、统一的
+`final_score`、`score_breakdown` 和可选的 `survey_source_ids`。统一评分为：主题相关度
+65% + 查询覆盖度 15% + 时效性 10% + 元数据完整度 10%。论文身份、领域语境、
+Survey 类型和最低相关度作为不可被其他分项抵消的硬门槛。
 
 Survey 搜索词采用“候选—验证—扩展”流程。规划模型提出标准英文词、别名和真实子方向；
 代码只为 RAG、GNN 等基础且不易混淆的领域补充少量稳定别名，不维护覆盖所有领域的静态词表。

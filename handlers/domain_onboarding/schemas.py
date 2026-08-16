@@ -18,10 +18,17 @@ CitationStatus = Literal["known", "unknown"]
 PaperUsage = Literal["evidence", "recommendation", "both"]
 RecommendationCategory = Literal[
     "recent_survey",
+    "established_survey",
+    # Accepted only when replaying v1.9-and-earlier outputs.
     "influential_survey",
     "survey_reference",
     # Accepted only when replaying v1.9-and-earlier outputs.
     "fallback_evidence",
+]
+PaperScoreContext = Literal[
+    "evidence",
+    "survey_recommendation",
+    "survey_reference",
 ]
 RecommendationStrategy = Literal[
     "not_run",
@@ -448,7 +455,6 @@ class PaperCandidate(OnboardingModel):
     paper_usage: PaperUsage = "evidence"
     recommendation_category: RecommendationCategory | None = None
     recommendation_reason: str = ""
-    recommendation_rank_score: float = Field(default=0.0, ge=0.0, le=1.0)
     survey_source_ids: list[str] = Field(default_factory=list)
 
     @field_validator("paper_id", "title", "url", "source")
@@ -525,17 +531,26 @@ class PaperCandidate(OnboardingModel):
         return self
 
 
+class PaperScoreBreakdown(OnboardingModel):
+    topic_relevance: float = Field(default=0.0, ge=0.0, le=1.0)
+    query_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    recency: float = Field(default=0.0, ge=0.0, le=1.0)
+    metadata_completeness: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class RankedPaper(PaperCandidate):
     relevance_score: float = Field(ge=0.0, le=1.0)
     context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     recency_score: float = Field(ge=0.0, le=1.0)
-    diversity_score: float = Field(ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
+    # Manually created and replayed records are legacy unless the ranker
+    # explicitly proves that the v2 formula was applied.
+    score_version: str = "legacy"
+    score_context: PaperScoreContext = "evidence"
+    score_breakdown: PaperScoreBreakdown = Field(default_factory=PaperScoreBreakdown)
     paper_role: PaperRole = "other"
     reading_priority: ReadingPriority = "optional"
     is_canonical: bool = False
-    base_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    path_fusion_score: float = Field(default=0.0, ge=0.0, le=1.0)
     path_relevance_scores: dict[str, float] = Field(default_factory=dict)
     matched_research_paths: list[str] = Field(default_factory=list)
 
@@ -572,16 +587,16 @@ class SelectedPaper(OnboardingModel):
     reading_priority: ReadingPriority = "optional"
     is_canonical: bool = False
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    context_score: float = Field(default=1.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
     recency_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    diversity_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    score_version: str = "legacy"
+    score_context: PaperScoreContext = "evidence"
+    score_breakdown: PaperScoreBreakdown = Field(default_factory=PaperScoreBreakdown)
     contribution: str = ""
     reading_focus: list[str] = Field(default_factory=list)
     paper_usage: PaperUsage = "evidence"
     recommendation_category: RecommendationCategory | None = None
     recommendation_reason: str = ""
-    recommendation_rank_score: float = Field(default=0.0, ge=0.0, le=1.0)
     survey_source_ids: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -928,7 +943,7 @@ class EvidenceClaim(OnboardingModel):
 
 
 class DomainOnboardingOutput(OnboardingModel):
-    schema_version: str = "domain-onboarding-output-v1.9"
+    schema_version: str = "domain-onboarding-output-v1.10"
     language: Literal["zh-CN", "en-US"] = "zh-CN"
     domain: str
     text: str

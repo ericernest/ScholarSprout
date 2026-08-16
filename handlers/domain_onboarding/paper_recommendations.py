@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -217,11 +216,10 @@ class SurveyRecommendationPolicy:
             )
             source_coverage = min(1.0, len({paper.source for paper in surveys}) / 2.0)
             score = (
-                0.30 * relevance
+                0.40 * relevance
                 + 0.25 * survey_yield
                 + 0.15 * abstract_ratio
                 + 0.15 * recent_ratio
-                + 0.10 * citation_ratio
                 + 0.05 * source_coverage
             )
             audits.append(
@@ -289,49 +287,28 @@ class SurveyRecommendationPolicy:
         surveys = [paper for paper in ranked if self._is_survey(paper)]
         if not surveys:
             return [], 0
-        max_citations = max(
-            (self._citation_velocity(paper) for paper in surveys),
-            default=0.0,
-        )
         current_year = datetime.now(timezone.utc).year
-        rescored: list[RankedPaper] = []
+        selected: list[RankedPaper] = []
         for paper in surveys:
-            citation = self._citation_velocity(paper)
-            citation_score = citation / max_citations if max_citations else 0.0
-            metadata_score = float(bool((paper.abstract or "").strip()))
-            score = (
-                0.45 * paper.relevance_score
-                + 0.25 * paper.recency_score
-                + 0.20 * citation_score
-                + 0.10 * metadata_score
-            )
             recent = bool(
                 paper.year
                 and paper.year >= current_year - self.config.recommendation_recent_year_window
             )
-            category = "recent_survey" if recent else "influential_survey"
+            category = "recent_survey" if recent else "established_survey"
             reason = self._survey_reason(paper, recent=recent, language=language)
-            rescored.append(
+            selected.append(
                 paper.model_copy(
                     update={
                         "paper_usage": "recommendation",
                         "recommendation_category": category,
                         "recommendation_reason": reason,
-                        "recommendation_rank_score": round(min(1.0, score), 6),
+                        "score_context": "survey_recommendation",
                         "reading_priority": "core" if recent else "recommended",
                     }
                 )
             )
-        rescored.sort(
-            key=lambda paper: (
-                paper.recommendation_category == "recent_survey",
-                paper.recommendation_rank_score,
-                paper.citation_status == "known",
-                paper.citation_count or 0,
-            ),
-            reverse=True,
-        )
-        return rescored[: self.config.recommendation_survey_limit], len(surveys)
+        selected.sort(key=lambda paper: paper.final_score, reverse=True)
+        return selected[: self.config.recommendation_survey_limit], len(surveys)
 
     def select_references(
         self,
@@ -348,44 +325,26 @@ class SurveyRecommendationPolicy:
             limit=min(self.config.candidate_paper_limit, max(12, len(candidates))),
         ).papers
         references = [paper for paper in ranked if not self._is_survey(paper)]
-        max_citations = max(
-            (self._citation_velocity(paper) for paper in references),
-            default=0.0,
-        )
-        rescored: list[RankedPaper] = []
+        selected: list[RankedPaper] = []
         for paper in references:
-            citation = self._citation_velocity(paper)
-            citation_score = citation / max_citations if max_citations else 0.0
-            score = (
-                0.65 * paper.relevance_score
-                + 0.20 * citation_score
-                + 0.15 * paper.recency_score
-            )
             sources = list(dict.fromkeys(paper.survey_source_ids))
             if not sources:
                 continue
             reason = self._reference_reason(paper, sources=sources, language=language)
-            rescored.append(
+            selected.append(
                 paper.model_copy(
                     update={
                         "paper_usage": "recommendation",
                         "recommendation_category": "survey_reference",
                         "recommendation_reason": reason,
-                        "recommendation_rank_score": round(min(1.0, score), 6),
+                        "score_context": "survey_reference",
                         "reading_priority": "recommended",
                     }
                 )
             )
-        rescored.sort(
-            key=lambda paper: (
-                paper.recommendation_rank_score,
-                paper.citation_status == "known",
-                paper.citation_count or 0,
-            ),
-            reverse=True,
-        )
+        selected.sort(key=lambda paper: paper.final_score, reverse=True)
         return (
-            rescored[: self.config.recommendation_reference_limit],
+            selected[: self.config.recommendation_reference_limit],
             len(references),
         )
 
@@ -408,7 +367,10 @@ class SurveyRecommendationPolicy:
                     "paper_usage": "both",
                     "recommendation_category": recommendation.recommendation_category,
                     "recommendation_reason": recommendation.recommendation_reason,
-                    "recommendation_rank_score": recommendation.recommendation_rank_score,
+                    "final_score": recommendation.final_score,
+                    "score_version": recommendation.score_version,
+                    "score_context": recommendation.score_context,
+                    "score_breakdown": recommendation.score_breakdown,
                     "survey_source_ids": list(
                         dict.fromkeys(
                             [*existing.survey_source_ids, *recommendation.survey_source_ids]
@@ -444,14 +406,6 @@ class SurveyRecommendationPolicy:
         return "model_subdirection"
 
     @staticmethod
-    def _citation_velocity(paper: RankedPaper) -> float:
-        if paper.citation_count is None:
-            return 0.0
-        current_year = datetime.now(timezone.utc).year
-        age = max(1, current_year - (paper.year or current_year) + 1)
-        return math.log1p(paper.citation_count / age)
-
-    @staticmethod
     def _survey_reason(paper: RankedPaper, *, recent: bool, language: str) -> str:
         citation = (
             f"引用数 {paper.citation_count}"
@@ -459,9 +413,9 @@ class SurveyRecommendationPolicy:
             else "引用数暂未获取"
         )
         if language == "zh-CN":
-            timing = "较新的综述" if recent else "影响力较高的综述"
+            timing = "较新的综述" if recent else "较成熟的综述"
             return f"这是{timing}，适合先建立领域全景；{citation}。"
-        timing = "a recent survey" if recent else "an influential survey"
+        timing = "a recent survey" if recent else "an established survey"
         return f"Selected as {timing} for building a field overview; {citation}."
 
     @staticmethod

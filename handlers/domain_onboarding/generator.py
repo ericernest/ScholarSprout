@@ -1329,6 +1329,10 @@ class StructuredOnboardingGenerator:
                 recommended_papers = list(selected_papers)
             if not evidence_papers:
                 evidence_papers = list(selected_papers)
+            # The backend owns the public order. Clients may sort defensively,
+            # but every emitted list follows the same final_score contract.
+            recommended_papers.sort(key=lambda paper: paper.final_score, reverse=True)
+            evidence_papers.sort(key=lambda paper: paper.final_score, reverse=True)
             return DomainOnboardingOutput(
                 language=request.language,
                 domain=display_domain,

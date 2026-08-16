@@ -483,9 +483,6 @@ class MMRRankingTests(unittest.TestCase):
         config = DomainOnboardingConfig(
             candidate_paper_limit=3,
             selected_paper_limit=2,
-            relevance_weight=1.0,
-            recency_weight=0.0,
-            diversity_weight=0.0,
             mmr_lambda=0.4,
             mmr_role_bonus=0.0,
         )
@@ -515,7 +512,7 @@ class MMRRankingTests(unittest.TestCase):
         self.assertEqual(set(result.stats.mmr_scores), {"primary", "evaluation"})
         self.assertEqual(
             result.stats.ranking_strategy,
-            "role_stratified_per_path_rrf_then_global_mmr",
+            "unified_explainable_score_then_role_mmr",
         )
         self.assertEqual(
             set(result.stats.per_path_candidate_counts),
@@ -523,7 +520,7 @@ class MMRRankingTests(unittest.TestCase):
         )
         self.assertTrue(result.papers[0].path_relevance_scores)
 
-    def test_diversity_scores_do_not_depend_on_input_order(self) -> None:
+    def test_explainable_scores_do_not_depend_on_input_order(self) -> None:
         papers = [
             PaperCandidate(
                 paper_id=f"paper-{index}",
@@ -544,11 +541,11 @@ class MMRRankingTests(unittest.TestCase):
         ranker = WeightedPaperRanker(DomainOnboardingConfig(selected_paper_limit=3))
 
         forward = {
-            paper.paper_id: paper.diversity_score
+            paper.paper_id: (paper.final_score, paper.score_breakdown.model_dump())
             for paper in ranker.rank(papers, make_plan(), limit=3).papers
         }
         reverse = {
-            paper.paper_id: paper.diversity_score
+            paper.paper_id: (paper.final_score, paper.score_breakdown.model_dump())
             for paper in ranker.rank(list(reversed(papers)), make_plan(), limit=3).papers
         }
 
