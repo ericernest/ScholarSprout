@@ -21,6 +21,7 @@ from .knowledge_graph import DomainKnowledgeGraphBuilder
 from .metrics import DomainOnboardingRequestTrace
 from .model_routing import routed_model_from_env, routing_snapshot
 from .planner import StormLitePlanner
+from .paper_recommendations import SurveyRecommendationPolicy
 from .profile import RuleBasedProfileBuilder
 from .quality import CompositeQualityEvaluator
 from .ranking import WeightedPaperRanker
@@ -48,6 +49,11 @@ from .schemas import (
     RepairDecision,
     RepairRecord,
     RetrievalStats,
+    SubdirectionEvidenceBundle,
+)
+from .subdirection_research import (
+    SubdirectionPaperRanker,
+    SubdirectionResearchPolicy,
 )
 from .text_similarity import (
     CachedEmbeddingTextVectorizer,
@@ -85,6 +91,9 @@ class DomainOnboardingPipeline:
         self.config = config
         self.policy = config.to_policy()
         self.coverage_analyzer = coverage_analyzer or PaperCoverageAnalyzer(config)
+        self.subdirection_policy = SubdirectionResearchPolicy(config)
+        self.subdirection_ranker = SubdirectionPaperRanker(ranker, config)
+        self.recommendation_policy = SurveyRecommendationPolicy(ranker, config)
         self.selection_policy = selection_policy or RepairSelectionPolicy(
             self.policy.min_improvement_delta,
             self.policy.critical_dimensions,
@@ -215,6 +224,20 @@ class DomainOnboardingPipeline:
                     error="No verified papers were returned by the configured data source.",
                 )
 
+            subdirection_bundles: list[SubdirectionEvidenceBundle] = []
+            all_candidates = list(candidates)
+            if self.config.subdirection_retrieval_enabled:
+                ranked, all_candidates, subdirection_bundles = (
+                    self._research_subdirections(
+                        plan,
+                        all_candidates,
+                        ranked,
+                        trace,
+                        context,
+                        progress_callback,
+                    )
+                )
+
             stage_planner = getattr(self.generator, "plan_development_research", None)
             if self.config.staged_development_enabled and callable(stage_planner):
                 try:
@@ -242,7 +265,7 @@ class DomainOnboardingPipeline:
                     )
                     ranked = self._research_development_stages(
                         plan,
-                        candidates,
+                        all_candidates,
                         ranked,
                         trace,
                         context,
@@ -260,13 +283,65 @@ class DomainOnboardingPipeline:
                     plan.development_stage_plans = []
                     trace.development_stage_count = 0
 
+            if subdirection_bundles:
+                ranked = self.subdirection_policy.merge(
+                    ranked,
+                    subdirection_bundles,
+                )
+                kept_ids = {paper.paper_id for paper in ranked}
+                bundle_statuses = {
+                    bundle.subdirection_id: bundle.status
+                    for bundle in subdirection_bundles
+                }
+                for branch in plan.subdirection_plans:
+                    branch.selected_paper_ids = [
+                        paper_id
+                        for paper_id in branch.selected_paper_ids
+                        if paper_id in kept_ids
+                    ]
+                    branch.evidence_status = (
+                        "sufficient"
+                        if bundle_statuses.get(branch.subdirection_id) == "sufficient"
+                        and len(branch.selected_paper_ids)
+                        >= self.config.subdirection_min_papers
+                        else "limited"
+                    )
+                for stage in plan.development_stage_plans:
+                    stage.selected_paper_ids = [
+                        paper_id
+                        for paper_id in stage.selected_paper_ids
+                        if paper_id in kept_ids
+                    ]
+
+            ranked = self._enrich_citations(ranked, trace, context)
+            ranked = [
+                paper.model_copy(update={"paper_usage": "evidence"})
+                for paper in ranked
+            ]
+            if self.config.paper_recommendations_enabled:
+                ranked = self._build_paper_recommendations(
+                    request,
+                    plan,
+                    all_candidates,
+                    ranked,
+                    trace,
+                    context,
+                )
+
+            visible_papers = [
+                paper
+                for paper in ranked
+                if paper.paper_usage in {"recommendation", "both"}
+            ] or ranked
+            trace.selected_paper_count = len(visible_papers)
+
             self._emit(
                 progress_callback,
                 "papers_ready",
                 0.56,
                 True,
                 ["papers"],
-                {"papers": [paper.model_dump(mode="json") for paper in ranked]},
+                {"papers": [paper.model_dump(mode="json") for paper in visible_papers]},
             )
 
             try:
@@ -380,6 +455,59 @@ class DomainOnboardingPipeline:
                     quality=first_quality,
                     quality_attempts=quality_attempts,
                     repair_record=initial_record,
+                    final_quality=final_quality,
+                    knowledge_graph=self._build_knowledge_graph(
+                        output, first_quality, trace
+                    ),
+                )
+
+            failed_gate_names = {
+                gate.gate for gate in first_quality.hard_gates if gate.status == "failed"
+            }
+            hard_issues = [issue for issue in first_quality.issues if issue.hard_gate]
+            degraded_evidence_only = (
+                first_quality.score >= first_quality.threshold
+                and failed_gate_names == {"evidence_support"}
+                and bool(hard_issues)
+                and all(issue.issue_type == "unsupported_claim" for issue in hard_issues)
+                and first_quality.evidence_validation_modes.get(
+                    "embedding_fallback", 0
+                )
+                > 0
+            )
+            if degraded_evidence_only:
+                # When the semantic backend was unavailable, a low lexical
+                # evidence score is not a sound reason to spend another full
+                # LLM call rewriting otherwise threshold-passing content.
+                record = RepairRecord(
+                    triggered=False,
+                    policy_version=self.policy.policy_version,
+                    policy_fingerprint=self.policy.fingerprint,
+                    decision=RepairDecision(
+                        selected_attempt=1,
+                        decision="initial_retained",
+                        reasons=["evidence_validation_degraded"],
+                    ),
+                )
+                self._record_final(trace, first_quality, record)
+                final_quality = self._final_quality_summary(
+                    first_quality, quality_attempts, record
+                )
+                self._emit(
+                    progress_callback,
+                    "final_quality_ready",
+                    0.98,
+                    False,
+                    ["final_quality"],
+                    {"final_quality": final_quality.model_dump(mode="json")},
+                )
+                return self._result(
+                    status="quality_warning",
+                    query=request.query,
+                    output=output,
+                    quality=first_quality,
+                    quality_attempts=quality_attempts,
+                    repair_record=record,
                     final_quality=final_quality,
                     knowledge_graph=self._build_knowledge_graph(
                         output, first_quality, trace
@@ -915,6 +1043,346 @@ class DomainOnboardingPipeline:
         trace.selected_paper_count = len(merged)
         return merged or ranked
 
+    def _research_subdirections(
+        self,
+        plan: Any,
+        candidates: list[Any],
+        ranked: list[Any],
+        trace: DomainOnboardingRequestTrace,
+        context: PipelineExecutionContext,
+        progress_callback: Callable[
+            [str, float, bool, list[str], dict[str, Any]], None
+        ]
+        | None,
+    ) -> tuple[list[Any], list[Any], list[SubdirectionEvidenceBundle]]:
+        """Search and rank each planned branch without making one branch fatal."""
+
+        all_candidates = list(candidates)
+        bundles: list[SubdirectionEvidenceBundle] = []
+        branches = list(plan.subdirection_plans[:3])
+        for index, branch in enumerate(branches):
+            queries = list(
+                branch.search_queries[
+                    : self.config.subdirection_queries_per_direction
+                ]
+            )
+            direction_candidates: list[PaperCandidate] = []
+            if queries:
+                trace.search_query_count += len(queries)
+                trace.subdirection_retrieval_query_count += len(queries)
+                try:
+                    retrieval_result, duration = context.call(
+                        "retrieval",
+                        self.config.retrieval_stage_timeout_seconds,
+                        self.retriever.search,
+                        [query.query for query in queries],
+                        limit_per_query=self.config.papers_per_query,
+                    )
+                    trace.retrieval_duration_ms += duration
+                    self._record_retrieval_stats(
+                        trace,
+                        retrieval_result.stats,
+                        accumulate=True,
+                    )
+                    direction_candidates = self._annotate_candidate_query_hints(
+                        retrieval_result.papers,
+                        queries,
+                    )
+                    direction_candidates = (
+                        self.subdirection_policy.exclude_out_of_scope(
+                            direction_candidates,
+                            branch,
+                        )
+                    )
+                    trace.retrieved_paper_count += len(direction_candidates)
+                    all_candidates.extend(direction_candidates)
+                except PaperRetrievalError as error:
+                    self._record_retrieval_stats(
+                        trace,
+                        error.stats,
+                        accumulate=True,
+                    )
+
+            if direction_candidates:
+                direction_candidates = self._enrich_citations(
+                    direction_candidates,
+                    trace,
+                    context,
+                )
+
+            ranking_candidates = direction_candidates or list(candidates)
+            direction_plan = self.subdirection_policy.direction_plan(
+                plan,
+                branch,
+                queries
+                or [
+                    self.subdirection_policy.supplemental_query(
+                        plan,
+                        branch,
+                        SubdirectionEvidenceBundle(
+                            subdirection_id=branch.subdirection_id
+                        ),
+                    )
+                ],
+            )
+            ranking_result, duration = context.call(
+                "ranking",
+                self.config.ranking_timeout_seconds,
+                self.subdirection_ranker.rank,
+                ranking_candidates,
+                direction_plan,
+                branch,
+                limit=self.config.subdirection_papers_per_direction,
+            )
+            trace.ranking_duration_ms += duration
+            self._record_ranking_stats(trace, ranking_result.stats)
+            bundle = self.subdirection_policy.assess(
+                branch,
+                ranking_result.papers,
+                query_count=len(queries),
+                supplemental_query_count=0,
+            )
+
+            if (
+                bundle.status == "limited"
+                and self.config.subdirection_max_supplemental_queries > 0
+            ):
+                supplemental = self.subdirection_policy.supplemental_query(
+                    plan,
+                    branch,
+                    bundle,
+                )
+                trace.search_query_count += 1
+                trace.subdirection_retrieval_query_count += 1
+                trace.subdirection_supplemental_query_count += 1
+                try:
+                    extra_result, duration = context.call(
+                        "retrieval",
+                        self.config.retrieval_stage_timeout_seconds,
+                        self.retriever.search,
+                        [supplemental.query],
+                        limit_per_query=self.config.papers_per_query,
+                    )
+                    trace.retrieval_duration_ms += duration
+                    self._record_retrieval_stats(
+                        trace,
+                        extra_result.stats,
+                        accumulate=True,
+                    )
+                    extra = self._annotate_candidate_query_hints(
+                        extra_result.papers,
+                        [supplemental],
+                    )
+                    extra = self.subdirection_policy.exclude_out_of_scope(
+                        extra,
+                        branch,
+                    )
+                    if extra:
+                        extra = self._enrich_citations(extra, trace, context)
+                    trace.retrieved_paper_count += len(extra)
+                    all_candidates.extend(extra)
+                    direction_candidates.extend(extra)
+                    rerank_plan = self.subdirection_policy.direction_plan(
+                        plan,
+                        branch,
+                        [*queries, supplemental],
+                    )
+                    reranked, rank_duration = context.call(
+                        "ranking",
+                        self.config.ranking_timeout_seconds,
+                        self.subdirection_ranker.rank,
+                        direction_candidates or ranking_candidates,
+                        rerank_plan,
+                        branch,
+                        limit=self.config.subdirection_papers_per_direction,
+                    )
+                    trace.ranking_duration_ms += rank_duration
+                    self._record_ranking_stats(trace, reranked.stats)
+                    bundle = self.subdirection_policy.assess(
+                        branch,
+                        reranked.papers,
+                        query_count=len(queries),
+                        supplemental_query_count=1,
+                    )
+                except PaperRetrievalError as error:
+                    self._record_retrieval_stats(
+                        trace,
+                        error.stats,
+                        accumulate=True,
+                    )
+
+            branch.selected_paper_ids = [
+                paper.paper_id for paper in bundle.papers
+            ]
+            branch.evidence_status = bundle.status
+            bundles.append(bundle)
+            trace.subdirection_limited_count += int(bundle.status == "limited")
+            progress = 0.31 + 0.10 * ((index + 1) / max(1, len(branches)))
+            self._emit(
+                progress_callback,
+                "subdirection_retrieval_ready",
+                progress,
+                True,
+                ["research_plan"],
+                {
+                    "subdirection_id": branch.subdirection_id,
+                    "evidence_status": bundle.status,
+                    "paper_count": len(bundle.papers),
+                    "research_plan": plan.model_dump(mode="json"),
+                },
+            )
+
+        merged = self.subdirection_policy.merge(ranked, bundles)
+        trace.subdirection_bound_paper_count = len(
+            {
+                paper.paper_id
+                for bundle in bundles
+                for paper in bundle.papers
+            }
+        )
+        trace.selected_paper_count = len(merged)
+        return merged or ranked, all_candidates, bundles
+
+    def _enrich_citations(
+        self,
+        papers: list[Any],
+        trace: DomainOnboardingRequestTrace,
+        context: PipelineExecutionContext,
+    ) -> list[Any]:
+        if not self.config.citation_enrichment_enabled or not papers:
+            return papers
+        enrich = getattr(self.retriever, "enrich_citations", None)
+        if not callable(enrich):
+            return papers
+        try:
+            result, duration = context.call(
+                "retrieval",
+                self.config.retrieval_stage_timeout_seconds,
+                enrich,
+                papers,
+                batch_size=self.config.citation_enrichment_batch_size,
+            )
+        except Exception:
+            trace.citation_enrichment_failure_count += 1
+            return papers
+        trace.retrieval_duration_ms += duration
+        self._record_retrieval_stats(trace, result.stats, accumulate=True)
+        trace.citation_enrichment_known_count = sum(
+            paper.citation_status == "known" for paper in result.papers
+        )
+        trace.citation_enrichment_unknown_count = sum(
+            paper.citation_status == "unknown" for paper in result.papers
+        )
+        trace.citation_enrichment_failure_count += int(bool(result.stats.errors))
+        return result.papers or papers
+
+    def _build_paper_recommendations(
+        self,
+        request: DomainOnboardingRequest,
+        plan: Any,
+        candidates: list[Any],
+        evidence: list[Any],
+        trace: DomainOnboardingRequestTrace,
+        context: PipelineExecutionContext,
+    ) -> list[Any]:
+        """Build a survey-led display list while preserving all generation evidence."""
+
+        queries = self.recommendation_policy.queries(plan)
+        trace.search_query_count += len(queries)
+        trace.recommendation_survey_query_count += len(queries)
+        survey_candidates = list(candidates)
+        try:
+            result, duration = context.call(
+                "retrieval",
+                self.config.retrieval_stage_timeout_seconds,
+                self.retriever.search,
+                [query.query for query in queries],
+                limit_per_query=self.config.papers_per_query,
+            )
+            trace.retrieval_duration_ms += duration
+            self._record_retrieval_stats(trace, result.stats, accumulate=True)
+            found = self._annotate_candidate_query_hints(result.papers, queries)
+            trace.retrieved_paper_count += len(found)
+            survey_candidates.extend(found)
+        except PaperRetrievalError as error:
+            self._record_retrieval_stats(trace, error.stats, accumulate=True)
+            trace.recommendation_degraded_count += 1
+
+        survey_candidates = self._enrich_citations(
+            survey_candidates,
+            trace,
+            context,
+        )
+        surveys, survey_candidate_count = self.recommendation_policy.select_surveys(
+            survey_candidates,
+            plan,
+            language=request.language,
+        )
+        trace.recommendation_survey_candidate_count = survey_candidate_count
+        trace.recommendation_selected_survey_count = len(surveys)
+
+        references: list[Any] = []
+        fetch_references = getattr(self.retriever, "fetch_references", None)
+        if surveys and callable(fetch_references):
+            try:
+                reference_result, duration = context.call(
+                    "retrieval",
+                    self.config.retrieval_stage_timeout_seconds,
+                    fetch_references,
+                    surveys,
+                    limit_per_paper=self.config.recommendation_references_per_survey,
+                )
+                trace.retrieval_duration_ms += duration
+                self._record_retrieval_stats(
+                    trace,
+                    reference_result.stats,
+                    accumulate=True,
+                )
+                trace.retrieved_paper_count += len(reference_result.papers)
+                reference_candidates = self._enrich_citations(
+                    reference_result.papers,
+                    trace,
+                    context,
+                )
+                references, reference_candidate_count = (
+                    self.recommendation_policy.select_references(
+                        reference_candidates,
+                        plan,
+                        language=request.language,
+                    )
+                )
+                trace.recommendation_reference_candidate_count = (
+                    reference_candidate_count
+                )
+                trace.recommendation_selected_reference_count = len(references)
+                if reference_result.stats.errors:
+                    trace.recommendation_degraded_count += 1
+            except Exception:
+                trace.recommendation_degraded_count += 1
+
+        recommendations = [*surveys, *references]
+        if not recommendations:
+            trace.recommendation_degraded_count += 1
+            recommendations = [
+                paper.model_copy(
+                    update={
+                        "paper_usage": "recommendation",
+                        "recommendation_category": "fallback_evidence",
+                        "recommendation_reason": (
+                            "Survey 专项检索暂不可用，保留与领域最相关的已验证论文作为降级阅读入口。"
+                            if request.language == "zh-CN"
+                            else "Survey retrieval was unavailable; retained a verified relevant paper as a fallback reading entry."
+                        ),
+                        "recommendation_rank_score": paper.final_score,
+                    }
+                )
+                for paper in evidence[: self.config.recommendation_survey_limit]
+            ]
+        return self.recommendation_policy.merge_with_evidence(
+            evidence,
+            recommendations,
+        )
+
     def _merge_stage_rankings(
         self,
         global_ranked: list[Any],
@@ -1192,6 +1660,7 @@ def create_default_pipeline(
         embedding_provider = OpenAIEmbeddingProvider(
             embedding_model or model,
             remote_embedding_model,
+            timeout_seconds=settings.embedding_timeout_seconds,
         )
     vectorizer = (
         CachedEmbeddingTextVectorizer(
@@ -1210,6 +1679,9 @@ def create_default_pipeline(
                 SemanticScholarRetriever(
                     timeout=settings.retrieval_timeout_seconds,
                     api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY") or None,
+                    min_interval_seconds=(
+                        settings.semantic_scholar_min_interval_seconds
+                    ),
                     **common_retrieval_options,
                 ),
                 ArxivRetriever(

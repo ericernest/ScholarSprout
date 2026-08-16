@@ -94,12 +94,18 @@ class DomainKnowledgeGraphBuilder:
                 edge_type="has_subdirection",
                 source_path=f"current_landscape.subdirections.{index}",
             ))
-        for index, paper in enumerate(output.papers):
+        graph_papers = list(
+            {
+                paper.paper_id: paper
+                for paper in [*output.evidence_papers, *output.papers]
+            }.values()
+        )
+        for index, paper in enumerate(graph_papers):
             nodes.append(KnowledgeGraphNode(
                 node_id=paper.paper_id,
                 node_type="paper",
                 label=paper.title,
-                source_path=f"papers.{index}",
+                source_path=f"evidence_papers_or_papers.{index}",
                 paper_id=paper.paper_id,
             ))
         for index, claim in enumerate(output.evidence_claims):
@@ -130,7 +136,7 @@ class DomainKnowledgeGraphBuilder:
         return KnowledgeGraphSnapshot(
             request_id=request_id,
             quality_policy_version=quality_policy_version,
-            selected_paper_ids=[paper.paper_id for paper in output.papers],
+            selected_paper_ids=[paper.paper_id for paper in graph_papers],
             nodes=deduplicated_nodes,
             edges=deduplicated_edges,
             validation=GraphValidationReport(valid=False),

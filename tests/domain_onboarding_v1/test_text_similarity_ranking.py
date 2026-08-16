@@ -93,6 +93,28 @@ class TextSimilarityTests(unittest.TestCase):
         self.assertEqual(cosine_similarity(vectors[0], vectors[1]), 1.0)
         self.assertEqual(cosine_similarity(vectors[0], vectors[2]), 0.0)
 
+    def test_openai_embedding_adapter_forwards_bounded_timeout(self) -> None:
+        class Model:
+            def embed(
+                self,
+                texts: list[str],
+                *,
+                model: str,
+                timeout: float | None = None,
+            ) -> list[list[float]]:
+                self.call = (model, timeout)
+                return [[1.0] for _ in texts]
+
+        model = Model()
+        provider = OpenAIEmbeddingProvider(
+            model,
+            "qwen3-embedding",
+            timeout_seconds=30.0,
+        )
+
+        self.assertEqual(provider.embed(["RAG"]), [[1.0]])
+        self.assertEqual(model.call, ("qwen3-embedding", 30.0))
+
     def test_default_pipeline_uses_qwen3_embedding_by_default(self) -> None:
         class Model:
             def embed(self, texts: list[str], *, model: str) -> list[list[float]]:

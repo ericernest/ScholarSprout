@@ -1014,7 +1014,11 @@ class QualityTests(unittest.TestCase):
         class FailingEmbedding:
             name = "embedding"
 
+            def __init__(self):
+                self.calls = 0
+
             def vectorize(self, texts):
+                self.calls += 1
                 raise RuntimeError("embedding unavailable")
 
         self.output.evidence_claims = [
@@ -1022,16 +1026,26 @@ class QualityTests(unittest.TestCase):
                 claim="该方法通过检索证据增强生成结果",
                 supporting_paper_ids=[paper.paper_id for paper in self.ranked[:2]],
                 support_type="abstract_explicit",
-            )
+            ),
+            EvidenceClaim(
+                claim="该系统使用检索上下文评估生成结果",
+                supporting_paper_ids=[paper.paper_id for paper in self.ranked[:2]],
+                support_type="abstract_explicit",
+            ),
         ]
+        embedding = FailingEmbedding()
         evaluator = CompositeQualityEvaluator(
-            self.config, evidence_vectorizer=FailingEmbedding()
+            self.config, evidence_vectorizer=embedding
         )
 
         quality = evaluator.evaluate(self.output, self.ranked)
 
         self.assertTrue(quality.passed_hard_gates)
-        self.assertEqual(quality.evidence_validation_modes, {"terminology_bridge": 1})
+        self.assertEqual(embedding.calls, 1)
+        self.assertEqual(
+            quality.evidence_validation_modes,
+            {"terminology_bridge": 2, "embedding_fallback": 2},
+        )
 
     def test_named_remote_embedding_resolves_cross_language_evidence(self) -> None:
         class RemoteEmbedding:

@@ -144,10 +144,21 @@ class OpenAIClient:
 
         return kwargs
 
-    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        model: str,
+        timeout: float | None = None,
+    ) -> list[list[float]]:
         """Create dense vectors through an OpenAI-compatible embedding endpoint."""
         if not texts:
             return []
-        response = self.client.embeddings.create(model=model, input=texts)
+        client = (
+            self.client.with_options(timeout=timeout, max_retries=0)
+            if timeout is not None
+            else self.client
+        )
+        response = client.embeddings.create(model=model, input=texts)
         ordered = sorted(response.data, key=lambda item: item.index)
         return [list(item.embedding) for item in ordered]

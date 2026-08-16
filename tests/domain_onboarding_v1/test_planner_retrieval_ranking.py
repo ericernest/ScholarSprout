@@ -94,6 +94,46 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(result.stats.model_calls, 1)
         self.assertEqual(result.stats.total_tokens, 50)
 
+    def test_legacy_chinese_subdirections_gain_english_branch_queries(self) -> None:
+        model = FakeJSONModel(
+            [
+                {
+                    "normalized_domain": "检索增强生成",
+                    "perspectives": [
+                        {"name": "基础", "description": "问题定义", "questions": ["是什么"]},
+                        {"name": "方法", "description": "方法演进", "questions": ["怎么做"]},
+                        {"name": "评测", "description": "评测前沿", "questions": ["如何评测"]},
+                    ],
+                    "search_queries": [
+                        "retrieval augmented generation survey",
+                        "RAG methods",
+                        "RAG evaluation",
+                    ],
+                    "expected_subdirections": ["理论基础", "核心方法", "评测前沿"],
+                }
+            ]
+        )
+
+        plan = StormLitePlanner(model, DomainOnboardingConfig()).plan(
+            "检索增强生成",
+            make_profile(),
+        ).plan
+
+        self.assertEqual(len(plan.subdirection_plans), 3)
+        self.assertTrue(
+            all(
+                not any("\u4e00" <= character <= "\u9fff" for character in query.query)
+                for branch in plan.subdirection_plans
+                for query in branch.search_queries
+            )
+        )
+        self.assertTrue(
+            all(
+                any(character.isascii() and character.isalpha() for character in branch.name_en)
+                for branch in plan.subdirection_plans
+            )
+        )
+
     def test_fallback_extracts_domain_from_full_learning_request(self) -> None:
         planner = StormLitePlanner(
             FakeJSONModel([TimeoutError("planner timeout")]),

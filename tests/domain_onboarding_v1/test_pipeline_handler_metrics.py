@@ -17,12 +17,15 @@ from handlers.domain_onboarding.ranking import WeightedPaperRanker
 from handlers.domain_onboarding.repair import TargetedRepairer
 from handlers.domain_onboarding.retrieval import PaperRetrievalError
 from handlers.domain_onboarding.schemas import (
+    ContentQuality,
     DevelopmentStageResearchPlan,
     DomainOnboardingRequest,
     GenerationResult,
     ModelCallStats,
     PaperSearchQuery,
     PlanningResult,
+    QualityGateResult,
+    QualityIssue,
     RetrievalResult,
     RetrievalStats,
 )
@@ -80,6 +83,64 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_embedding_degraded_evidence_gate_skips_full_llm_repair(self) -> None:
+        paper_ids = [paper.paper_id for paper in make_candidates()]
+        payload = make_generation_payload(paper_ids)
+        pipeline = make_pipeline([payload, payload, payload])
+
+        issue = QualityIssue(
+            issue_type="unsupported_claim",
+            severity="error",
+            target_path="evidence_claims[0].claim",
+            message="embedding 降级后证据相似度不足",
+            recommended_action="稍后重新进行语义校验",
+        )
+
+        class DegradedEvaluator:
+            def evaluate(self, output, papers):
+                return ContentQuality(
+                    score=0.85,
+                    threshold=0.75,
+                    passed_hard_gates=False,
+                    dimensions={"evidence_grounding": 0.45},
+                    issues=[issue],
+                    hard_gates=[
+                        QualityGateResult(
+                            gate="evidence_support",
+                            status="failed",
+                            issue_ids=[issue.issue_id],
+                            score=0.45,
+                            threshold=0.7,
+                        )
+                    ],
+                    evidence_validation_modes={
+                        "terminology_bridge": 2,
+                        "embedding_fallback": 2,
+                    },
+                )
+
+        class ForbiddenRepairer:
+            def repair(self, *args, **kwargs):
+                raise AssertionError("degraded evidence must not trigger full repair")
+
+        pipeline.evaluator = DegradedEvaluator()
+        pipeline.repairer = ForbiddenRepairer()
+        trace = DomainOnboardingRequestTrace()
+
+        result = pipeline.run(DomainOnboardingRequest(query="RAG"), trace)
+
+        self.assertEqual(result.status, "quality_warning")
+        self.assertEqual(len(result.quality_attempts), 1)
+        self.assertFalse(result.repair_record.triggered)
+        self.assertEqual(
+            result.repair_record.decision.reasons,
+            ["evidence_validation_degraded"],
+        )
+        self.assertEqual(
+            result.final_quality.selection_reason,
+            "evidence_validation_degraded",
+        )
+
     def test_retrieved_papers_are_annotated_with_query_role_and_path(self) -> None:
         paper = make_candidates(1)[0].model_copy(
             update={"matched_queries": ["RAG survey"]}
@@ -304,8 +365,10 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(result_b.status, {"ok", "quality_warning"}, result_b.error)
         self.assertEqual(trace_a.first_usage.total_tokens, 112)
         self.assertEqual(trace_b.first_usage.total_tokens, 224)
-        self.assertEqual(trace_a.retrieval_cache_hit_count, 3)
-        self.assertEqual(trace_b.retrieval_cache_hit_count, 4)
+        self.assertEqual(trace_a.retrieval_cache_hit_count, 11)
+        self.assertEqual(trace_b.retrieval_cache_hit_count, 12)
+        self.assertEqual(trace_a.subdirection_retrieval_query_count, 6)
+        self.assertEqual(trace_b.subdirection_retrieval_query_count, 6)
 
     def test_six_fixed_domains_run_end_to_end_with_fakes(self) -> None:
         domains = [
@@ -341,6 +404,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.final_quality.final_score, result.quality.score)
         self.assertEqual(result.to_response()["final_quality"]["verdict"], "passed")
         self.assertIsNotNone(result.output)
+        self.assertTrue(result.output.papers)
+        self.assertTrue(result.output.evidence_papers)
+        self.assertTrue(
+            all(
+                paper.paper_usage in {"recommendation", "both"}
+                for paper in result.output.papers
+            )
+        )
         self.assertEqual(len(result.quality_attempts), 1)
         self.assertEqual(result.quality_attempts[0].source, "initial")
         self.assertFalse(result.repair_record.triggered)
@@ -359,9 +430,13 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(trace.supplemental_query_count, 0)
         self.assertEqual(
             trace.search_query_count,
-            2 + trace.supplemental_query_count,
+            2
+            + trace.supplemental_query_count
+            + trace.subdirection_retrieval_query_count
+            + trace.recommendation_survey_query_count,
         )
-        self.assertEqual(pipeline.retriever.calls, 2)
+        self.assertEqual(pipeline.retriever.calls, 6)
+        self.assertEqual(trace.subdirection_retrieval_query_count, 6)
         self.assertEqual(
             len(pipeline.retriever.query_batches[1]),
             trace.supplemental_query_count,
@@ -425,7 +500,8 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertGreater(trace.quality_delta, 0.05)
         self.assertEqual(trace.repair_reason, "llm_targeted_repair")
-        self.assertEqual(pipeline.retriever.calls, 2)
+        self.assertEqual(pipeline.retriever.calls, 6)
+        self.assertEqual(trace.subdirection_retrieval_query_count, 6)
 
     def test_adaptive_repair_recommendation_is_shadow_only_and_recorded(self) -> None:
         class FakeAdvisor:
@@ -742,6 +818,9 @@ class HandlerAndMetricsTests(unittest.TestCase):
         self.assertEqual(snapshot["papers"]["selected_paper_count"], len(response["papers"]))
         self.assertIn("retrieval_retry_count", snapshot["papers"])
         self.assertIn("retrieval_cache_hit_count", snapshot["papers"])
+        self.assertIn("recommendation_survey_query_count", snapshot["papers"])
+        self.assertIn("recommendation_selected_survey_count", snapshot["papers"])
+        self.assertIn("recommendation_degraded_count", snapshot["papers"])
         self.assertIn("retrieval_source_failure_count", snapshot["papers"])
         self.assertIn("planning", snapshot["stage_latency"])
         self.assertGreaterEqual(

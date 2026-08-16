@@ -1030,6 +1030,7 @@ class StructuredOnboardingGenerator:
                 "expanded_terms",
                 "perspectives",
                 "expected_subdirections",
+                "subdirection_plans",
                 "development_stage_plans",
             },
         )
@@ -1190,7 +1191,7 @@ class StructuredOnboardingGenerator:
         if previous_output is not None:
             user_payload["previous_output"] = previous_output.model_dump(
                 mode="json",
-                exclude={"learner_profile", "papers"},
+                exclude={"learner_profile", "papers", "evidence_papers"},
             )
             user_payload["repair_issues"] = [issue.model_dump(mode="json") for issue in issues or []]
             user_payload["instruction"] = "Repair only the reported weaknesses while preserving valid paper IDs."
@@ -1222,6 +1223,12 @@ class StructuredOnboardingGenerator:
             "reading_priority": paper.reading_priority,
             "is_canonical": paper.is_canonical,
             "relevance_score": paper.relevance_score,
+            "citation_count": paper.citation_count,
+            "citation_status": paper.citation_status,
+            "paper_usage": paper.paper_usage,
+            "recommendation_category": paper.recommendation_category,
+            "recommendation_reason": paper.recommendation_reason,
+            "survey_source_ids": paper.survey_source_ids,
         }
 
     def _normalize(
@@ -1245,6 +1252,7 @@ class StructuredOnboardingGenerator:
                 url=paper.url,
                 contribution=(
                     guidance.get(paper.paper_id, {}).get("contribution")
+                    or paper.recommendation_reason
                     or ""
                 ),
                 reading_focus=(
@@ -1299,6 +1307,24 @@ class StructuredOnboardingGenerator:
                         }
                     )
                 )
+            has_recommendation_contract = any(
+                paper.paper_usage in {"recommendation", "both"}
+                for paper in selected_papers
+            )
+            recommended_papers = [
+                paper
+                for paper in selected_papers
+                if paper.paper_usage in {"recommendation", "both"}
+            ]
+            evidence_papers = [
+                paper
+                for paper in selected_papers
+                if paper.paper_usage in {"evidence", "both"}
+            ]
+            if not recommended_papers:
+                recommended_papers = list(selected_papers)
+            if not evidence_papers:
+                evidence_papers = list(selected_papers)
             return DomainOnboardingOutput(
                 language=request.language,
                 domain=display_domain,
@@ -1309,13 +1335,23 @@ class StructuredOnboardingGenerator:
                 development_stages=stages,
                 current_landscape=landscape,
                 learning_path=learning_path,
-                papers=selected_papers,
+                papers=recommended_papers,
+                evidence_papers=evidence_papers,
                 evidence_claims=evidence_claims,
                 reproducibility={
                     "policy_version": self.config.policy_version,
                     "search_queries": plan.search_queries,
                     "retrieval_sources": sorted({paper.source for paper in papers}),
                     "selected_paper_ids": [paper.paper_id for paper in papers],
+                    "evidence_paper_ids": [paper.paper_id for paper in evidence_papers],
+                    "recommended_paper_ids": [
+                        paper.paper_id for paper in recommended_papers
+                    ],
+                    "recommendation_strategy": (
+                        "survey_first_then_survey_references"
+                        if has_recommendation_contract
+                        else "legacy_selected_papers"
+                    ),
                     "generation_model_routes": self.model_routing_snapshot(),
                 },
             )
@@ -1524,10 +1560,14 @@ class StructuredOnboardingGenerator:
         references: dict[str, PaperReference],
     ) -> CurrentLandscape:
         problem_names = self._strings(value.get("problems"))
-        subdirection_names = (
-            self._strings(value.get("subdirections"))
-            or list(plan.expected_subdirections)
+        researched_subdirections = any(
+            branch.selected_paper_ids for branch in plan.subdirection_plans
         )
+        subdirection_names = (
+            [branch.name_zh for branch in plan.subdirection_plans]
+            if researched_subdirections
+            else self._strings(value.get("subdirections"))
+        ) or list(plan.expected_subdirections)
         stage_aliases: dict[str, str] = {}
         for stage in stages:
             if not stage.stage_id:
@@ -1548,18 +1588,63 @@ class StructuredOnboardingGenerator:
             references,
             stage_aliases,
         )
+        raw_subdirection_details = value.get("subdirection_details")
+        legacy_subdirection_aliases: dict[str, str] = {}
+        if researched_subdirections and isinstance(raw_subdirection_details, list):
+            normalized_raw_details: list[object] = []
+            for index, item in enumerate(raw_subdirection_details):
+                if not isinstance(item, dict) or index >= len(plan.subdirection_plans):
+                    normalized_raw_details.append(item)
+                    continue
+                branch = plan.subdirection_plans[index]
+                raw = dict(item)
+                for alias in (
+                    str(raw.get("subdirection_id") or ""),
+                    str(raw.get("name") or ""),
+                ):
+                    if alias:
+                        legacy_subdirection_aliases[alias] = branch.subdirection_id
+                raw["subdirection_id"] = branch.subdirection_id
+                raw["name"] = branch.name_zh
+                normalized_raw_details.append(raw)
+            raw_subdirection_details = normalized_raw_details
         subdirection_details = self._subdirection_details(
-            value.get("subdirection_details"),
+            raw_subdirection_details,
             subdirection_names,
             references,
             stage_aliases,
         )
+        for index, detail in enumerate(subdirection_details):
+            if not researched_subdirections:
+                break
+            if index >= len(plan.subdirection_plans):
+                break
+            branch = plan.subdirection_plans[index]
+            allowed_ids = set(branch.selected_paper_ids) & set(references)
+            detail.subdirection_id = branch.subdirection_id
+            detail.name = branch.name_zh
+            detail.related_paper_ids = [
+                paper_id
+                for paper_id in detail.related_paper_ids
+                if paper_id in allowed_ids
+            ] or [
+                paper_id
+                for paper_id in branch.selected_paper_ids
+                if paper_id in allowed_ids
+            ]
+            for technique in detail.common_techniques:
+                technique.related_paper_ids = [
+                    paper_id
+                    for paper_id in technique.related_paper_ids
+                    if paper_id in allowed_ids
+                ] or list(detail.related_paper_ids)
         subdirection_aliases = {
             alias: str(item.subdirection_id)
             for item in subdirection_details
             if item.subdirection_id
             for alias in (str(item.subdirection_id), item.name)
         }
+        subdirection_aliases.update(legacy_subdirection_aliases)
         problem_aliases = {
             alias: str(item.problem_id)
             for item in problem_details

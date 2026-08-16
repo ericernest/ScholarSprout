@@ -33,6 +33,120 @@ def semantic_scholar_payload(paper_id: str = "paper-1") -> dict:
 
 
 class RetrievalRetryTests(unittest.TestCase):
+    def test_semantic_scholar_reference_expansion_records_survey_source(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.method, "GET")
+            self.assertIn("/references", str(request.url))
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "citedPaper": {
+                                "paperId": "method-paper",
+                                "title": "A Grounded Retrieval Method",
+                                "abstract": "retrieval augmented generation method",
+                                "year": 2024,
+                                "url": "https://www.semanticscholar.org/paper/method-paper",
+                                "citationCount": 12,
+                                "authors": [{"name": "Ada"}],
+                                "externalIds": {},
+                                "publicationTypes": ["JournalArticle"],
+                            }
+                        }
+                    ]
+                },
+            )
+
+        survey = PaperCandidate(
+            paper_id="survey-paper",
+            title="A Survey",
+            url="https://www.semanticscholar.org/paper/survey-paper",
+            source="semantic_scholar",
+        )
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            retriever = SemanticScholarRetriever(client=client)
+            references, stats = retriever.fetch_references([survey])
+
+        self.assertEqual(stats.request_count, 1)
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].survey_source_ids, ["survey-paper"])
+        self.assertEqual(references[0].citation_count, 12)
+
+    def test_citation_enrichment_failure_preserves_original_papers(self) -> None:
+        class FailingCitationProvider:
+            source_name = "semantic_scholar"
+
+            def enrich_citations(self, papers, *, batch_size):
+                raise httpx.ConnectError("temporary outage")
+
+        paper = PaperCandidate(
+            paper_id="arxiv:2501.00003",
+            title="Preserved paper",
+            url="https://arxiv.org/abs/2501.00003",
+            source="arxiv",
+            arxiv_id="2501.00003",
+        )
+        retriever = CompositePaperRetriever([FailingCitationProvider()])
+
+        result = retriever.enrich_citations([paper])
+
+        self.assertEqual([item.paper_id for item in result.papers], [paper.paper_id])
+        self.assertEqual(result.papers[0].citation_status, "unknown")
+        self.assertEqual(result.stats.source_failure_count, 1)
+        self.assertIn("temporary outage", result.stats.errors[0])
+
+    def test_citation_enrichment_distinguishes_known_zero_from_unknown(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            self.assertEqual(request.method, "POST")
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "paperId": "zero-paper",
+                        "citationCount": 0,
+                        "influentialCitationCount": 0,
+                        "referenceCount": 12,
+                    },
+                    None,
+                ],
+            )
+
+        papers = [
+            PaperCandidate(
+                paper_id="arxiv:2501.00001",
+                title="New paper",
+                url="https://arxiv.org/abs/2501.00001",
+                source="arxiv",
+                arxiv_id="2501.00001",
+            ),
+            PaperCandidate(
+                paper_id="arxiv:2501.00002",
+                title="Unknown paper",
+                url="https://arxiv.org/abs/2501.00002",
+                source="arxiv",
+                arxiv_id="2501.00002",
+            ),
+        ]
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            retriever = SemanticScholarRetriever(client=client)
+            enriched, stats = retriever.enrich_citations(papers, batch_size=50)
+            cached, cached_stats = retriever.enrich_citations(papers, batch_size=50)
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(stats.request_count, 1)
+        self.assertEqual(enriched[0].citation_count, 0)
+        self.assertEqual(enriched[0].citation_status, "known")
+        self.assertEqual(enriched[0].citation_source, "semantic_scholar")
+        self.assertEqual(enriched[0].reference_count, 12)
+        self.assertIsNone(enriched[1].citation_count)
+        self.assertEqual(enriched[1].citation_status, "unknown")
+        self.assertEqual(cached[0].citation_status, "known")
+        self.assertEqual(cached_stats.cache_hit_count, 1)
+
     def test_retries_429_and_honors_retry_after(self) -> None:
         calls = 0
         sleeps: list[float] = []

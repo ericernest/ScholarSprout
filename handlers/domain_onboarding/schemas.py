@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -13,6 +14,14 @@ PaperRole = Literal[
     "survey", "foundational", "method", "evaluation", "application", "frontier", "other"
 ]
 ReadingPriority = Literal["core", "recommended", "optional", "extended"]
+CitationStatus = Literal["known", "unknown"]
+PaperUsage = Literal["evidence", "recommendation", "both"]
+RecommendationCategory = Literal[
+    "recent_survey",
+    "influential_survey",
+    "survey_reference",
+    "fallback_evidence",
+]
 LearningUse = Literal[
     "concept_introduction",
     "architecture_reference",
@@ -54,6 +63,7 @@ RepairDecisionReason = Literal[
     "critical_dimension_regressed",
     "repair_execution_failed",
     "repair_output_invalid",
+    "evidence_validation_degraded",
 ]
 QualityIssueType = Literal[
     "structure_error",
@@ -248,6 +258,50 @@ class PaperSearchQuery(OnboardingModel):
         return self
 
 
+class SubdirectionResearchPlan(OnboardingModel):
+    """A stable, retrieval-ready contract for one research branch."""
+
+    subdirection_id: str = ""
+    name_zh: str = Field(min_length=1)
+    name_en: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    include_terms: list[str] = Field(default_factory=list)
+    exclude_terms: list[str] = Field(default_factory=list)
+    research_questions: list[str] = Field(default_factory=list)
+    search_queries: list[PaperSearchQuery] = Field(default_factory=list)
+    selected_paper_ids: list[str] = Field(default_factory=list)
+    evidence_status: Literal["pending", "sufficient", "limited"] = "pending"
+
+    @model_validator(mode="after")
+    def normalize_subdirection(self) -> "SubdirectionResearchPlan":
+        self.subdirection_id = self.subdirection_id or stable_id(
+            "sub", f"{self.name_en}:{self.name_zh}"
+        )
+        self.include_terms = list(
+            dict.fromkeys(item.strip() for item in self.include_terms if item.strip())
+        )
+        self.exclude_terms = list(
+            dict.fromkeys(item.strip() for item in self.exclude_terms if item.strip())
+        )
+        self.research_questions = list(
+            dict.fromkeys(
+                item.strip() for item in self.research_questions if item.strip()
+            )
+        )
+        self.selected_paper_ids = list(dict.fromkeys(self.selected_paper_ids))
+        seen_queries: set[str] = set()
+        queries: list[PaperSearchQuery] = []
+        for query in self.search_queries:
+            key = query.query.casefold()
+            if key in seen_queries:
+                continue
+            seen_queries.add(key)
+            query.path_id = self.subdirection_id
+            queries.append(query)
+        self.search_queries = queries
+        return self
+
+
 class DomainResearchPlan(OnboardingModel):
     normalized_domain: str = Field(min_length=1)
     translated_domain: str = ""
@@ -256,6 +310,7 @@ class DomainResearchPlan(OnboardingModel):
     search_queries: list[str] = Field(min_length=1)
     paper_queries: list[PaperSearchQuery] = Field(default_factory=list)
     expected_subdirections: list[str] = Field(min_length=3)
+    subdirection_plans: list[SubdirectionResearchPlan] = Field(default_factory=list)
     development_stage_plans: list[DevelopmentStageResearchPlan] = Field(
         default_factory=list
     )
@@ -293,7 +348,40 @@ class DomainResearchPlan(OnboardingModel):
         self.paper_queries = normalized_paper_queries
         self.expected_subdirections = list(
             dict.fromkeys(s.strip() for s in self.expected_subdirections if s.strip())
-        )
+        )[:3]
+        if not self.subdirection_plans:
+            english_domain = self.translated_domain or self.normalized_domain
+            self.subdirection_plans = [
+                SubdirectionResearchPlan(
+                    name_zh=name,
+                    name_en=name,
+                    scope=f"{self.normalized_domain}: {name}",
+                    include_terms=[name],
+                    research_questions=[f"What are the main methods and evaluations for {name}?"],
+                    search_queries=[
+                        PaperSearchQuery(
+                            query=f'"{english_domain}" "{name}" methods framework',
+                            role_hint="method",
+                            path_id=stable_id("sub", f"{name}:{index}"),
+                            priority=1,
+                        ),
+                        PaperSearchQuery(
+                            query=(
+                                f'"{english_domain}" "{name}" '
+                                "benchmark evaluation recent advances"
+                            ),
+                            role_hint="evaluation",
+                            path_id=stable_id("sub", f"{name}:{index}"),
+                            priority=2,
+                        ),
+                    ],
+                )
+                for index, name in enumerate(self.expected_subdirections, start=1)
+            ]
+        self.subdirection_plans = self.subdirection_plans[:3]
+        self.expected_subdirections = [
+            item.name_zh for item in self.subdirection_plans
+        ]
         self.development_stage_plans = sorted(
             self.development_stage_plans, key=lambda stage: stage.sequence
         )
@@ -322,6 +410,11 @@ class PaperCandidate(OnboardingModel):
     year: int | None = Field(default=None, ge=1800, le=2100)
     url: str
     citation_count: int | None = Field(default=None, ge=0)
+    influential_citation_count: int | None = Field(default=None, ge=0)
+    reference_count: int | None = Field(default=None, ge=0)
+    citation_status: CitationStatus = "unknown"
+    citation_source: str | None = None
+    citation_observed_at: datetime | None = None
     source: str
     matched_queries: list[str] = Field(default_factory=list)
     matched_role_hints: list[PaperRole] = Field(default_factory=list)
@@ -329,6 +422,11 @@ class PaperCandidate(OnboardingModel):
     doi: str | None = None
     arxiv_id: str | None = None
     publication_types: list[str] = Field(default_factory=list)
+    paper_usage: PaperUsage = "evidence"
+    recommendation_category: RecommendationCategory | None = None
+    recommendation_reason: str = ""
+    recommendation_rank_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    survey_source_ids: list[str] = Field(default_factory=list)
 
     @field_validator("paper_id", "title", "url", "source")
     @classmethod
@@ -375,7 +473,12 @@ class PaperCandidate(OnboardingModel):
         values = value if isinstance(value, list) else ([value] if value else [])
         return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
 
-    @field_validator("matched_queries", "matched_path_hints", mode="before")
+    @field_validator(
+        "matched_queries",
+        "matched_path_hints",
+        "survey_source_ids",
+        mode="before",
+    )
     @classmethod
     def normalize_string_lists(cls, value: object) -> list[str]:
         values = value if isinstance(value, list) else ([value] if value else [])
@@ -388,6 +491,15 @@ class PaperCandidate(OnboardingModel):
     def normalize_role_hints(cls, value: object) -> list[str]:
         values = value if isinstance(value, list) else ([value] if value else [])
         return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+
+    @model_validator(mode="after")
+    def normalize_citation_state(self) -> "PaperCandidate":
+        if self.citation_count is None:
+            self.citation_status = "unknown"
+            return self
+        self.citation_status = "known"
+        self.citation_source = self.citation_source or self.source
+        return self
 
 
 class RankedPaper(PaperCandidate):
@@ -405,6 +517,17 @@ class RankedPaper(PaperCandidate):
     matched_research_paths: list[str] = Field(default_factory=list)
 
 
+class SubdirectionEvidenceBundle(OnboardingModel):
+    subdirection_id: str
+    papers: list[RankedPaper] = Field(default_factory=list)
+    query_count: int = 0
+    supplemental_query_count: int = 0
+    abstract_ready_count: int = 0
+    covered_roles: list[PaperRole] = Field(default_factory=list)
+    status: Literal["sufficient", "limited"] = "limited"
+    warnings: list[str] = Field(default_factory=list)
+
+
 class SelectedPaper(OnboardingModel):
     paper_id: str
     title: str
@@ -413,6 +536,11 @@ class SelectedPaper(OnboardingModel):
     year: int | None = None
     url: str
     citation_count: int | None = None
+    influential_citation_count: int | None = None
+    reference_count: int | None = None
+    citation_status: CitationStatus = "unknown"
+    citation_source: str | None = None
+    citation_observed_at: datetime | None = None
     source: str
     doi: str | None = None
     arxiv_id: str | None = None
@@ -427,6 +555,11 @@ class SelectedPaper(OnboardingModel):
     diversity_score: float = Field(default=0.0, ge=0.0, le=1.0)
     contribution: str = ""
     reading_focus: list[str] = Field(default_factory=list)
+    paper_usage: PaperUsage = "evidence"
+    recommendation_category: RecommendationCategory | None = None
+    recommendation_reason: str = ""
+    recommendation_rank_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    survey_source_ids: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_ranked(cls, paper: RankedPaper) -> "SelectedPaper":
@@ -783,6 +916,7 @@ class DomainOnboardingOutput(OnboardingModel):
     current_landscape: CurrentLandscape
     learning_path: list[LearningStep]
     papers: list[SelectedPaper]
+    evidence_papers: list[SelectedPaper] = Field(default_factory=list)
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
     reproducibility: dict[str, Any] = Field(default_factory=dict)
 
