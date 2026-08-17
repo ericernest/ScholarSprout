@@ -266,6 +266,25 @@ class PaperSearchQuery(OnboardingModel):
     path_id: str = ""
     priority: int = Field(default=3, ge=1, le=10)
 
+    @field_validator("role_hint", mode="before")
+    @classmethod
+    def normalize_role_hint(cls, value: object) -> object:
+        """Accept the common plural emitted by planning models."""
+
+        if isinstance(value, str) and value.strip().casefold() == "methods":
+            return "method"
+        return value
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def normalize_priority_label(cls, value: object) -> object:
+        """Map qualitative planning priorities to the stable numeric order."""
+
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            return {"high": 1, "medium": 2, "low": 3}.get(normalized, value)
+        return value
+
     @model_validator(mode="after")
     def normalize_query(self) -> "PaperSearchQuery":
         self.query = self.query.strip()

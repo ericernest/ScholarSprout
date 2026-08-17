@@ -24,6 +24,8 @@ class RecommendationBuildResult:
 
 
 class SurveyRecommendationPolicy:
+    _cjk = re.compile(r"[\u3400-\u9fff]")
+    _ascii_letter = re.compile(r"[a-z]", re.IGNORECASE)
     _generic_branch_names = {
         "theoretical foundations and problem formulation",
         "core methods and architectures",
@@ -43,15 +45,27 @@ class SurveyRecommendationPolicy:
     def queries(self, plan: DomainResearchPlan) -> list[PaperSearchQuery]:
         """Build candidate queries from model-proposed and safe fixed aliases."""
 
-        domain = plan.translated_domain or plan.normalized_domain
-        terms = list(dict.fromkeys([domain, *plan.expanded_terms]))
+        domain = self.english_domain_anchor(plan)
+        if domain is None:
+            return []
+        terms = list(
+            dict.fromkeys(
+                term
+                for term in [domain, *plan.expanded_terms]
+                if self._is_english_research_term(term)
+            )
+        )
         queries: list[PaperSearchQuery] = []
         for index, term in enumerate(terms, start=1):
             if not self._usable_term(term):
                 continue
+            term = term.strip()
+            query_anchor = f'"{domain}"'
+            if term.casefold() != domain.casefold():
+                query_anchor = f'{query_anchor} "{term}"'
             queries.append(
                 PaperSearchQuery(
-                    query=f'"{term.strip()}" survey systematic review taxonomy',
+                    query=f'{query_anchor} survey systematic review taxonomy',
                     role_hint="survey",
                     path_id=f"recommendation-survey-term-{index}",
                     priority=1 if index == 1 else 2,
@@ -107,10 +121,17 @@ class SurveyRecommendationPolicy:
         plan: DomainResearchPlan,
         evidence_candidates: list[PaperCandidate],
     ) -> tuple[list[PaperSearchQuery], list[str]]:
+        domain = self.english_domain_anchor(plan)
+        if domain is None:
+            return [], []
         terms = self.discover_terms(plan, evidence_candidates)
         queries = [
             PaperSearchQuery(
-                query=f'"{term}" survey systematic review taxonomy',
+                query=(
+                    f'"{domain}" survey systematic review taxonomy'
+                    if term.casefold() == domain.casefold()
+                    else f'"{domain}" "{term}" survey systematic review taxonomy'
+                ),
                 role_hint="survey",
                 path_id=f"recommendation-survey-discovered-{index}",
                 priority=1,
@@ -126,7 +147,10 @@ class SurveyRecommendationPolicy:
     ) -> list[str]:
         """Extract domain-anchored phrases from real titles and abstracts."""
 
-        domain = (plan.translated_domain or plan.normalized_domain).casefold()
+        domain_anchor = self.english_domain_anchor(plan)
+        if domain_anchor is None:
+            return []
+        domain = domain_anchor.casefold()
         domain_tokens = {
             token
             for token in re.findall(r"[a-z][a-z0-9]+", domain)
@@ -179,6 +203,22 @@ class SurveyRecommendationPolicy:
             if len(selected) >= self.config.recommendation_discovered_term_limit:
                 break
         return selected
+
+    @classmethod
+    def english_domain_anchor(cls, plan: DomainResearchPlan) -> str | None:
+        """Return the planner-owned English domain or fail closed."""
+
+        value = plan.translated_domain.strip()
+        return value if cls._is_english_research_term(value) else None
+
+    @classmethod
+    def _is_english_research_term(cls, term: str) -> bool:
+        value = str(term or "").strip()
+        return bool(
+            cls._usable_term(value)
+            and cls._ascii_letter.search(value)
+            and not cls._cjk.search(value)
+        )
 
     def validate_queries(
         self,

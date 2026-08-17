@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from time import perf_counter
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from runtime.agent_runner import get_message_content, get_response_message, get_response_usage
 
 from .execution import current_cancel_event
 from .schemas import ModelCallStats
+
+if TYPE_CHECKING:
+    from .structured_response import ResponseContract
 
 
 class StructuredLLMError(RuntimeError):
@@ -140,6 +143,7 @@ def invoke_json(
     timeout_seconds: float | None = None,
     on_delta: Callable[[str, str], None] | None = None,
     stream_stage: str = "generation",
+    contract: ResponseContract | None = None,
 ) -> tuple[dict[str, Any], ModelCallStats]:
     started = perf_counter()
     try:
@@ -263,4 +267,16 @@ def invoke_json(
                 stats,
             )
         raise StructuredLLMError("LLM did not return a JSON object", stats)
+    if contract is not None:
+        from .structured_response import (
+            StructuredResponseError,
+            adapt_structured_response,
+        )
+
+        try:
+            parsed = adapt_structured_response(parsed, contract).data
+        except StructuredResponseError as error:
+            raise StructuredLLMError(
+                f"structured response validation failed: {error}", stats
+            ) from error
     return parsed, stats

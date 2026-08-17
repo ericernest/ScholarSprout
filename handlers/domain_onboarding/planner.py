@@ -12,6 +12,7 @@ from .canonical_papers import CanonicalPaperRegistry
 from .config import DomainOnboardingConfig
 from .llm import StructuredLLMError, invoke_json
 from .prompts import planning_system_prompt
+from .response_contracts import DOMAIN_PLAN_CONTRACT
 from .schemas import (
     DomainResearchPlan,
     LearnerProfile,
@@ -95,6 +96,7 @@ class StormLitePlanner:
                 timeout_seconds=self.config.planning_model_timeout_seconds,
                 on_delta=on_delta,
                 stream_stage="planning",
+                contract=DOMAIN_PLAN_CONTRACT,
             )
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:

@@ -92,6 +92,57 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
+    def test_missing_english_domain_anchor_stops_all_survey_recommendation_paths(
+        self,
+    ) -> None:
+        config = DomainOnboardingConfig(enforce_core_paper_coverage=False)
+        pipeline = make_pipeline([make_generation_payload(["survey-cn"])], config=config)
+
+        class RetrieverMustNotRun:
+            def search(self, queries, *, limit_per_query):
+                raise AssertionError("survey retrieval must not run without an English anchor")
+
+            def fetch_references(self, surveys, *, limit_per_paper):
+                raise AssertionError("reference retrieval must not run without an English anchor")
+
+        pipeline.retriever = RetrieverMustNotRun()
+        plan = make_plan().model_copy(
+            update={
+                "normalized_domain": "具身智能",
+                "translated_domain": "具身智能",
+                "expanded_terms": ["具身智能"],
+            }
+        )
+        candidates = [
+            PaperCandidate(
+                paper_id="survey-cn",
+                title="A Comprehensive Survey on Embodied AI",
+                abstract="Embodied AI connects perception, planning and robot action.",
+                year=2025,
+                url="https://example.org/survey-cn",
+                source="semantic_scholar",
+            )
+        ]
+        trace = DomainOnboardingRequestTrace()
+
+        merged = pipeline._build_paper_recommendations(
+            DomainOnboardingRequest(query="我想学习具身智能"),
+            plan,
+            candidates,
+            [],
+            trace,
+            PipelineExecutionContext(timeout_seconds=30.0),
+        )
+
+        self.assertEqual(merged, [])
+        self.assertEqual(plan.recommendation_strategy, "survey_degraded_no_result")
+        self.assertEqual(trace.recommendation_strategy, "survey_degraded_no_result")
+        self.assertEqual(trace.recommendation_survey_query_count, 0)
+        self.assertEqual(
+            trace.recommendation_query_audit[0]["reason"],
+            "missing_standard_english_domain",
+        )
+
     def test_full_pipeline_reports_empty_recommendations_after_validated_survey_miss(self) -> None:
         source_papers = [
             paper for paper in make_candidates() if "Survey" not in paper.title
