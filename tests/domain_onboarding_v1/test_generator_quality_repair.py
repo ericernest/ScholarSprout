@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from typing import Any
 
 from handlers.domain_onboarding.config import DomainOnboardingConfig
 from handlers.domain_onboarding.generator import GenerationError, StructuredOnboardingGenerator
@@ -12,6 +13,7 @@ from handlers.domain_onboarding.repair_planning import RepairPlanner
 from handlers.domain_onboarding.schemas import (
     DevelopmentStageResearchPlan,
     DomainOnboardingRequest,
+    DomainResearchPlan,
     EvidenceClaim,
     QualityIssue,
 )
@@ -25,7 +27,116 @@ from .fakes import (
 )
 
 
+class _StagedIncrementalModel:
+    """Route deterministic responses by prompt shape, including real provider quirks."""
+
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        scalar_stage_wrapper_sequence: int | None = None,
+        failed_stage_sequence: int | None = None,
+    ) -> None:
+        self.payload = payload
+        self.scalar_stage_wrapper_sequence = scalar_stage_wrapper_sequence
+        self.failed_stage_sequence = failed_stage_sequence
+        self.calls: list[dict[str, Any]] = []
+
+    def chat(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        system = kwargs["messages"][0]["content"]
+        user = json.loads(kwargs["messages"][1]["content"])
+        if "foundation block" in system:
+            response = {
+                "domain": self.payload["domain"],
+                "text": self.payload["text"],
+                "prerequisites": self.payload["prerequisites"],
+            }
+        elif "historical development stage" in system:
+            stage_plan = user["stage_research_plan"]
+            sequence = int(stage_plan["sequence"])
+            if sequence == self.failed_stage_sequence:
+                return {"choices": [{"message": {"content": "not json"}}]}
+            stage = json.loads(
+                json.dumps(self.payload["development_stages"][sequence - 1])
+            )
+            selected_ids = list(stage_plan["selected_paper_ids"])
+            stage.update(
+                {
+                    "stage_id": stage_plan["stage_id"],
+                    "sequence": sequence,
+                    "name": stage_plan["name"],
+                    "period": stage_plan["period"],
+                    "historical_period": stage_plan["period"],
+                    "transition_from_previous": stage_plan[
+                        "transition_from_previous"
+                    ],
+                    "related_paper_ids": selected_ids,
+                }
+            )
+            for detail in [*stage["core_concepts"], *stage["main_techniques"]]:
+                detail["related_paper_ids"] = selected_ids
+            stage["breakthroughs"][0]["supporting_paper_ids"] = selected_ids
+            if sequence == self.scalar_stage_wrapper_sequence:
+                response = {
+                    "development_stage": stage_plan["stage_id"],
+                    "stage": stage,
+                    "paper_guidance": "provider returned prose instead of a list",
+                    "evidence_claims": [],
+                }
+            else:
+                response = {
+                    "development_stage": stage,
+                    "paper_guidance": [],
+                    "evidence_claims": [],
+                }
+        elif "exactly five ordered learning_path steps" in system:
+            response = {
+                "learning_path": self.payload["learning_path"],
+                "evidence_claims": [],
+            }
+        elif "current_landscape" in system:
+            response = {
+                "current_landscape": self.payload["current_landscape"],
+                "evidence_claims": [],
+            }
+        else:
+            raise AssertionError(f"unexpected prompt: {system[:120]}")
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(response, ensure_ascii=False)
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        }
+
+
 class GeneratorTests(unittest.TestCase):
+    @staticmethod
+    def _researched_plan(paper_ids: list[str]) -> DomainResearchPlan:
+        plan = make_plan()
+        plan.development_stage_plans = [
+            DevelopmentStageResearchPlan(
+                stage_id=f"researched-{index}",
+                sequence=index,
+                name=f"研究阶段 {index}",
+                period=f"20{index}0-20{index}3",
+                focus=f"阶段 {index} 重点",
+                transition_from_previous="" if index == 1 else "方法演进",
+                search_queries=[f"stage {index}"],
+                selected_paper_ids=[paper_ids[index - 1]],
+            )
+            for index in range(1, 4)
+        ]
+        return plan
+
     def test_staged_development_generates_each_researched_stage_separately(self) -> None:
         ranked = WeightedPaperRanker(DomainOnboardingConfig()).rank(
             make_candidates(), make_plan(), limit=6
@@ -186,6 +297,89 @@ class GeneratorTests(unittest.TestCase):
             ["development_stage:researched-2"],
         )
         self.assertTrue(stats.failure_reasons)
+
+    def test_incremental_stages_accept_scalar_wrapper_and_ignore_scalar_lists(
+        self,
+    ) -> None:
+        config = DomainOnboardingConfig(
+            generation_max_attempts=1,
+            generation_retry_backoff_seconds=0,
+        )
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        paper_ids = [paper.paper_id for paper in ranked]
+        payload = make_generation_payload(paper_ids)
+        model = _StagedIncrementalModel(
+            payload,
+            scalar_stage_wrapper_sequence=2,
+        )
+        generator = StructuredOnboardingGenerator(model, config)
+        events: list[str] = []
+
+        result = generator.generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            self._researched_plan(paper_ids),
+            ranked,
+            lambda event, *_: events.append(event),
+        )
+
+        self.assertEqual(
+            events,
+            ["development_ready", "landscape_ready", "learning_path_ready"],
+        )
+        second = result.output.development_stages[1]
+        self.assertEqual(second.stage_id, "researched-2")
+        self.assertEqual(second.generation_status, "generated")
+        self.assertEqual(len(second.breakthroughs), 1)
+        self.assertEqual(
+            second.breakthroughs[0].supporting_paper_ids,
+            [paper_ids[1]],
+        )
+        self.assertEqual(generator._mapping_items("not a list"), [])
+        self.assertEqual(
+            generator._mapping_items(["bad", {"paper_id": paper_ids[0]}]),
+            [{"paper_id": paper_ids[0]}],
+        )
+
+    def test_incremental_stages_preserve_explicit_degraded_stage_to_completion(
+        self,
+    ) -> None:
+        config = DomainOnboardingConfig(
+            generation_max_attempts=1,
+            generation_retry_backoff_seconds=0,
+        )
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        paper_ids = [paper.paper_id for paper in ranked]
+        payload = make_generation_payload(paper_ids)
+        model = _StagedIncrementalModel(payload, failed_stage_sequence=2)
+        events: list[str] = []
+
+        result = StructuredOnboardingGenerator(model, config).generate_incrementally(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            self._researched_plan(paper_ids),
+            ranked,
+            lambda event, *_: events.append(event),
+        )
+
+        self.assertEqual(
+            events,
+            ["development_ready", "landscape_ready", "learning_path_ready"],
+        )
+        degraded = result.output.development_stages[1]
+        self.assertEqual(degraded.stage_id, "researched-2")
+        self.assertEqual(degraded.generation_status, "degraded")
+        self.assertIn("failed", degraded.generation_error)
+        self.assertEqual(degraded.breakthroughs, [])
+        self.assertEqual(degraded.related_paper_ids, [paper_ids[1]])
+        self.assertEqual(
+            result.stats.degraded_sections,
+            ["development_stage:researched-2"],
+        )
 
     def test_development_stage_planner_creates_chronological_search_contract(self) -> None:
         model = FakeJSONModel(

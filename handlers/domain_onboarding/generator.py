@@ -24,6 +24,14 @@ from .prompts import (
     section_system_prompt,
 )
 from .relations import SemanticRelationResolver
+from .response_contracts import (
+    DEVELOPMENT_FOUNDATION_CONTRACT,
+    DEVELOPMENT_STAGE_CONTRACT,
+    FULL_ONBOARDING_CONTRACT,
+    REPAIR_PATCH_CONTRACT,
+    SECTION_CONTRACTS,
+    STAGE_PLANNING_CONTRACT,
+)
 from .schemas import (
     ConceptDetail,
     CurrentLandscape,
@@ -47,6 +55,11 @@ from .schemas import (
     SubdirectionDetail,
     TechniqueDetail,
     is_internal_landscape_label,
+)
+from .structured_response import (
+    ResponseContract,
+    StructuredResponseError,
+    adapt_structured_response,
 )
 
 
@@ -279,16 +292,9 @@ class StructuredOnboardingGenerator:
                 timeout_seconds=timeout_seconds,
                 on_delta=on_delta,
                 stream_stage="stage_planning",
+                contract=STAGE_PLANNING_CONTRACT,
             )
             raw_plans = payload.get("development_stage_plans")
-            if not isinstance(raw_plans, list):
-                for wrapper in ("result", "data", "output"):
-                    nested = payload.get(wrapper)
-                    if isinstance(nested, dict) and isinstance(
-                        nested.get("development_stage_plans"), list
-                    ):
-                        raw_plans = nested["development_stage_plans"]
-                        break
             if not isinstance(raw_plans, list):
                 raise GenerationError("stage planning is missing development_stage_plans")
             try:
@@ -348,7 +354,9 @@ class StructuredOnboardingGenerator:
             event_name, keys = sections[section]
             for key in keys:
                 if key == "evidence_claims":
-                    payload.setdefault(key, []).extend(section_payload.get(key) or [])
+                    payload.setdefault(key, []).extend(
+                        self._mapping_items(section_payload.get(key))
+                    )
                 elif key in section_payload:
                     payload[key] = section_payload[key]
             self._add_stats(stats, section_stats)
@@ -473,8 +481,9 @@ class StructuredOnboardingGenerator:
             timeout_seconds=self.config.generation_development_foundation_timeout_seconds,
             stream_stage="development_foundation",
             on_delta=on_delta,
+            contract=DEVELOPMENT_FOUNDATION_CONTRACT,
         )
-        foundation = self._unwrap_payload(foundation_payload)
+        foundation = foundation_payload
         if not isinstance(foundation.get("prerequisites"), list):
             raise GenerationError(
                 "development foundation is missing prerequisites",
@@ -506,18 +515,10 @@ class StructuredOnboardingGenerator:
                 timeout_seconds=self.config.generation_development_stage_timeout_seconds,
                 stream_stage="development_stage",
                 on_delta=on_delta,
+                contract=DEVELOPMENT_STAGE_CONTRACT,
             )
-            unwrapped = self._unwrap_payload(raw)
-            stage = unwrapped.get("development_stage") or unwrapped.get("stage")
-            if not isinstance(stage, dict):
-                stages = unwrapped.get("development_stages")
-                stage = stages[0] if isinstance(stages, list) and stages else None
-            if not isinstance(stage, dict) and all(
-                key in unwrapped for key in ("stage_id", "name", "summary")
-            ):
-                # Some models return the requested stage object directly
-                # instead of wrapping it in development_stage.
-                stage = unwrapped
+            unwrapped = raw
+            stage = unwrapped.get("development_stage")
             if not isinstance(stage, dict):
                 raise GenerationError(
                     f"stage {stage_plan.stage_id} response is missing development_stage",
@@ -598,8 +599,12 @@ class StructuredOnboardingGenerator:
         }
         for sequence in sorted(stage_results):
             _, unwrapped, _ = stage_results[sequence]
-            combined["paper_guidance"].extend(unwrapped.get("paper_guidance") or [])
-            combined["evidence_claims"].extend(unwrapped.get("evidence_claims") or [])
+            combined["paper_guidance"].extend(
+                self._mapping_items(unwrapped.get("paper_guidance"))
+            )
+            combined["evidence_claims"].extend(
+                self._mapping_items(unwrapped.get("evidence_claims"))
+            )
         completed = self._complete_section_payload(
             "development",
             combined,
@@ -650,6 +655,7 @@ class StructuredOnboardingGenerator:
         timeout_seconds: float,
         stream_stage: str,
         on_delta: Callable[[str, str], None] | None,
+        contract: ResponseContract,
     ) -> tuple[dict[str, Any], ModelCallStats]:
         retry_instruction = ""
 
@@ -661,6 +667,7 @@ class StructuredOnboardingGenerator:
                 timeout_seconds=attempt_timeout,
                 on_delta=on_delta,
                 stream_stage=stream_stage,
+                contract=contract,
             )
 
         total_stats = ModelCallStats()
@@ -682,16 +689,6 @@ class StructuredOnboardingGenerator:
             return payload, total_stats
         assert last_error is not None
         raise GenerationError(str(last_error), stats=total_stats) from last_error
-
-    @staticmethod
-    def _unwrap_payload(payload: dict[str, Any]) -> dict[str, Any]:
-        candidates = [payload]
-        candidates.extend(
-            value
-            for key in ("result", "data", "output")
-            if isinstance((value := payload.get(key)), dict)
-        )
-        return max(candidates, key=lambda item: len(item))
 
     @staticmethod
     def _json_retry_instruction(attempt: int) -> str:
@@ -807,6 +804,7 @@ class StructuredOnboardingGenerator:
                 timeout_seconds=timeout_seconds,
                 on_delta=on_delta,
                 stream_stage=section,
+                contract=SECTION_CONTRACTS[section],
             )
             try:
                 completed = self._complete_section_payload(
@@ -863,45 +861,13 @@ class StructuredOnboardingGenerator:
         default_domain: str = "",
         plan: DomainResearchPlan | None = None,
     ) -> dict[str, Any]:
-        expected = {
-            "development": ("domain", "prerequisites", "development_stages"),
-            "landscape": ("current_landscape",),
-            "learning_path": ("learning_path",),
-        }[section]
-        wrapper_keys = (section, "result", "data", "output")
-        candidates = [payload]
-        nested_wrapper_keys: set[str] = set()
-        for key in wrapper_keys:
-            nested = payload.get(key)
-            if isinstance(nested, dict):
-                nested_wrapper_keys.add(key)
-                candidates.append(nested)
-        selected = max(
-            candidates,
-            key=lambda candidate: sum(key in candidate for key in expected),
-        )
-        # Providers do not always agree on whether companion fields belong
-        # beside or inside a named wrapper. Merge all one-level candidates,
-        # then let the candidate with the strongest required-field coverage
-        # win conflicts so valid outer fields are not silently discarded.
-        completed: dict[str, Any] = {}
-        for candidate in candidates:
-            excluded = nested_wrapper_keys if candidate is payload else set()
-            completed.update(
-                {
-                    key: value
-                    for key, value in candidate.items()
-                    if key not in excluded
-                }
-            )
-        selected_excluded = nested_wrapper_keys if selected is payload else set()
-        completed.update(
-            {
-                key: value
-                for key, value in selected.items()
-                if key not in selected_excluded
-            }
-        )
+        try:
+            payload = adapt_structured_response(
+                payload, SECTION_CONTRACTS[section]
+            ).data
+        except StructuredResponseError as error:
+            raise GenerationError(str(error)) from error
+        completed = dict(payload)
         # The normalized domain is planner-owned data. Copying it here is safer
         # than spending another model attempt when a structurally valid
         # development response merely omits that redundant field.
@@ -910,66 +876,21 @@ class StructuredOnboardingGenerator:
         if section == "development" and not isinstance(
             completed.get("prerequisites"), list
         ):
-            prereq_value = completed.get("prerequisites")
-            if isinstance(prereq_value, list):
-                completed["prerequisites"] = prereq_value
-            elif isinstance(prereq_value, dict):
-                completed["prerequisites"] = [prereq_value]
-            elif isinstance(prereq_value, str) and prereq_value.strip():
-                completed["prerequisites"] = [{"name": prereq_value.strip()}]
-            else:
-                raise GenerationError("development section is missing prerequisites")
+            raise GenerationError("development section is missing prerequisites")
         if section == "development" and not isinstance(
             completed.get("development_stages"), list
         ):
-            stages_value = completed.get("development_stages")
-            stage_aliases = ("stages", "phases", "history", "evolution")
-            for alias in stage_aliases:
-                alias_value = completed.get(alias)
-                if isinstance(alias_value, list) and alias_value:
-                    completed["development_stages"] = alias_value
-                    stages_value = alias_value
-                    break
-            if not isinstance(stages_value, list) or not stages_value:
-                raise GenerationError("development section is missing development stages")
+            raise GenerationError("development section is missing development stages")
         if section == "development":
             self._sanitize_development_paper_ids(completed, papers, plan=plan)
         if section == "landscape" and not isinstance(
             completed.get("current_landscape"), dict
         ):
-            landscape_keys = {
-                "problems",
-                "subdirections",
-                "problem_details",
-                "subdirection_details",
-            }
-            landscape = {}
-            for key in landscape_keys:
-                value = completed.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, list):
-                    landscape[key] = value
-                elif isinstance(value, str) and value.strip():
-                    landscape[key] = [value.strip()]
-                else:
-                    landscape[key] = []
-            if any(
-                isinstance(value, list) and len(value) > 0
-                for value in landscape.values()
-            ):
-                completed["current_landscape"] = landscape
-            else:
-                raise GenerationError("landscape section is missing current_landscape")
+            raise GenerationError("landscape section is missing current_landscape")
         if section == "learning_path" and not isinstance(
             completed.get("learning_path"), list
         ):
-            for alias in ("steps", "learning_steps", "path"):
-                if isinstance(completed.get(alias), list):
-                    completed["learning_path"] = completed[alias]
-                    break
-            if not isinstance(completed.get("learning_path"), list):
-                raise GenerationError("learning path section is missing learning_path")
+            raise GenerationError("learning path section is missing learning_path")
         self._validate_section_payload(section, completed, papers)
         return completed
 
@@ -1249,6 +1170,16 @@ class StructuredOnboardingGenerator:
         except StructuredLLMError as error:
             raise GenerationError(str(error), stats=error.stats) from error
         try:
+            try:
+                payload = adapt_structured_response(
+                    payload, REPAIR_PATCH_CONTRACT
+                ).data
+            except StructuredResponseError:
+                # Preserve compatibility with custom repair models that return
+                # a complete onboarding document instead of a targeted patch.
+                payload = adapt_structured_response(
+                    payload, FULL_ONBOARDING_CONTRACT
+                ).data
             repairs = payload.get("repairs")
             if isinstance(repairs, list):
                 output = apply_repair_values(
@@ -1313,6 +1244,7 @@ class StructuredOnboardingGenerator:
                 ),
                 on_delta=on_delta,
                 stream_stage="repair" if previous_output is not None else "generation",
+                contract=FULL_ONBOARDING_CONTRACT,
             )
             return payload, stats
         except StructuredLLMError as error:
@@ -1936,6 +1868,11 @@ class StructuredOnboardingGenerator:
                 item = {"name": item}
             if not isinstance(item, dict) or not str(item.get("name") or "").strip():
                 continue
+            generation_status = (
+                "degraded"
+                if item.get("generation_status") == "degraded"
+                else "generated"
+            )
             ids = self._valid_ids(item.get("related_paper_ids"), references)
             if not ids and papers:
                 ids = [papers[min(index, len(papers) - 1)].paper_id]
@@ -1976,7 +1913,7 @@ class StructuredOnboardingGenerator:
                         ),
                     )
                 )
-            if not breakthroughs:
+            if not breakthroughs and generation_status != "degraded":
                 raise GenerationError(
                     f"development stage {index} has no grounded breakthrough"
                 )
@@ -2033,6 +1970,12 @@ class StructuredOnboardingGenerator:
                     breakthroughs=breakthroughs,
                     related_paper_ids=ids,
                     prerequisite_ids=stage_prereqs,
+                    generation_status=generation_status,
+                    generation_error=(
+                        str(item.get("generation_error") or "")
+                        if generation_status == "degraded"
+                        else ""
+                    ),
                 )
             )
         for index, stage in enumerate(results):
@@ -2051,6 +1994,14 @@ class StructuredOnboardingGenerator:
         if value is None or value == "":
             return []
         return [value]
+
+    @staticmethod
+    def _mapping_items(value: object) -> list[dict[str, Any]]:
+        """Keep only object items from model-owned collection fields."""
+
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
 
     @classmethod
     def _strings(cls, value: object) -> list[str]:

@@ -64,6 +64,7 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
         queries = [query.query for query in self.policy.queries(plan)]
 
         self.assertTrue(any("LLM-based multi-agent collaboration" in query for query in queries))
+        self.assertTrue(all('"multi-agent systems"' in query for query in queries))
         self.assertFalse(any("theoretical foundations" in query for query in queries))
 
     def test_query_validation_keeps_only_queries_with_real_survey_results(self) -> None:
@@ -129,7 +130,12 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
 
         self.assertTrue(any("multi agent" in term for term in terms), terms)
 
-    def test_chinese_only_fallback_plan_still_produces_survey_queries(self) -> None:
+        queries, discovered_terms = self.policy.discovered_queries(plan, papers)
+        self.assertEqual(discovered_terms, terms)
+        self.assertTrue(queries)
+        self.assertTrue(all('"multi-agent systems"' in query.query for query in queries))
+
+    def test_chinese_only_fallback_plan_stops_survey_queries(self) -> None:
         plan = DomainResearchPlan(
             normalized_domain="具身智能",
             translated_domain="具身智能",
@@ -146,10 +152,9 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
 
         queries = self.policy.queries(plan)
 
-        self.assertTrue(queries)
-        self.assertIn('"具身智能" survey', queries[0].query)
+        self.assertEqual(queries, [])
 
-    def test_chinese_only_domain_discovers_repeated_english_title_terms(self) -> None:
+    def test_chinese_only_domain_does_not_infer_an_english_anchor_from_results(self) -> None:
         plan = DomainResearchPlan(
             normalized_domain="具身智能",
             translated_domain="具身智能",
@@ -180,7 +185,7 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
 
         terms = self.policy.discover_terms(plan, papers)
 
-        self.assertTrue(any("embodied ai" in term for term in terms), terms)
+        self.assertEqual(terms, [])
 
     def test_verified_evidence_survey_can_be_revalidated_for_recommendation(self) -> None:
         papers = [

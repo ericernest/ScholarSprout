@@ -19,6 +19,59 @@ from .fakes import FakeJSONModel, make_candidates, make_plan, make_profile
 
 
 class PlannerTests(unittest.TestCase):
+    def test_plan_normalizes_common_role_and_priority_labels_without_fallback(
+        self,
+    ) -> None:
+        payload = make_plan().model_dump(mode="json")
+        payload.update(
+            {
+                "normalized_domain": "具身智能",
+                "translated_domain": "Embodied AI",
+                "expanded_terms": [
+                    "embodied intelligence",
+                    "embodied cognition",
+                    "robot learning",
+                ],
+                "search_queries": [
+                    "embodied AI survey",
+                    "embodied AI methods",
+                    "embodied AI benchmark",
+                ],
+            }
+        )
+        for branch in payload["subdirection_plans"]:
+            branch["search_queries"] = [
+                {
+                    "query": "embodied AI methods frameworks",
+                    "role_hint": "methods",
+                    "path_id": branch["subdirection_id"],
+                    "priority": "high",
+                },
+                {
+                    "query": "embodied AI benchmark evaluation",
+                    "role_hint": "evaluation",
+                    "path_id": branch["subdirection_id"],
+                    "priority": "medium",
+                },
+            ]
+
+        result = StormLitePlanner(
+            FakeJSONModel([payload]), DomainOnboardingConfig()
+        ).plan("我想学习具身智能", make_profile())
+
+        self.assertEqual(result.plan.planning_mode, "model")
+        self.assertIsNone(result.plan.planning_fallback_reason)
+        self.assertEqual(result.plan.translated_domain, "Embodied AI")
+        self.assertIn("embodied intelligence", result.plan.expanded_terms)
+        branch_queries = [
+            query
+            for branch in result.plan.subdirection_plans
+            for query in branch.search_queries
+        ]
+        self.assertTrue(any(query.role_hint == "method" for query in branch_queries))
+        self.assertTrue(any(query.priority == 1 for query in branch_queries))
+        self.assertTrue(any(query.priority == 2 for query in branch_queries))
+
     def test_valid_plan_uses_single_model_call(self) -> None:
         model = FakeJSONModel(
             [

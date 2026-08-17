@@ -36,6 +36,8 @@ def planning_system_prompt() -> str:
         "exclude terms, 1-2 research questions and exactly 2 precise English paper queries: one for "
         "methods/frameworks and one for benchmarks/evaluation/recent advances. Give each perspective "
         "and subdirection a stable ID. Search queries must "
+        "use role_hint from [survey, foundational, method, evaluation, application, frontier, other] "
+        "and numeric priority from 1 to 10 (1 is highest). They must "
         "use precise English technical terms and cover surveys, "
         "foundational work, methods, evaluation and recent progress. expected_subdirections must be "
         "real research branches, not paper-role labels.\n\n"
