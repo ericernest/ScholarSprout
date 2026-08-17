@@ -436,6 +436,12 @@ class DomainOnboardingPipeline:
                     "recommendation_query_audit": list(
                         trace.recommendation_query_audit
                     ),
+                    "generation_degraded_sections": list(
+                        generation_result.stats.degraded_sections
+                    ),
+                    "generation_failure_reasons": list(
+                        generation_result.stats.failure_reasons
+                    ),
                 }
             )
             planning_route = routing_snapshot(
@@ -1396,6 +1402,27 @@ class DomainOnboardingPipeline:
                 expanded_candidates, _ = search_and_validate(expansion_queries)
                 survey_candidates.extend(expanded_candidates)
                 plan.recommendation_expanded_terms = expanded_terms
+
+        if not survey_candidates:
+            survey_candidates = self.recommendation_policy.evidence_survey_candidates(
+                discovery_candidates
+            )
+            query_audit.append(
+                {
+                    "query": "",
+                    "source": "evidence_survey_bootstrap",
+                    "result_count": len(discovery_candidates),
+                    "survey_count": len(survey_candidates),
+                    "score": 1.0 if survey_candidates else 0.0,
+                    "score_basis": "binary_metadata_verification",
+                    "selected": bool(survey_candidates),
+                    "reason": (
+                        "verified_evidence_surveys"
+                        if survey_candidates
+                        else "no_verified_survey"
+                    ),
+                }
+            )
 
         trace.recommendation_query_audit = query_audit
         plan.recommendation_query_audit = list(query_audit)

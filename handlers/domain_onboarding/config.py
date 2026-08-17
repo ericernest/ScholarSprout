@@ -85,6 +85,7 @@ class DomainOnboardingConfig(BaseModel):
         default_factory=default_critical_dimensions
     )
     max_content_repairs: int = Field(default=1, ge=0, le=1)
+    repair_max_llm_issues: int = Field(default=6, ge=1, le=20)
     # Incremental clients receive validated sections before terminal completion.
     # The larger envelope also covers remote embedding and staged generation.
     request_timeout_seconds: float = Field(default=4800.0, gt=0.0, le=7200.0)

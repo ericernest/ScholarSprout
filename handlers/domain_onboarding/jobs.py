@@ -570,8 +570,10 @@ class DomainOnboardingJobManager:
             context.cancel()
         started = perf_counter()
         result: PipelineResult | None = None
+        progress_callback = self._progress(task_id)
         try:
-            result = self.pipeline.run(request, trace, context, self._progress(task_id))
+            result = self.pipeline.run(request, trace, context, progress_callback)
+            progress_callback.flush()  # type: ignore[attr-defined]
             trace.status = result.status
             response = result.to_response()
             if result.status == "cancelled":
@@ -602,6 +604,7 @@ class DomainOnboardingJobManager:
             )
             self._record_job_metric(state)
         except Exception as error:
+            progress_callback.flush()  # type: ignore[attr-defined]
             trace.status = "internal_error"
             snapshot = self.store.get(task_id) or {}
             self._persist_failure(task_id, str(error))
@@ -615,6 +618,7 @@ class DomainOnboardingJobManager:
             )
             self._record_job_metric("failed")
         finally:
+            progress_callback.flush()  # type: ignore[attr-defined]
             trace.total_duration_ms = round((perf_counter() - started) * 1000, 3)
             if self.audit_sink is not None:
                 try:
@@ -642,7 +646,10 @@ class DomainOnboardingJobManager:
             self._capacity.release()
 
     def _progress(self, task_id: str):
-        def callback(
+        delta_lock = Lock()
+        pending: dict[str, dict[str, Any]] = {}
+
+        def persist(
             event: str,
             progress: float,
             provisional: bool,
@@ -662,6 +669,57 @@ class DomainOnboardingJobManager:
                 except Exception:
                     pass
 
+        def flush(stage: str | None = None) -> None:
+            with delta_lock:
+                stages = [stage] if stage is not None else list(pending)
+                batches = [pending.pop(name) for name in stages if name in pending]
+            for batch in batches:
+                persist(
+                    "llm_delta",
+                    batch["progress"],
+                    True,
+                    [],
+                    {"stage": batch["stage"], "delta": batch["delta"]},
+                )
+
+        def callback(
+            event: str,
+            progress: float,
+            provisional: bool,
+            replace_paths: list[str],
+            data: dict[str, Any],
+        ) -> None:
+            if event != "llm_delta":
+                flush()
+                persist(event, progress, provisional, replace_paths, data)
+                return
+
+            stage = str(data.get("stage") or "generation")
+            delta = str(data.get("delta") or "")
+            if not delta:
+                return
+            now = monotonic()
+            should_flush = False
+            with delta_lock:
+                batch = pending.setdefault(
+                    stage,
+                    {
+                        "stage": stage,
+                        "delta": "",
+                        "progress": progress,
+                        "started_at": now,
+                    },
+                )
+                batch["delta"] += delta
+                batch["progress"] = progress
+                should_flush = (
+                    len(batch["delta"]) >= 512
+                    or now - float(batch["started_at"]) >= 0.5
+                )
+            if should_flush:
+                flush(stage)
+
+        callback.flush = flush  # type: ignore[attr-defined]
         return callback
 
     def _persist_submission(self, task_id: str, request: DomainOnboardingRequest) -> None:

@@ -54,7 +54,10 @@ class TargetedRepairer:
         self.generator = generator
         self.config = config
         self.policy = config.to_policy()
-        self.planner = planner or RepairPlanner(self.policy.llm_repair_issue_types)
+        self.planner = planner or RepairPlanner(
+            self.policy.llm_repair_issue_types,
+            max_llm_issues=self.config.repair_max_llm_issues,
+        )
         self.code_executor = code_executor or CodeRepairExecutor()
         self.llm_executor = llm_executor or LLMRepairExecutor(generator)
 

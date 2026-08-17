@@ -56,6 +56,38 @@ class IncrementalJobTests(unittest.TestCase):
         replay = self.store.events_after(first["task_id"], events[1]["id"])
         self.assertEqual([item["event"] for item in replay], ["development_ready", "completed"])
 
+    def test_llm_deltas_are_batched_and_flushed_before_section_events(self):
+        task_id = "batched-deltas"
+        self.store.create(
+            task_id,
+            DomainOnboardingRequest(query="RAG").model_dump(mode="json"),
+            None,
+        )
+        callback = self.manager._progress(task_id)
+
+        for delta in ("one", "two", "three"):
+            callback(
+                "llm_delta",
+                0.5,
+                True,
+                [],
+                {"stage": "development", "delta": delta},
+            )
+        callback(
+            "development_ready",
+            0.68,
+            True,
+            ["development_stages"],
+            {"development_stages": [{"stage_id": "stage_1"}]},
+        )
+
+        events = self.store.events_after(task_id, 0)
+        self.assertEqual(
+            [event["event"] for event in events],
+            ["llm_delta", "development_ready"],
+        )
+        self.assertEqual(events[0]["data"]["delta"], "onetwothree")
+
     def test_gateway_supports_submit_poll_and_sse_replay(self):
         app.state.domain_onboarding_job_store = self.store
         app.state.domain_onboarding_job_manager = self.manager
