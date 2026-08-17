@@ -2,6 +2,8 @@
 
 本目录只负责部署探测和反向访问验证，不包含 OAuth，也不替代正式应用部署。
 
+完整的服务启动、SSH/VS Code 端口转发、校园网访问和网关端口配置说明见 [`deployment-network-guide.md`](deployment-network-guide.md)。
+
 ## 检查学校服务器
 
 ```bash
