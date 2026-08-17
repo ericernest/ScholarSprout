@@ -387,9 +387,10 @@ class StructuredOnboardingGenerator:
                     f"development section generation failed: {error}",
                     stats=error.stats,
                 ) from error
-            # Per-stage research is richer but also creates more remote calls.
-            # If any researched stage exhausts its retries, fall back to one
-            # complete development call using the same verified papers.
+            # Individual stage failures are converted into auditable degraded
+            # stages inside ``_call_staged_development``.  Reaching this branch
+            # therefore means the shared foundation or stage set is unusable;
+            # retain the standard whole-section call as the last recovery path.
             staged_error = error
             try:
                 development_payload, development_stats = self._call_section(
@@ -525,7 +526,7 @@ class StructuredOnboardingGenerator:
             return stage_plan.sequence, stage, unwrapped, item_stats
 
         stage_results: dict[int, tuple[dict[str, Any], dict[str, Any], ModelCallStats]] = {}
-        failures: list[GenerationError] = []
+        failures: list[tuple[DevelopmentStageResearchPlan, GenerationError]] = []
         with ThreadPoolExecutor(
             max_workers=min(
                 self.config.generation_development_workers,
@@ -544,24 +545,43 @@ class StructuredOnboardingGenerator:
                 except GenerationError as error:
                     stage_plan = futures[future]
                     failures.append(
-                        GenerationError(
-                            f"stage {stage_plan.stage_id} failed: {error}",
-                            stats=error.stats,
+                        (
+                            stage_plan,
+                            GenerationError(
+                                f"stage {stage_plan.stage_id} failed: {error}",
+                                stats=error.stats,
+                            ),
                         )
                     )
         total_stats = ModelCallStats()
         self._add_stats(total_stats, foundation_stats)
         for _, _, item_stats in stage_results.values():
             self._add_stats(total_stats, item_stats)
-        for error in failures:
+        for stage_plan, error in failures:
             self._add_stats(total_stats, error.stats)
-        if failures or len(stage_results) != len(plan.development_stage_plans):
-            details = "; ".join(str(error) for error in failures[:3])
+            stage_results[stage_plan.sequence] = (
+                self._fallback_development_stage(
+                    stage_plan,
+                    paper_by_id,
+                    error=str(error),
+                ),
+                {"paper_guidance": [], "evidence_claims": []},
+                error.stats,
+            )
+            total_stats.degraded_sections.append(
+                f"development_stage:{stage_plan.stage_id}"
+            )
+            total_stats.failure_reasons.append(str(error))
+        if len(stage_results) != len(plan.development_stage_plans):
+            missing = [
+                stage.stage_id
+                for stage in plan.development_stage_plans
+                if stage.sequence not in stage_results
+            ]
             raise GenerationError(
-                f"{len(failures) or 1} researched development stage calls failed"
-                + (f": {details}" if details else ""),
+                f"researched development stages are incomplete: {missing}",
                 stats=total_stats,
-            ) from (failures[0] if failures else None)
+            )
 
         combined = {
             "domain": foundation.get("domain") or plan.normalized_domain,
@@ -588,6 +608,38 @@ class StructuredOnboardingGenerator:
             plan=plan,
         )
         return completed, total_stats
+
+    @staticmethod
+    def _fallback_development_stage(
+        stage_plan: DevelopmentStageResearchPlan,
+        paper_by_id: dict[str, RankedPaper],
+        *,
+        error: str,
+    ) -> dict[str, Any]:
+        """Preserve planner facts without inventing prose after a stage failure."""
+
+        paper_ids = [
+            paper_id
+            for paper_id in stage_plan.selected_paper_ids
+            if paper_id in paper_by_id
+        ]
+        return {
+            "stage_id": stage_plan.stage_id,
+            "sequence": stage_plan.sequence,
+            "name": stage_plan.name,
+            "period": stage_plan.period,
+            "historical_period": stage_plan.period,
+            "summary": stage_plan.focus,
+            "motivation": stage_plan.focus,
+            "transition_from_previous": stage_plan.transition_from_previous,
+            "related_paper_ids": paper_ids,
+            "core_concepts": [],
+            "main_techniques": [],
+            "breakthroughs": [],
+            "open_problems": [],
+            "generation_status": "degraded",
+            "generation_error": error,
+        }
 
     def _invoke_development_piece(
         self,
@@ -678,6 +730,12 @@ class StructuredOnboardingGenerator:
         total.completion_tokens += item.completion_tokens
         total.total_tokens += item.total_tokens
         total.usage_reported = total.usage_reported or item.usage_reported
+        total.degraded_sections = list(
+            dict.fromkeys([*total.degraded_sections, *item.degraded_sections])
+        )
+        total.failure_reasons = list(
+            dict.fromkeys([*total.failure_reasons, *item.failure_reasons])
+        )
 
     def _call_section(
         self,
@@ -1069,6 +1127,11 @@ class StructuredOnboardingGenerator:
             allowed_ids = {paper.paper_id for paper in papers}
             for index, stage in enumerate(stages):
                 breakthroughs = stage.get("breakthroughs") if isinstance(stage, dict) else None
+                if (
+                    isinstance(stage, dict)
+                    and stage.get("generation_status") == "degraded"
+                ):
+                    continue
                 if not isinstance(breakthroughs, list) or not breakthroughs:
                     raise GenerationError(
                         f"development stage {index} is missing breakthroughs"
@@ -1154,20 +1217,63 @@ class StructuredOnboardingGenerator:
         issues: list[QualityIssue],
         on_delta: Callable[[str, str], None] | None = None,
     ) -> GenerationResult:
-        payload, stats = self._call_model(
-            request,
-            profile,
-            plan,
-            papers,
-            previous_output=previous_output,
-            issues=issues,
-            on_delta=on_delta,
+        del profile
+        from .repair_diff import apply_repair_values, target_values
+
+        target_paths = list(
+            dict.fromkeys(issue.target_path for issue in issues if issue.target_path)
         )
+        current_targets = target_values(previous_output, target_paths)
+        system_prompt = (
+            "Repair only the supplied JSON target values. Return one JSON object with "
+            'the shape {"repairs":[{"target_path":"exact supplied path","value":...}]}. '
+            "Do not return the complete onboarding result. Do not change a path that was "
+            "not supplied. Preserve valid paper IDs and use only allowed paper IDs. "
+            f"Write explanatory text in {request.language}."
+        )
+        user_payload = {
+            "request": {"domain": plan.normalized_domain, "language": request.language},
+            "repair_issues": [issue.model_dump(mode="json") for issue in issues],
+            "current_targets": current_targets,
+            "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
+        }
         try:
-            output = self._normalize(payload, request, profile, plan, papers)
-        except GenerationError as error:
-            error.stats = stats
-            raise
+            payload, stats = invoke_json(
+                self.repair_model,
+                system_prompt=system_prompt,
+                user_prompt=json.dumps(user_payload, ensure_ascii=False),
+                timeout_seconds=self.config.repair_timeout_seconds,
+                on_delta=on_delta,
+                stream_stage="repair",
+            )
+        except StructuredLLMError as error:
+            raise GenerationError(str(error), stats=error.stats) from error
+        try:
+            repairs = payload.get("repairs")
+            if isinstance(repairs, list):
+                output = apply_repair_values(
+                    previous_output,
+                    [item for item in repairs if isinstance(item, dict)],
+                    target_paths,
+                )
+            else:
+                # Backward compatibility for custom repair models that still
+                # return a complete onboarding object.
+                output = self._normalize(
+                    payload,
+                    request,
+                    previous_output.learner_profile,
+                    plan,
+                    papers,
+                )
+        except (GenerationError, ValidationError, ValueError, TypeError) as error:
+            if isinstance(error, GenerationError):
+                error.stats = stats
+                raise
+            raise GenerationError(
+                f"targeted repair patch failed validation: {error}",
+                stats=stats,
+            ) from error
         return GenerationResult(output=output, stats=stats)
 
     def _call_model(

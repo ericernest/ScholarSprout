@@ -70,6 +70,46 @@ def apply_targeted_changes(
     return DomainOnboardingOutput.model_validate(merged)
 
 
+def target_values(
+    output: DomainOnboardingOutput,
+    target_paths: list[str],
+) -> dict[str, Any]:
+    """Return only the requested subtrees for a compact repair prompt."""
+
+    source = output.model_dump(mode="json")
+    values: dict[str, Any] = {}
+    for target in target_paths:
+        tokens = _path_tokens(_normalize_target(target))
+        try:
+            values[target] = deepcopy(_get_path(source, tokens))
+        except (IndexError, KeyError, TypeError):
+            continue
+    return values
+
+
+def apply_repair_values(
+    before: DomainOnboardingOutput,
+    repairs: list[dict[str, Any]],
+    allowed_targets: list[str],
+) -> DomainOnboardingOutput:
+    """Apply an allow-listed set of exact path/value patches."""
+
+    merged = before.model_dump(mode="json")
+    allowed = {_normalize_target(path) for path in allowed_targets}
+    for repair in repairs:
+        target = _normalize_target(str(repair.get("target_path") or ""))
+        if target not in allowed or "value" not in repair:
+            continue
+        tokens = _path_tokens(target)
+        if not tokens:
+            continue
+        try:
+            _set_path(merged, tokens, deepcopy(repair["value"]))
+        except (IndexError, KeyError, TypeError):
+            continue
+    return DomainOnboardingOutput.model_validate(merged)
+
+
 def _path_tokens(path: str) -> list[str | int]:
     if path == "$":
         return []

@@ -129,6 +129,80 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
 
         self.assertTrue(any("multi agent" in term for term in terms), terms)
 
+    def test_chinese_only_fallback_plan_still_produces_survey_queries(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="具身智能",
+            translated_domain="具身智能",
+            expanded_terms=["具身智能"],
+            perspectives=[
+                ResearchPerspective(name="基础", description="基础", questions=[]),
+                ResearchPerspective(name="方法", description="方法", questions=[]),
+                ResearchPerspective(name="评测", description="评测", questions=[]),
+            ],
+            search_queries=["具身智能"],
+            expected_subdirections=["理论与基础", "核心方法", "评测与前沿"],
+            planning_mode="fallback",
+        )
+
+        queries = self.policy.queries(plan)
+
+        self.assertTrue(queries)
+        self.assertIn('"具身智能" survey', queries[0].query)
+
+    def test_chinese_only_domain_discovers_repeated_english_title_terms(self) -> None:
+        plan = DomainResearchPlan(
+            normalized_domain="具身智能",
+            translated_domain="具身智能",
+            perspectives=[
+                ResearchPerspective(name="基础", description="基础", questions=[]),
+                ResearchPerspective(name="方法", description="方法", questions=[]),
+                ResearchPerspective(name="评测", description="评测", questions=[]),
+            ],
+            search_queries=["具身智能"],
+            expected_subdirections=["理论与基础", "核心方法", "评测与前沿"],
+        )
+        papers = [
+            candidate(
+                "survey-a",
+                "A Comprehensive Survey on Embodied AI",
+                year=2025,
+                citations=20,
+                abstract="Embodied AI connects perception planning and robot action.",
+            ),
+            candidate(
+                "survey-b",
+                "Embodied AI with Foundation Models: A Systematic Review",
+                year=2025,
+                citations=10,
+                abstract="Embodied AI foundation models support robot action.",
+            ),
+        ]
+
+        terms = self.policy.discover_terms(plan, papers)
+
+        self.assertTrue(any("embodied ai" in term for term in terms), terms)
+
+    def test_verified_evidence_survey_can_be_revalidated_for_recommendation(self) -> None:
+        papers = [
+            candidate(
+                "survey",
+                "A Comprehensive Survey on Embodied AI",
+                year=2025,
+                citations=20,
+                abstract="Embodied AI connects perception planning and robot action.",
+            ),
+            candidate(
+                "method",
+                "An Embodied Agent Method",
+                year=2025,
+                citations=5,
+            ),
+        ]
+
+        surveys = self.policy.evidence_survey_candidates(papers)
+
+        self.assertEqual([paper.paper_id for paper in surveys], ["survey"])
+
     def test_recent_surveys_are_visible_before_older_influential_surveys(self) -> None:
         surveys, candidate_count = self.policy.select_surveys(
             [

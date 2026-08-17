@@ -740,6 +740,8 @@ class DevelopmentStage(OnboardingModel):
     related_problem_ids: list[str] = Field(default_factory=list)
     related_paper_ids: list[str] = Field(default_factory=list)
     prerequisite_ids: list[str] = Field(default_factory=list)
+    generation_status: Literal["generated", "degraded"] = "generated"
+    generation_error: str = ""
 
     @field_validator("core_concepts", mode="before")
     @classmethod
@@ -1238,6 +1240,8 @@ class ModelCallStats(OnboardingModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     usage_reported: bool = False
+    degraded_sections: list[str] = Field(default_factory=list)
+    failure_reasons: list[str] = Field(default_factory=list)
 
 
 class PlanningResult(OnboardingModel):

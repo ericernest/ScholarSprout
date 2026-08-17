@@ -117,6 +117,76 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(stats.model_calls, 4)
         self.assertEqual(len(payload["development_stages"][0]["breakthroughs"]), 1)
 
+    def test_staged_development_keeps_other_stages_when_one_stage_fails(self) -> None:
+        config = DomainOnboardingConfig(
+            generation_max_attempts=1,
+            generation_retry_backoff_seconds=0,
+        )
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        paper_ids = [paper.paper_id for paper in ranked]
+        base = make_generation_payload(paper_ids)
+
+        class OneStageFailsModel:
+            def chat(self, **kwargs):
+                system = kwargs["messages"][0]["content"]
+                user = json.loads(kwargs["messages"][1]["content"])
+                if "foundation block" in system:
+                    payload = {
+                        "domain": base["domain"],
+                        "text": base["text"],
+                        "prerequisites": base["prerequisites"],
+                    }
+                else:
+                    sequence = int(user["stage_research_plan"]["sequence"])
+                    if sequence == 2:
+                        return {"choices": [{"message": {"content": "not json"}}]}
+                    stage = json.loads(
+                        json.dumps(base["development_stages"][sequence - 1])
+                    )
+                    payload = {"development_stage": stage}
+                return {
+                    "choices": [{"message": {"content": json.dumps(payload)}}],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                }
+
+        plan = make_plan()
+        plan.development_stage_plans = [
+            DevelopmentStageResearchPlan(
+                stage_id=f"researched-{index}",
+                sequence=index,
+                name=f"研究阶段 {index}",
+                period=f"20{index}0-20{index}3",
+                focus=f"阶段 {index} 重点",
+                transition_from_previous="" if index == 1 else "方法演进",
+                search_queries=[f"stage {index}"],
+                selected_paper_ids=[paper_ids[index - 1]],
+            )
+            for index in range(1, 4)
+        ]
+
+        payload, stats = StructuredOnboardingGenerator(
+            OneStageFailsModel(), config
+        )._call_staged_development(
+            DomainOnboardingRequest(query="RAG"), plan, ranked, None
+        )
+
+        self.assertEqual(len(payload["development_stages"]), 3)
+        degraded = payload["development_stages"][1]
+        self.assertEqual(degraded["stage_id"], "researched-2")
+        self.assertEqual(degraded["summary"], "阶段 2 重点")
+        self.assertEqual(degraded["related_paper_ids"], [paper_ids[1]])
+        self.assertEqual(
+            stats.degraded_sections,
+            ["development_stage:researched-2"],
+        )
+        self.assertTrue(stats.failure_reasons)
+
     def test_development_stage_planner_creates_chronological_search_contract(self) -> None:
         model = FakeJSONModel(
             [
@@ -1196,6 +1266,90 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(repair_result.action, "llm_targeted_repair")
         self.assertEqual(repair_result.record.actions[-1].status, "skipped")
         self.assertIn("repair_issues", model.calls[-1]["messages"][1]["content"])
+
+    def test_targeted_repair_accepts_compact_exact_path_patch(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = self._ranked()
+        output = self._invalid_output()
+        original = output.evidence_claims[0].claim
+        replacement = "该论文摘要明确说明检索步骤用于为生成提供外部证据。"
+        issue = QualityIssue(
+            issue_type="unsupported_claim",
+            severity="error",
+            hard_gate=True,
+            target_path="evidence_claims[0].claim",
+            message="claim needs stronger grounding",
+            recommended_action="rewrite claim",
+        )
+        model = FakeJSONModel(
+            [
+                {
+                    "repairs": [
+                        {
+                            "target_path": "evidence_claims[0].claim",
+                            "value": replacement,
+                        },
+                        {
+                            "target_path": "domain",
+                            "value": "must not change",
+                        },
+                    ]
+                }
+            ]
+        )
+
+        result = StructuredOnboardingGenerator(model, config).repair(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+            output,
+            [issue],
+        )
+
+        self.assertNotEqual(original, replacement)
+        self.assertEqual(result.output.evidence_claims[0].claim, replacement)
+        self.assertEqual(result.output.domain, output.domain)
+        prompt = json.loads(model.calls[-1]["messages"][1]["content"])
+        self.assertNotIn("previous_output", prompt)
+        self.assertEqual(
+            list(prompt["current_targets"]),
+            ["evidence_claims[0].claim"],
+        )
+
+    def test_repair_planner_caps_llm_work_to_highest_priority_issues(self) -> None:
+        issues = [
+            QualityIssue(
+                issue_type="missing_evidence",
+                severity="warning",
+                target_path=f"current_landscape.problem_details[{index}]",
+                message="missing",
+                recommended_action="repair",
+            )
+            for index in range(5)
+        ]
+        issues.append(
+            QualityIssue(
+                issue_type="unsupported_claim",
+                severity="error",
+                hard_gate=True,
+                target_path="evidence_claims[0].claim",
+                message="unsupported",
+                recommended_action="repair",
+            )
+        )
+        quality = CompositeQualityEvaluator(DomainOnboardingConfig()).evaluate(
+            self._invalid_output(), self._ranked()
+        ).model_copy(update={"issues": issues})
+
+        plan = RepairPlanner(max_llm_issues=2).plan(
+            quality,
+            max_content_repairs=1,
+        )
+        action = next(item for item in plan.actions if item.action_type == "llm")
+
+        self.assertEqual(len(action.issue_ids), 2)
+        self.assertIn("evidence_claims[0].claim", action.target_paths)
 
     def test_failed_llm_repair_is_recorded_with_error(self) -> None:
         config = DomainOnboardingConfig()

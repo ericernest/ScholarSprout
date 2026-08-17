@@ -77,6 +77,31 @@ class SurveyRecommendationPolicy:
             : self.config.recommendation_query_candidate_limit
         ]
 
+    def evidence_survey_candidates(
+        self,
+        candidates: list[PaperCandidate],
+    ) -> list[PaperCandidate]:
+        """Return independently verifiable surveys from the evidence pool.
+
+        Evidence and recommendations remain separate usages, but a stable paper may
+        be promoted to ``both`` after the dedicated recommendation searches have
+        failed.  This prevents a query-construction degradation from hiding a
+        survey that was already retrieved and can be verified from its metadata.
+        """
+
+        surveys: list[PaperCandidate] = []
+        seen: set[str] = set()
+        for paper in candidates:
+            if paper.paper_id in seen or not self._is_survey_candidate(paper):
+                continue
+            if not (paper.doi or paper.arxiv_id or paper.url.startswith(("http://", "https://"))):
+                continue
+            if not paper.title.strip() or not (paper.abstract or "").strip():
+                continue
+            seen.add(paper.paper_id)
+            surveys.append(paper.model_copy(deep=True))
+        return surveys
+
     def discovered_queries(
         self,
         plan: DomainResearchPlan,
@@ -122,7 +147,11 @@ class SurveyRecommendationPolicy:
                         words = tokens[start : start + size]
                         if words[0] in self._term_stopwords or words[-1] in self._term_stopwords:
                             continue
-                        if not domain_tokens.intersection(words):
+                        # A Chinese-only fallback plan has no English anchor.  The
+                        # surrounding papers have already passed domain ranking, so
+                        # repeated title/abstract phrases are a safer bootstrap than
+                        # returning no recommendation query at all.
+                        if domain_tokens and not domain_tokens.intersection(words):
                             continue
                         if sum(word not in self._term_stopwords for word in words) < 2:
                             continue
@@ -395,7 +424,14 @@ class SurveyRecommendationPolicy:
     @staticmethod
     def _usable_term(term: str) -> bool:
         value = term.strip()
-        return bool(value and re.search(r"[A-Za-z]{2}", value) and len(value) <= 100)
+        return bool(
+            value
+            and len(value) <= 100
+            and (
+                re.search(r"[A-Za-z]{2}", value)
+                or re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", value)
+            )
+        )
 
     @staticmethod
     def _query_source(query: PaperSearchQuery) -> str:

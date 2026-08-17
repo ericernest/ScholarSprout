@@ -15,8 +15,13 @@ class RepairPlanner:
         "unsupported_claim",
     }
 
-    def __init__(self, llm_issue_types: list[str] | set[str] | None = None) -> None:
+    def __init__(
+        self,
+        llm_issue_types: list[str] | set[str] | None = None,
+        max_llm_issues: int = 6,
+    ) -> None:
         self.llm_issue_types = set(llm_issue_types or self.default_llm_issue_types)
+        self.max_llm_issues = max(1, int(max_llm_issues))
 
     def plan(self, quality: ContentQuality, *, max_content_repairs: int) -> RepairPlan:
         if not quality.issues:
@@ -26,6 +31,14 @@ class RepairPlanner:
         llm_issues = [
             issue for issue in quality.issues if issue.issue_type in self.llm_issue_types
         ]
+        severity_order = {"critical": 0, "error": 1, "warning": 2, "info": 3}
+        llm_issues.sort(
+            key=lambda issue: (
+                not issue.hard_gate,
+                severity_order.get(issue.severity, 4),
+            )
+        )
+        llm_issues = llm_issues[: self.max_llm_issues]
         if llm_issues:
             action = self._action("llm", "targeted_content_repair", llm_issues)
             if max_content_repairs == 0:
