@@ -583,15 +583,15 @@ select option { color: #07120f; }
 .reading-map-header-actions { display: flex; flex: none; align-items: center; gap: .45rem; }
 .reading-map-layout {
   display: grid; grid-template-columns: minmax(0,1fr) 300px;
-  height: min(52vh,620px); min-height: 360px; overflow: hidden;
+  height: clamp(620px,72vh,900px); min-height: 620px; overflow: hidden;
 }
 .reading-map-shell { position: relative; min-height: 0; border-right: 1px solid var(--line); overflow: hidden; }
 .reading-map-detail { display: grid; align-content: start; gap: .65rem; padding: 1rem; overflow-y: auto; }
 .reading-map-detail h3 { margin: .2rem 0; }
 .reading-map-grid {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(280px,360px); gap: .85rem;
+  display: grid; grid-auto-flow: row; grid-template-columns: minmax(0,1fr); gap: 1rem;
   height: 100%; padding: 1rem; overflow: auto; align-items: start;
-  scroll-snap-type: x proximity;
+  align-content: start; scroll-snap-type: y proximity;
 }
 .reading-map-grid.is-survey-vertical {
   grid-auto-flow: row;
@@ -602,7 +602,7 @@ select option { color: #07120f; }
 }
 .reading-map-grid.is-survey-vertical .reading-map-column { width: 100%; }
 .reading-map-column {
-  display: grid; align-content: start; gap: .75rem; min-width: 0; padding-right: .1rem; scroll-snap-align: start;
+  display: grid; align-content: start; gap: .75rem; min-width: 0; padding: .1rem 0 1rem; scroll-snap-align: start;
 }
 .reading-map-column h3 {
   position: sticky; top: 0; z-index: 1; margin: 0; padding: .1rem 0 .35rem;

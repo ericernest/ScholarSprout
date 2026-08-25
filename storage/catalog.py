@@ -222,6 +222,21 @@ class ResearchCatalog:
                    FROM messages WHERE conversation_id = ? ORDER BY sequence_number""",
                 (conversation_id,),
             ).fetchall()
+            workspace = connection.execute(
+                """SELECT artifact.artifact_kind, link.artifact_id
+                   FROM conversation_artifacts link
+                   JOIN work_artifacts artifact ON artifact.artifact_id = link.artifact_id
+                   WHERE link.conversation_id = ?
+                   ORDER BY link.linked_at DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
+            reading = connection.execute(
+                """SELECT reading_session_id, paper_id
+                   FROM paper_reading_sessions
+                   WHERE conversation_id = ?
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
         return {
             "conversation_id": conversation["conversation_id"],
             "title": conversation["title"],
@@ -229,6 +244,10 @@ class ResearchCatalog:
             "parent_conversation_id": conversation["parent_conversation_id"],
             "created_at": conversation["created_at"],
             "updated_at": conversation["last_active_at"],
+            "workspace_kind": workspace["artifact_kind"] if workspace else "chat",
+            "workspace_artifact_id": workspace["artifact_id"] if workspace else "",
+            "reading_session_id": reading["reading_session_id"] if reading else "",
+            "paper_id": reading["paper_id"] if reading else "",
             "messages": [dict(row) for row in messages],
         }
 

@@ -58,6 +58,11 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(papers[0]["reading_status"], "reading")
         self.assertEqual(papers[0]["library_note"], "重点看方法")
 
+        detail = self.catalog.get_conversation(self.conversation_id)
+        self.assertEqual(detail["workspace_kind"], "paper_reading")
+        self.assertEqual(detail["reading_session_id"], self.reading_id)
+        self.assertEqual(detail["paper_id"], self.paper_id)
+
     def test_paper_cards_normalize_structured_text_and_author_objects(self) -> None:
         malformed_id = self.store.upsert_paper(
             paper_id="paper-malformed-card",

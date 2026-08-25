@@ -17,22 +17,24 @@ const embeddingApiKeyState = document.querySelector("#embedding-api-key-state");
 const mineruApiKeyState = document.querySelector("#mineru-api-key-state");
 const guideTitle = document.querySelector("#guide-title");
 
-loadConfig();
+if (form) loadConfig();
 
-document.querySelector("#toggle-secret").dataset.secretTarget = "api-key";
+const primarySecretToggle = document.querySelector("#toggle-secret");
+if (primarySecretToggle) primarySecretToggle.dataset.secretTarget = "api-key";
 document.querySelectorAll("#toggle-secret, .toggle-secret").forEach((button) => {
   button.addEventListener("click", (event) => {
     const input = document.getElementById(event.currentTarget.dataset.secretTarget);
+    if (!input) return;
     const visible = input.type === "text";
     input.type = visible ? "password" : "text";
     event.currentTarget.textContent = visible ? "显示" : "隐藏";
   });
 });
 
-form.addEventListener("submit", async (event) => {
+form?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  saveButton.disabled = true;
-  saveButton.textContent = "正在保存…";
+  if (saveButton) saveButton.disabled = true;
+  setText(saveButton, "正在保存…");
   showMessage("", "");
   const payload = {
     base_url: baseUrl.value.trim(),
@@ -69,8 +71,8 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     showMessage(error.message || "保存失败，请检查配置。", "error");
   } finally {
-    saveButton.disabled = false;
-    saveButton.textContent = "保存配置";
+    if (saveButton) saveButton.disabled = false;
+    setText(saveButton, "保存配置");
   }
 });
 
@@ -81,37 +83,46 @@ async function loadConfig() {
     if (!response.ok) throw new Error(readError(result));
     applyConfig(result);
   } catch (error) {
-    setupBadge.textContent = "读取失败";
+    setText(setupBadge, "读取失败");
     showMessage(error.message || "无法读取配置。", "error");
   }
 }
 
 function applyConfig(config) {
-  baseUrl.value = config.client.base_url || "";
-  modelName.value = config.client.model_name || "";
-  embeddingModelName.value = config.embedding?.model_name || "qwen3-embedding";
-  embeddingBaseUrl.value = config.embedding?.base_url || "";
-  mineruBaseUrl.value = config.mineru?.base_url || "";
-  dataDir.value = config.storage.data_dir || "~/.novicesynapse";
-  apiKeyState.textContent = config.client.api_key_configured
+  setValue(baseUrl, config.client?.base_url || "");
+  setValue(modelName, config.client?.model_name || "");
+  setValue(embeddingModelName, config.embedding?.model_name || "qwen3-embedding");
+  setValue(embeddingBaseUrl, config.embedding?.base_url || "");
+  setValue(mineruBaseUrl, config.mineru?.base_url || "");
+  setValue(dataDir, config.storage?.data_dir || "~/.novicesynapse");
+  setText(apiKeyState, config.client?.api_key_configured
     ? "API Key 已配置；留空保存会保留原密钥。"
-    : "API Key 尚未配置，请输入后保存。";
-  embeddingApiKeyState.textContent = config.embedding?.uses_client_api_key
+    : "API Key 尚未配置，请输入后保存。");
+  setText(embeddingApiKeyState, config.embedding?.uses_client_api_key
     ? "当前复用基础模型 API Key；输入后可改用独立 Key。"
-    : "已配置独立 Key；留空保存会改为复用基础模型 API Key。";
-  mineruApiKeyState.textContent = config.mineru?.api_key_configured
+    : "已配置独立 Key；留空保存会改为复用基础模型 API Key。");
+  setText(mineruApiKeyState, config.mineru?.api_key_configured
     ? "MinerU API Key 已配置；留空保存会关闭 MinerU。"
-    : "尚未配置；MinerU 当前不启用。";
-  setupBadge.textContent = config.setup_complete ? "已配置" : "首次配置";
-  guideTitle.textContent = config.setup_complete ? "随时调整配置" : "三步完成配置";
-  if (config.storage.environment_override) {
-    dataDirHelp.textContent = `环境变量当前覆盖此项，实际目录为：${config.storage.effective_data_dir}`;
+    : "尚未配置；MinerU 当前不启用。");
+  setText(setupBadge, config.setup_complete ? "已配置" : "首次配置");
+  setText(guideTitle, config.setup_complete ? "随时调整配置" : "三步完成配置");
+  if (config.storage?.environment_override) {
+    setText(dataDirHelp, `环境变量当前覆盖此项，实际目录为：${config.storage.effective_data_dir}`);
   } else {
-    dataDirHelp.textContent = `当前数据目录：${config.storage.effective_data_dir}；修改后需重启。`;
+    setText(dataDirHelp, `当前数据目录：${config.storage?.effective_data_dir || ""}；修改后需重启。`);
   }
 }
 
+function setValue(node, value) {
+  if (node) node.value = value;
+}
+
+function setText(node, value) {
+  if (node) node.textContent = value;
+}
+
 function showMessage(text, type) {
+  if (!message) return;
   message.hidden = !text;
   message.textContent = text;
   message.className = `message ${type}`.trim();

@@ -44,6 +44,7 @@ const state = {
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
   paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "normal", paperNoteEditor: null,
+  historyLoadedFor: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1106,7 +1107,6 @@ function renderSections() {
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
     meta.append(create("span", "", `Section ${String(index + 1).padStart(2, "0")}`));
-    if (section.start_page) meta.append(create("span", "", `Page ${section.start_page}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
 
     const body = create("div", "paper-section-body");
@@ -1133,59 +1133,22 @@ function renderSections() {
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
 
-function sectionSummaryTextLegacy(section, indexed = {}, guide = null) {
-  const pages = section.start_page
-    ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
-    : "";
-  const chunks = indexed.text_chunks || [];
-  if (guide) return `${pages}下方是面向科研新手的章节导读。`;
-  if (!chunks.length) return `${pages}此处是 Agent 索引锚点，请以 PDF 原文为准。`;
-  return `${pages}下方仅展示供 Agent 检索的章节摘要片段，不作为论文版面还原。`;
-}
-
-function sectionGuideLegacy(sectionId) {
-  const guides = state.readingMap?.section_guides || state.paper?.reading_map?.section_guides || [];
-  return guides.find((item) => item.section_id === sectionId) || null;
-}
-
-function renderSectionGuideLegacy(guide, indexed = {}) {
-  const wrap = create("div", "section-guide");
-  if (guide) {
-    const cards = Array.isArray(guide.cards) && guide.cards.length ? guide.cards : legacyGuideCards(guide);
-    cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
-    return wrap;
-  }
-
-  const chunks = (indexed.text_chunks || []).slice(0, 3);
-  if (!chunks.length) {
-    wrap.append(create("p", "index-chunk", "章节导读正在生成中。你可以先在 PDF 原文中阅读、划选并提问。"));
-    return wrap;
-  }
-  chunks.forEach((chunk) => {
-    wrap.append(create("p", "index-chunk", truncate(chunk.text || "", 260)));
-  });
-  return wrap;
-}
-
 function sectionSummaryText(section, indexed = {}, guide = null) {
-  const pages = section.start_page
-    ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
-    : "";
   if (isReferenceSection(section)) {
-    return `${pages}参考文献属于检索型补充内容，因此不单独生成导读，请直接查看 PDF 原文。`;
+    return "参考文献属于检索型补充内容，因此不单独生成导读，请直接查看 PDF 原文。";
   }
   if (!isReadingMapDisplayable()) {
     return isReadingMapFailed()
-      ? `${pages}智能索引生成失败，请点击“重新生成”。`
+      ? "智能索引生成失败，请点击“重新生成”。"
       : isReadingMapTimedOut()
-        ? `${pages}智能索引生成已超时，可以点击“重新生成”。`
-      : `${pages}智能索引正在生成中，完成前不展示临时 fallback 内容。`;
+        ? "智能索引生成已超时，可以点击“重新生成”。"
+      : "智能索引正在生成中，完成前不展示临时 fallback 内容。";
   }
   return guide
-    ? `${pages}下方是面向科研新手的章节导读。`
+    ? "下方是面向科研新手的章节导读。"
     : strHasContent(section.content)
-      ? `${pages}系统根据该小节与论文主线的关联度，将其归为补充阅读，因此未单独生成导读。该小节暂无独立导读，可查看 PDF 原文或直接分析本节。`
-      : `${pages}该条目主要承担章节组织作用，因此未单独生成导读。可查看子章节、PDF 原文或直接分析本节。`;
+      ? "系统根据该小节与论文主线的关联度，将其归为补充阅读，因此未单独生成导读，可查看 PDF 原文或直接分析本节。"
+      : "该条目主要承担章节组织作用，因此未单独生成导读，可查看子章节、PDF 原文或直接分析本节。";
 }
 
 function sectionGuide(sectionId) {
@@ -2099,6 +2062,38 @@ function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   target.scrollTop = target.scrollHeight;
 }
 
+function appendReadingWelcome(target = $("analysis-feed")) {
+  const card = create("article", "welcome-card");
+  card.append(create("span", "assistant-avatar", "N"));
+  const body = create("div");
+  body.append(create("strong", "", "继续当前论文精读"));
+  body.append(create("p", "", "下面已恢复本次精读的提问与分析记录；你可以继续针对当前章节提问。"));
+  card.append(body);
+  target.append(card);
+}
+
+async function restoreReadingConversationHistory() {
+  if (!state.sessionId || state.historyLoadedFor === state.sessionId) return;
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(state.sessionId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const conversation = await response.json();
+    const history = (conversation.messages || []).filter((message) => ["user", "assistant"].includes(message.role));
+    const feed = $("analysis-feed");
+    if (!feed) return;
+    feed.replaceChildren();
+    appendReadingWelcome(feed);
+    history.forEach((message) => {
+      if (message.role === "user") appendUserQuestion(message.content, feed);
+      else appendAnalysis(message.content, { restored: true }, feed);
+    });
+    feed.scrollTop = 0;
+    state.historyLoadedFor = state.sessionId;
+  } catch {
+    // Keep the built-in welcome card when persisted history is temporarily unavailable.
+  }
+}
+
 function renderSkillOutputs(outputs, target) {
   dedupeSkillOutputs(outputs).forEach((output) => {
     const card = create("article", "skill-output-card");
@@ -2345,6 +2340,7 @@ function structuredValueText(value) {
 }
 
 function renderMarkdown(source) {
+  source = cleanRepeatedMarkdown(source);
   let content;
   if (typeof window.renderSafeMarkdown === "function") {
     content = window.renderSafeMarkdown(source, "markdown-content");
@@ -2353,6 +2349,22 @@ function renderMarkdown(source) {
   }
   typesetResponseMath(content);
   return content;
+}
+
+function cleanRepeatedMarkdown(source) {
+  const output = [];
+  let previousText = "";
+  String(source || "").split("\n").forEach((rawLine) => {
+    let line = rawLine;
+    const dotted = line.split(/\s*·\s*/u).filter(Boolean);
+    const wasFragmented = dotted.length > 3 && dotted.every((item) => [...item.trim()].length <= 2);
+    if (wasFragmented) line = dotted.join("");
+    const comparable = comparableMapText(line);
+    if (comparable && (comparable === previousText || (wasFragmented && previousText.includes(comparable)))) return;
+    output.push(line);
+    if (comparable) previousText = comparable;
+  });
+  return output.join("\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 function typesetResponseMath(root) {
@@ -2607,7 +2619,7 @@ function updateSessionBadge() {
   $("session-state-badge").textContent = labels[state.sessionState] || (state.sessionId ? "已创建" : "未开始");
 }
 
-function captureSelection() {
+function captureSelection(event) {
   const selection = window.getSelection();
   const text = selection?.toString().trim();
   if (!text || text.length < 2) {
@@ -2630,17 +2642,22 @@ function captureSelection() {
   else if (state.selectedPage) state.currentSection = sectionForPage(state.selectedPage)?.section_id || state.currentSection;
   renderOutline();
   syncComposerContext();
-  const rect = selection.getRangeAt(0).getBoundingClientRect();
   const toolbar = $("selection-toolbar");
   toolbar.hidden = false;
   const toolbarWidth = toolbar.offsetWidth || 430;
+  const toolbarHeight = toolbar.offsetHeight || 42;
   const margin = 10;
-  const right = rect.right + margin;
-  const left = right + toolbarWidth <= window.innerWidth - 8
-    ? right
-    : rect.left - toolbarWidth - margin;
-  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, left))}px`;
-  toolbar.style.top = `${Math.max(72, Math.min(window.innerHeight - toolbar.offsetHeight - 8, rect.top + (rect.height - toolbar.offsetHeight) / 2))}px`;
+  const readerBounds = (pdfPage || structured)?.closest(".reader-panel")?.getBoundingClientRect();
+  const minX = Math.max(8, (readerBounds?.left || 0) + 8);
+  const maxX = Math.min(window.innerWidth - 8, (readerBounds?.right || window.innerWidth) - 8);
+  const rangeRect = selection.getRangeAt(0).getBoundingClientRect();
+  const pointerX = Number.isFinite(event?.clientX) ? event.clientX : rangeRect.right;
+  const pointerY = Number.isFinite(event?.clientY) ? event.clientY : rangeRect.top;
+  const rightX = pointerX + margin;
+  const leftX = pointerX - toolbarWidth - margin;
+  const targetX = rightX + toolbarWidth <= maxX ? rightX : leftX;
+  toolbar.style.left = `${Math.max(minX, Math.min(maxX - toolbarWidth, targetX))}px`;
+  toolbar.style.top = `${Math.max(72, Math.min(window.innerHeight - toolbarHeight - 8, pointerY - toolbarHeight / 2))}px`;
 }
 
 async function handleSelectionAction(event) {
@@ -3322,9 +3339,11 @@ function surveyReadingMapGroups(map) {
 }
 
 function renderReadingMapCard(item, groupKey, groupIndex, index) {
-  const title = readingMapCardTitle(item, groupKey);
-  const summary = readingMapCardSummary(item, groupKey);
-  const why = readingMapCardWhy(item, groupKey, summary);
+  const title = truncate(readingMapCardTitle(item, groupKey), 96);
+  const summaryCandidate = readingMapCardSummary(item, groupKey);
+  const summary = sameMapText(summaryCandidate, title) ? "" : summaryCandidate;
+  const whyCandidate = readingMapCardWhy(item, groupKey, summary);
+  const why = sameMapText(whyCandidate, title) || sameMapText(whyCandidate, summary) ? "" : whyCandidate;
   const sources = Array.isArray(item.source_sections) ? item.source_sections : [];
   const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
   const card = create("article", `reading-map-card reading-map-${groupKey}`);
@@ -3333,7 +3352,10 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   if (why && why !== summary) card.append(create("p", "reading-map-why", why));
 
   if (["experimental_support", "datasets", "technical_routes", "representative_methods"].includes(groupKey)) {
-    const meta = [...(item.datasets || []), ...(item.metrics || []), ...(item.figures_or_tables || []), ...(item.strengths || []), ...(item.mentioned_terms || []), item.year, item.url].filter(Boolean);
+    const meta = [
+      ...mapArray(item.datasets), ...mapArray(item.metrics), ...mapArray(item.figures_or_tables),
+      ...mapArray(item.strengths), ...mapArray(item.mentioned_terms), item.year, item.url,
+    ].map(readableInlineText).filter(Boolean);
     if (meta.length) card.append(create("small", "", meta.slice(0, 8).join(" · ")));
   }
 
@@ -3424,12 +3446,50 @@ function firstUsefulField(item, keys) {
 function readableInlineText(value) {
   if (value == null || value === "") return "";
   if (Array.isArray(value)) {
-    return value.map(readableInlineText).filter(Boolean).slice(0, 4).join(" · ");
+    const items = value.map(readableInlineText).filter(Boolean);
+    if (items.length > 3 && items.every((item) => [...item].length <= 2)) return cleanMapText(items.join(""));
+    return cleanMapText([...new Set(items)].slice(0, 4).join(" · "));
   }
   if (typeof value === "object") {
-    return Object.values(value).map(readableInlineText).filter(Boolean).slice(0, 3).join(" · ");
+    return cleanMapText([...new Set(Object.values(value).map(readableInlineText).filter(Boolean))].slice(0, 3).join(" · "));
   }
-  return String(value).trim();
+  return cleanMapText(value);
+}
+
+function mapArray(value) {
+  if (value == null || value === "") return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function cleanMapText(value) {
+  let text = String(value || "").trim();
+  text = text.replace(/^\*{1,2}([\s\S]*?)\*{1,2}$/u, "$1").trim();
+  const dotted = text.split(/\s*·\s*/u).filter(Boolean);
+  if (dotted.length > 3 && dotted.every((item) => [...item].length <= 2)) text = dotted.join("");
+  const lines = text.split(/\n+/u).map((line) => line.trim()).filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  lines.forEach((line) => {
+    const key = comparableMapText(line);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      unique.push(line);
+    }
+  });
+  return unique.join("\n");
+}
+
+function comparableMapText(value) {
+  return String(value || "")
+    .replace(/\*{1,2}/gu, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .toLowerCase();
+}
+
+function sameMapText(left, right) {
+  const a = comparableMapText(left);
+  const b = comparableMapText(right);
+  return Boolean(a && b && (a === b || (a.length > 24 && b.length > 24 && (a.includes(b) || b.includes(a)))));
 }
 
 function isLowValueMapText(text) {
@@ -3561,6 +3621,7 @@ async function restoreLocalState() {
       startParsePolling();
       syncReturnChatLink();
     }
+    if (state.sessionId) await restoreReadingConversationHistory();
   } catch {
     localStorage.removeItem(STORAGE.session);
     if (!state.paperId) localStorage.removeItem(STORAGE.paper);

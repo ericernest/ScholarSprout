@@ -645,7 +645,7 @@ function renderPapers(data) {
   `).join("");
   const papers = data.papers
     .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
-    .sort((left, right) => Number(right.final_score || 0) - Number(left.final_score || 0));
+    .sort((left, right) => Number(right.citation_count || -1) - Number(left.citation_count || -1));
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length
@@ -660,7 +660,7 @@ function renderPapers(data) {
           <h3>${escapeHtml(paper.title)}</h3>
           <small>${escapeHtml((paper.authors || []).slice(0, 4).join("、") || "作者未知")} · ${escapeHtml(paper.year || "年份未知")}</small>
         </span>
-        <span class="paper-score"><b>${formatPercentScore(paper.final_score)}<small>/100</small></b><span>综合推荐度</span></span>
+        <span class="paper-score"><b>${paper.citation_count == null ? "—" : escapeHtml(Number(paper.citation_count).toLocaleString("zh-CN"))}</b><span>引用数</span></span>
       </button>
     `).join("")
     : emptyCopy("当前筛选下没有论文。");
@@ -829,22 +829,6 @@ function showDetail(kind, id) {
 function renderPaperDetail(paper) {
   const guidance = paperGuidance(paper);
   const contribution = paper.contribution || guidance.contribution;
-  const scoreBreakdown = paper.score_breakdown;
-  const explainableScore = ["paper-score-v2", "paper-score-v3"].includes(paper.score_version)
-    && scoreBreakdown
-    && typeof scoreBreakdown === "object";
-  const scoreRows = explainableScore
-    ? [
-        ["综合推荐度", paper.final_score],
-        ["主题相关 · 65%", scoreBreakdown.topic_relevance],
-        ["检索覆盖 · 15%", scoreBreakdown.query_coverage],
-        ["时效性 · 10%", scoreBreakdown.recency],
-        ["信息完整度 · 10%", scoreBreakdown.metadata_completeness],
-      ]
-    : [["旧版综合推荐度", paper.final_score]];
-  const scoreNote = explainableScore
-    ? "总分由下列四项严格加权计算；引用数仅作元数据展示，不参与推荐度"
-    : "历史任务使用旧版评分口径；重新生成后可查看完整分项";
   const citationKnown = paper.citation_count != null
     && Number.isFinite(Number(paper.citation_count));
   const metadata = [
@@ -872,18 +856,6 @@ function renderPaperDetail(paper) {
         <p class="detail-summary">${escapeHtml((paper.authors || []).join("、") || "作者信息暂无")}</p>
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
-      <div class="detail-block">
-        <h3>推荐依据 <span class="score-note">${escapeHtml(scoreNote)}</span></h3>
-        <div class="paper-score-grid">
-          ${scoreRows.map(([label, value]) => `
-            <div class="paper-score-row">
-              <span>${escapeHtml(label)}</span>
-              <span class="mini-track"><span style="width:${formatPercentScore(value)}%"></span></span>
-              <b>${formatPercentScore(value)}</b>
-            </div>
-          `).join("")}
-        </div>
-      </div>
       <div class="detail-block">
         <h3>主要贡献</h3>
         <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>

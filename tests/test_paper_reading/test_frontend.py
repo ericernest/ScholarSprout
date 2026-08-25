@@ -192,9 +192,25 @@ class PaperReadingFrontendTests(unittest.TestCase):
                 self.assertIn(f'id="{element_id}"', html)
         self.assertIn('action: "upload_paper"', javascript)
         self.assertIn('action: "get_paper_detail"', javascript)
-        self.assertIn('window.location.href = "/app/paper-reading"', javascript)
+        self.assertIn('window.location.href = `/app/paper-reading${query}`', javascript)
         self.assertNotIn('window.location.href = "/paper-reading"', javascript)
         self.assertIn('paperModeInput.addEventListener("drop"', javascript)
+
+    def test_history_selection_toolbar_and_vertical_maps_restore_expected_ui(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        shared = (STATIC / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("restoreReadingConversationHistory", javascript)
+        self.assertIn("appendReadingWelcome(feed)", javascript)
+        self.assertIn("restorePaperReadingCard(conversation)", shared)
+        self.assertIn('placement: "prepend"', shared)
+        self.assertIn("event?.clientX", javascript)
+        self.assertIn('closest(".reader-panel")', javascript)
+        self.assertIn("grid-auto-flow: row", styles)
+        self.assertIn("height: clamp(620px,72vh,900px)", styles)
+        self.assertIn("cleanRepeatedMarkdown", javascript)
+        self.assertNotIn("原文页码：", javascript)
 
     def test_uploaded_pdf_is_served_inline_for_embedded_reader(self) -> None:
         with TemporaryDirectory() as directory:

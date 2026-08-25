@@ -124,8 +124,7 @@ function bindChatPage() {
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
-  restoreDomainOnboardingCard();
-  void restoreConversationHistory();
+  void restoreConversationHistory().finally(restoreDomainOnboardingCard);
 }
 
 async function restoreConversationHistory() {
@@ -135,11 +134,38 @@ async function restoreConversationHistory() {
     const conversation = await response.json();
     if (!Array.isArray(conversation.messages) || !conversation.messages.length) return;
     messages.replaceChildren();
+    await restorePaperReadingCard(conversation);
     conversation.messages.forEach((message) => {
+      if (message.role === "assistant" && message.mode === "domain_onboarding") return;
       if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
     });
+    if (conversation.reading_session_id) messages.scrollTop = 0;
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
+  }
+}
+
+async function restorePaperReadingCard(conversation) {
+  const paperId = String(conversation.paper_id || "").trim();
+  const readingSessionId = String(conversation.reading_session_id || "").trim();
+  if (!paperId || !readingSessionId) return;
+  try {
+    const detail = await callPaperReading({
+      action: "get_paper_detail", session_id: readingSessionId, paper_id: paperId, content: "", metadata: {},
+    });
+    appendPaperCard(detail.data?.paper, {
+      paperId,
+      sessionId: readingSessionId,
+      sourceLabel: "当前论文精读",
+      placement: "prepend",
+    });
+  } catch {
+    appendPaperCard({ title: conversation.title || "当前论文精读", parse_status: "" }, {
+      paperId,
+      sessionId: readingSessionId,
+      sourceLabel: "当前论文精读",
+      placement: "prepend",
+    });
   }
 }
 
@@ -441,11 +467,14 @@ function updateDomainOnboardingCard(taskId, snapshot, labels = null) {
     interrupted: "任务因服务重启中断，可进入工作台重试",
   };
   const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
-  item.querySelector("[data-domain-state]").textContent =
-    stateLabels[snapshot.state] || snapshot.current_stage || "处理中";
-  item.querySelector("[data-domain-progress]").textContent = `${Math.round(progress * 100)}%`;
-  item.querySelector(".domain-card-progress-fill").style.transform = `scaleX(${progress})`;
-  item.querySelector(".paper-card-kicker").textContent =
+  const stateNode = item.querySelector("[data-domain-state]");
+  const progressNode = item.querySelector("[data-domain-progress]");
+  const fillNode = item.querySelector(".domain-card-progress-fill");
+  const kickerNode = item.querySelector(".paper-card-kicker");
+  if (stateNode) stateNode.textContent = stateLabels[snapshot.state] || snapshot.current_stage || "处理中";
+  if (progressNode) progressNode.textContent = `${Math.round(progress * 100)}%`;
+  if (fillNode) fillNode.style.transform = `scaleX(${progress})`;
+  if (kickerNode) kickerNode.textContent =
     snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
   const cancel = item.querySelector(".domain-card-cancel");
   if (cancel) cancel.hidden = DOMAIN_TERMINAL_STATES.has(snapshot.state);
@@ -594,10 +623,15 @@ function appendPaperCard(paper, context) {
   updatePaperCard(card, paper, context);
   card.addEventListener("click", () => {
     localStorage.setItem("paper_reading_paper_id", context.paperId);
-    window.location.href = "/app/paper-reading";
+    if (context.sessionId) localStorage.setItem("paper_reading_session_id", context.sessionId);
+    const query = context.sessionId
+      ? `?paper_id=${encodeURIComponent(context.paperId)}&session_id=${encodeURIComponent(context.sessionId)}`
+      : "";
+    window.location.href = `/app/paper-reading${query}`;
   });
   item.appendChild(card);
-  messages.appendChild(item);
+  if (context.placement === "prepend") messages.prepend(item);
+  else messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
   return card;
 }

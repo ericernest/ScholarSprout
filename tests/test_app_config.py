@@ -129,6 +129,9 @@ class ConfigWebTests(unittest.TestCase):
         self.assertIn('id="embedding-api-key"', response.text)
         self.assertIn('id="mineru-base-url"', response.text)
         self.assertIn('id="mineru-api-key"', response.text)
+        self.assertEqual(response.text.count('class="optional-config"'), 2)
+        self.assertLess(response.text.index('id="embedding-base-url"'), response.text.index('id="embedding-api-key"'))
+        self.assertLess(response.text.index('id="embedding-api-key"'), response.text.index('id="embedding-model-name"'))
         self.assertNotIn("配置文件：", response.text)
         self.assertIn("三步完成配置", response.text)
 
