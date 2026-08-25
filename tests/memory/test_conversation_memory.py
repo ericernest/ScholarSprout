@@ -324,7 +324,9 @@ class ConversationMemoryTests(unittest.TestCase):
         messages = model.calls[0]["messages"]
         self.assertIn("用户烧烤花了130元", messages[0]["content"])
         self.assertIn("情感大模型", messages[0]["content"])
-        self.assertIn("优先调用 get_domain_onboarding_result", messages[0]["content"])
+        self.assertIn("我们为你配备了会话记忆系统", messages[0]["content"])
+        self.assertIn("调用 get_domain_onboarding_result 获取相关信息", messages[0]["content"])
+        self.assertNotIn("不要假装", messages[0]["content"])
         self.assertEqual(messages[1:], [{"role": "user", "content": "还记得吗？"}])
 
     def test_legacy_snapshot_secret_is_redacted_before_prompt_rendering(self) -> None:

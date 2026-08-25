@@ -21,6 +21,8 @@ let activeGenerationId = "";
 let selectedPaperFile = null;
 let activeDiscussion = null;
 let conversationContexts = [];
+let conversationHistoryReload = null;
+let conversationHistorySignature = "";
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -147,16 +149,43 @@ function bindChatPage() {
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
   void restoreConversationHistory().finally(restoreDomainOnboardingCard);
+  const reloadWhenEnteringChat = () => {
+    if (!isGenerating) void restoreConversationHistory();
+  };
+  window.addEventListener("pageshow", reloadWhenEnteringChat);
+  window.addEventListener("focus", reloadWhenEnteringChat);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") reloadWhenEnteringChat();
+  });
+  window.setInterval(reloadWhenEnteringChat, 2500);
 }
 
 async function restoreConversationHistory() {
+  if (conversationHistoryReload) return conversationHistoryReload;
+  conversationHistoryReload = reloadConversationHistory();
+  try {
+    await conversationHistoryReload;
+  } finally {
+    conversationHistoryReload = null;
+  }
+}
+
+async function reloadConversationHistory() {
   try {
     const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
-    conversationContexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
-    restoreDiscussionSelector();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
+    const contexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    const signature = JSON.stringify({
+      updatedAt: conversation.updated_at || "",
+      messages: history.map((message) => [message.message_id, message.created_at, message.content]),
+      contexts: contexts.map((context) => [context.kind, context.id, context.linked_at]),
+    });
+    if (signature === conversationHistorySignature) return;
+    conversationHistorySignature = signature;
+    conversationContexts = contexts;
+    restoreDiscussionSelector();
     if (!history.length && !conversationContexts.length) return;
     messages.replaceChildren();
     const timeline = [

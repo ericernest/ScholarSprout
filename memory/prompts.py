@@ -71,12 +71,12 @@ def render_memory(
 ) -> str:
     parts: list[str] = []
     if memory:
-        parts.append(_render_one("会话长期记忆", memory))
+        parts.append(_render_one("此前会话摘要", memory))
     facts = [str(item.get("text") or "").strip() for item in active_facts or []]
     facts = [item for item in facts if item]
     if facts:
         parts.append(
-            "[用户在本会话中确认的事实]\n- " + "\n- ".join(facts)
+            "[此前会话中确认的事实]\n- " + "\n- ".join(facts)
         )
     for index, linked in enumerate(linked_forks, start=1):
         label = str(linked.get("fork_context") or linked.get("conversation_id") or index)
