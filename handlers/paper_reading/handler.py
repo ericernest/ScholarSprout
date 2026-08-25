@@ -24,7 +24,7 @@ from skills.models import CapabilitySelection
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
-from handlers.paper_reading.pipeline.mineru import reflow_document
+from handlers.paper_reading.pipeline.mineru import image_url_map, reflow_document
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
@@ -57,7 +57,7 @@ SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
 SURVEY_FACT_REQUEST_TIMEOUT_SECONDS = 75.0
 SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS = 90.0
 SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v2"
-SURVEY_CARD_PROMPT_VERSION = "survey-card-prompt-v2"
+SURVEY_CARD_PROMPT_VERSION = "survey-card-prompt-v3-zh"
 SURVEY_MAP_GROUP_KEYS = (
     "field_overview",
     "development_timeline",
@@ -70,6 +70,27 @@ SURVEY_MAP_GROUP_KEYS = (
     "applications",
     "open_challenges",
 )
+CHINESE_READING_MAP_RULE = (
+    "All explanatory output values must use Simplified Chinese. "
+    "Keep original-language text only for paper titles, author names, official method/model/dataset/metric names, "
+    "standard abbreviations, formulas, code, URLs, and short source quotations. "
+    "Do not write full English explanatory sentences when Chinese can express the same meaning."
+)
+CHINESE_EXPLANATORY_FIELDS = {
+    "application", "common_misunderstanding", "connections", "constraints", "content",
+    "core_idea", "core_message", "core_mechanism", "core_task", "core_tasks",
+    "current_bottleneck", "dataset_format", "dataset_type", "difference", "experiment_setting",
+    "field_scope", "future_direction", "goal", "impact", "implementation_plan", "intro_evidence",
+    "key_change", "key_points", "learn_first", "limitation", "limitations", "main_content",
+    "main_idea", "method_summary", "next_reading", "novice_focus", "novice_question",
+    "novice_summary", "novice_takeaway", "one_sentence", "one_sentence_intro", "operation",
+    "possible_directions", "problem_addressed", "problem_fit", "protocol", "read", "relationship",
+    "remaining_limits", "scenario", "setting", "solved_problems", "specific_points",
+    "specific_solution", "stage", "strengths", "summary", "task", "technical_route",
+    "typical_flow", "typical_pipeline", "unresolved_part", "usage", "weaknesses",
+    "what_it_tests", "why", "why_confusing", "why_hard", "why_important", "why_it_matters",
+    "why_needed", "why_now", "why_read", "why_suitable",
+}
 
 
 class _NoOptionalSkillSelector:
@@ -92,8 +113,14 @@ def _reading_map_json_chat(
     max_tokens: int | None = None,
 ) -> Any:
     """Run one JSON request with optional caller-owned output budget."""
+    localized_messages = []
+    for message in messages:
+        localized = dict(message)
+        if localized.get("role") == "system":
+            localized["content"] = f"{localized.get('content', '')}\n{CHINESE_READING_MAP_RULE}"
+        localized_messages.append(localized)
     kwargs = {
-        "messages": messages,
+        "messages": localized_messages,
         "response_format": {"type": "json_object"},
         "disable_thinking": True,
         "timeout": timeout,
@@ -193,6 +220,7 @@ def handle_paper_reading_message(
         "get_progress": _handle_get_progress,
         "get_paper_detail": _handle_get_paper_detail,
         "regenerate_reading_map": _handle_regenerate_reading_map,
+        "reparse_paper": _handle_reparse_paper,
     }
 
     handler_fn = handler_map.get(request.action)
@@ -525,7 +553,12 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
             metadata.model_dump(mode="json"), paper
         )
         if mineru_result is not None:
-            reflow = reflow_document(mineru_result.markdown)
+            _persist_mineru_images(storage, paper_id, mineru_result.images)
+            reflow = reflow_document(
+                mineru_result.markdown,
+                content_list=mineru_result.content_list,
+                image_urls=image_url_map(paper_id, mineru_result.images),
+            )
             if reflow.get("sections"):
                 for field in (
                     "sections", "full_text", "section_extraction_source",
@@ -539,6 +572,16 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
                     payload["abstract"] = reflow["abstract"]
                 payload["parse_backend"] = "mineru"
                 payload["mineru_status"] = "done"
+                payload["mineru_response_format"] = mineru_result.response_format
+                payload["mineru_images_count"] = len(mineru_result.images)
+                payload["mineru_content_list_available"] = bool(mineru_result.content_list)
+                payload["mineru_middle_json_available"] = mineru_result.middle_json is not None
+                payload["mineru_artifacts"] = _persist_mineru_artifacts(
+                    storage,
+                    paper_id,
+                    mineru_result,
+                    normalized_markdown=str(reflow.get("full_text") or ""),
+                )
         elif mineru_future is not None:
             payload["parse_backend"] = "local"
             payload["mineru_status"] = "unavailable"
@@ -1206,6 +1249,51 @@ def _handle_regenerate_reading_map(request: PaperReadingRequest, app_state: Any)
     })
 
 
+def _handle_reparse_paper(request: PaperReadingRequest, app_state: Any) -> dict:
+    storage = getattr(app_state, "paper_storage", None)
+    if storage is None:
+        return _error("Paper storage 未初始化", action="reparse_paper")
+    paper_id = request.paper_id or ""
+    if not paper_id and request.session_id:
+        session_mgr = getattr(app_state, "session_manager", None)
+        session = session_mgr.get_session(request.session_id) if session_mgr else None
+        paper_id = session.paper_id if session else ""
+    if not paper_id:
+        return _error("请提供 paper_id", action="reparse_paper")
+    paper = _load_paper_data(storage, paper_id)
+    if paper is None:
+        return _error("论文不存在", action="reparse_paper")
+    upload_path = storage.get_upload_path(paper_id)
+    if upload_path is None or not upload_path.is_file():
+        return _error("没有找到该论文的原始 PDF，无法重新解析。", action="reparse_paper")
+
+    running = getattr(app_state, "_paper_parse_threads", set())
+    if paper_id in running:
+        return _ok("reparse_paper", {
+            "paper_id": paper_id,
+            "parse_status": "parsing",
+            "message": "论文正在重新解析，无需重复提交。",
+        })
+    mineru_client = getattr(app_state, "mineru_client", None)
+    mineru_enabled = bool(mineru_client is not None and getattr(mineru_client, "configured", False))
+    paper["parse_status"] = "parsing"
+    paper["parse_error"] = ""
+    paper["mineru_status"] = "parsing" if mineru_enabled else "disabled"
+    paper["mineru_error"] = ""
+    storage.save_paper(paper_id, paper)
+    _schedule_background_parse(app_state, paper_id, upload_path.read_bytes())
+    return _ok("reparse_paper", {
+        "paper_id": paper_id,
+        "parse_status": "parsing",
+        "mineru_enabled": mineru_enabled,
+        "message": (
+            "已重新提交本地解析与 MinerU 完整产物解析。"
+            if mineru_enabled
+            else "已重新提交本地解析；当前未配置 MinerU。"
+        ),
+    })
+
+
 def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> dict:
     """获取论文完整 metadata、sections 正文和 PDF 恢复 URL。"""
     storage = getattr(app_state, "paper_storage", None)
@@ -1861,24 +1949,33 @@ def _generate_research_overview(
     fallback: dict[str, Any],
     skill_registry: Any | None,
 ) -> dict[str, Any]:
-    response = _reading_map_json_chat(
-        model,
-        [
-            {
-                "role": "system",
-                "content": (
-                    "You are a paper-reading map builder for novice researchers. "
-                    "Return only a valid JSON object that follows the requested schema."
-                ),
-            },
-            {"role": "user", "content": _build_reading_map_prompt(paper, fallback, skill_registry)},
-        ],
-        timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
-    )
-    return _reading_map_response_json(
-        response,
-        label="研究总览",
-    )
+    prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
+    last_error = ""
+    for attempt in range(2):
+        correction = (
+            "\n\n上一次结果包含可用中文表达的英文说明。请将说明字段改为简体中文，"
+            "只保留论文、方法、模型、数据集和指标的正式名称。"
+            if attempt else ""
+        )
+        response = _reading_map_json_chat(
+            model,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a paper-reading map builder for novice researchers. "
+                        "Return only a valid JSON object that follows the requested schema."
+                    ),
+                },
+                {"role": "user", "content": prompt + correction},
+            ],
+            timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
+        )
+        parsed = _reading_map_response_json(response, label="研究总览")
+        if not _contains_unnecessary_english_explanation(parsed):
+            return parsed
+        last_error = "结果包含未翻译的英文说明"
+    raise ValueError(f"研究总览未返回中文说明：{last_error}")
 
 
 def _research_reading_sections(
@@ -1971,6 +2068,8 @@ def _generate_research_section_guide_group(
     normalized = _normalize_section_guides(normalized)
     if not normalized:
         raise ValueError("章节导读 JSON 中没有匹配输入章节的内容")
+    if _contains_unnecessary_english_explanation(normalized):
+        raise ValueError("章节导读包含未翻译的英文说明")
     return normalized
 
 
@@ -2990,6 +3089,8 @@ def _normalize_survey_card_result(
         for key in ("concepts", "field_questions", "reading_order", "anchor_works", "common_confusions"):
             if key not in card or not isinstance(card.get(key), list):
                 card[key] = []
+        if _contains_unnecessary_english_explanation(card):
+            raise ValueError(f"Survey prerequisite card contains untranslated explanatory text for {task.get('task_id')}")
         return {"target": "prerequisite_card", "prerequisite_card": card, "source_sections": source_sections}
 
     if target == "survey_map":
@@ -3003,7 +3104,7 @@ def _normalize_survey_card_result(
         normalized_items = []
         for raw_item in raw_items[:12]:
             item = dict(raw_item) if isinstance(raw_item, dict) else {}
-            if not item or _is_json_schema_echo(item):
+            if not item or _is_json_schema_echo(item) or _contains_unnecessary_english_explanation(item):
                 continue
             if not item.get("source_sections"):
                 item["source_sections"] = source_sections
@@ -3027,6 +3128,8 @@ def _normalize_survey_card_result(
             card["source_sections"] = source_sections
         if not card.get("card_type"):
             card["card_type"] = (task.get("card_types") or ["reading_route"])[0]
+        if _contains_unnecessary_english_explanation(card):
+            continue
         normalized_cards.append(card)
     if not normalized_cards:
         raise ValueError(f"No cards for {task.get('task_id')}")
@@ -3049,6 +3152,22 @@ def _is_json_schema_echo(value: Any) -> bool:
     if "$schema" in value or "definitions" in value or "$defs" in value:
         return True
     return value.get("type") in {"object", "json_object", "array"} and isinstance(value.get("properties"), dict)
+
+
+def _contains_unnecessary_english_explanation(value: Any, field_name: str = "") -> bool:
+    if isinstance(value, dict):
+        return any(
+            _contains_unnecessary_english_explanation(nested, str(key))
+            for key, nested in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_unnecessary_english_explanation(item, field_name) for item in value)
+    if field_name not in CHINESE_EXPLANATORY_FIELDS or not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or re.search(r"[\u4e00-\u9fff]", text):
+        return False
+    return len(re.findall(r"\b[A-Za-z][A-Za-z'-]*\b", text)) >= 4
 
 
 def _build_survey_reading_map_from_card_results(
@@ -4866,6 +4985,14 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "outline_entries_count": section_info["outline_entries_count"],
         "parse_status": paper.get("parse_status", ""),
         "parse_error": paper.get("parse_error", ""),
+        "parse_backend": paper.get("parse_backend", ""),
+        "mineru_status": paper.get("mineru_status", ""),
+        "mineru_error": paper.get("mineru_error", ""),
+        "mineru_response_format": paper.get("mineru_response_format", ""),
+        "mineru_images_count": paper.get("mineru_images_count", 0),
+        "mineru_content_list_available": bool(paper.get("mineru_content_list_available")),
+        "mineru_middle_json_available": bool(paper.get("mineru_middle_json_available")),
+        "mineru_artifacts": paper.get("mineru_artifacts", {}),
         "page_count": paper.get("page_count", 0),
         "reading_map": paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending")),
         "reading_map_status": paper.get("reading_map_status", ""),
@@ -4891,6 +5018,47 @@ def _persist_figure_assets(
         asset_name = getattr(figure, "asset_name", "")
         if image_data and asset_name:
             storage.save_figure(paper_id, asset_name, image_data)
+
+
+def _persist_mineru_images(storage: Any, paper_id: str, images: list[Any]) -> None:
+    for image in images:
+        data = getattr(image, "data", b"")
+        asset_name = getattr(image, "asset_name", "")
+        if data and asset_name:
+            storage.save_figure(paper_id, asset_name, data)
+
+
+def _persist_mineru_artifacts(
+    storage: Any,
+    paper_id: str,
+    result: Any,
+    *,
+    normalized_markdown: str,
+) -> dict[str, Any]:
+    artifacts: list[str] = []
+
+    def save(name: str, data: bytes) -> None:
+        if not data:
+            return
+        try:
+            storage.save_mineru_artifact(paper_id, name, data)
+            artifacts.append(name)
+        except Exception as error:
+            logger.warning("Unable to persist MinerU artifact %s for %s: %s", name, paper_id, error)
+
+    save("raw.md", str(getattr(result, "raw_markdown", "") or "").encode("utf-8"))
+    save("normalized.md", normalized_markdown.encode("utf-8"))
+    content_list = getattr(result, "content_list", None)
+    if content_list:
+        save("content_list.json", json.dumps(content_list, ensure_ascii=False).encode("utf-8"))
+    middle_json = getattr(result, "middle_json", None)
+    if middle_json is not None:
+        save("middle.json", json.dumps(middle_json, ensure_ascii=False).encode("utf-8"))
+    return {
+        "files": artifacts,
+        "raw_preserved": "raw.md" in artifacts,
+        "normalized_preserved": "normalized.md" in artifacts,
+    }
 
 
 def _persist_table_assets(

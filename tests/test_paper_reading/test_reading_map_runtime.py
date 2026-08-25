@@ -21,6 +21,9 @@ from handlers.paper_reading.handler import (
     _ensure_survey_prerequisite_task,
     _normalize_survey_card_result,
     _normalize_survey_card_plan,
+    _contains_unnecessary_english_explanation,
+    _generate_research_overview,
+    _reading_map_json_chat,
     _reading_map_response_json,
     _research_reading_sections,
     resume_pending_reading_map_generations,
@@ -341,6 +344,61 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         self.assertTrue(storage.saved[1]["reading_map_resumed_at"])
         self.assertEqual(storage.saved[1]["reading_map_phase"], "queued")
         schedule.assert_called_once_with(state, "paper-1", generation_id="generation-1")
+
+    def test_reading_map_requests_require_chinese_explanations(self) -> None:
+        class CaptureModel:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def chat(self, **kwargs):
+                self.kwargs = kwargs
+                return SimpleNamespace(choices=[])
+
+        model = CaptureModel()
+        _reading_map_json_chat(
+            model,
+            [{"role": "system", "content": "Return JSON."}, {"role": "user", "content": "Generate map."}],
+            timeout=5,
+        )
+
+        system_prompt = model.kwargs["messages"][0]["content"]
+        self.assertIn("Simplified Chinese", system_prompt)
+        self.assertIn("Do not write full English explanatory sentences", system_prompt)
+
+    def test_english_explanation_is_rejected_but_official_name_is_allowed(self) -> None:
+        self.assertTrue(_contains_unnecessary_english_explanation({
+            "summary": "This is a full English explanatory sentence.",
+        }))
+        self.assertFalse(_contains_unnecessary_english_explanation({
+            "name": "Retrieval-Augmented Generation",
+            "summary": "采用检索增强生成来补充外部知识。",
+        }))
+
+    def test_research_overview_retries_untranslated_explanation(self) -> None:
+        class RetryModel:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                summary = (
+                    "This is a full English explanatory sentence."
+                    if len(self.calls) == 1
+                    else "这是面向科研新手的中文问题说明。"
+                )
+                content = json.dumps({"research_problem": {"summary": summary}}, ensure_ascii=False)
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason="stop",
+                )])
+
+        model = RetryModel()
+        with patch("handlers.paper_reading.handler._build_reading_map_prompt", return_value="prompt"):
+            result = _generate_research_overview(model, {}, {}, None)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("中文问题说明", result["research_problem"]["summary"])
+        self.assertIn("上一次结果包含", model.calls[1]["messages"][-1]["content"])
 
 
 if __name__ == "__main__":

@@ -95,12 +95,12 @@
       <section id="paper-workbench" class="workbench" hidden>
         <header class="paper-ribbon">
           <div><p id="paper-ribbon-meta">正在阅读</p><h1 id="paper-ribbon-title">未命名论文</h1></div>
-          <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span></div>
+          <div class="ribbon-actions"><button id="reparse-paper-button" class="mini-button" type="button">重新解析论文</button><span id="session-state-badge" class="state-badge">未开始</span></div>
         </header>
 
         <section id="reading-map-panel" class="workspace-panel reading-map-panel is-collapsed">
           <header class="reading-map-header">
-            <div><p id="reading-map-kicker" class="panel-label">Research overview</p><h2 id="reading-map-title">研究总览</h2><p id="reading-map-status-copy" class="muted-copy">研究问题、核心方法、方法步骤、实验支撑与局限追问会汇总在这里。</p></div>
+            <div><p id="reading-map-kicker" class="panel-label">研究总览</p><h2 id="reading-map-title">研究总览</h2><p id="reading-map-status-copy" class="muted-copy">研究问题、核心方法、方法步骤、实验支撑与局限追问会汇总在这里。</p></div>
             <div class="reading-map-header-actions">
               <button id="regenerate-reading-map-button" class="mini-button is-accent" type="button">重新生成</button>
               <button id="reading-map-toggle-button" class="mini-button" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开</button>
@@ -109,17 +109,17 @@
           <div class="reading-map-layout">
             <div class="reading-map-shell">
               <div id="reading-map-grid" class="reading-map-grid"></div>
-              <div id="reading-map-empty" class="reading-map-empty">阅读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧 Agent 分析。</div>
+              <div id="reading-map-empty" class="reading-map-empty">导读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧智能体分析。</div>
             </div>
             <aside class="reading-map-detail">
-              <div id="reading-map-detail"><p class="panel-label">Guide</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧 Agent 解释这一段。</p></div>
+              <div id="reading-map-detail"><p class="panel-label">导读</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧智能体解释这一段。</p></div>
             </aside>
           </div>
         </section>
 
         <div id="workbench-grid" class="workbench-grid">
           <aside class="workspace-panel navigator-panel">
-            <section class="side-section paper-summary"><p class="panel-label">Paper</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
+            <section class="side-section paper-summary"><p class="panel-label">论文</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
             <section class="side-section">
               <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
               <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>

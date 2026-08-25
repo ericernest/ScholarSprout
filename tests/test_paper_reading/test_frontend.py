@@ -60,6 +60,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "merge",
             "get_session_state",
             "regenerate_reading_map",
+            "reparse_paper",
         }
 
         for action in actions:
@@ -84,6 +85,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "reading-map-title",
             "reading-map-status-copy",
             "regenerate-reading-map-button",
+            "reparse-paper-button",
             "fork-panel",
             "pdf-fit-select",
             "paper-boot",
@@ -140,6 +142,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('state.readerMode = usesMineruReflow() ? "reflow" : "pdf"', javascript)
         self.assertIn("function renderReflowSections", javascript)
         self.assertIn("function cleanMineruMarkdown", javascript)
+        self.assertIn("function renderMineruImage", javascript)
+        self.assertIn('/paper_reading/figures/', javascript)
+        self.assertIn(".mineru-figure img", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
         self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
@@ -269,6 +274,16 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertEqual(response.media_type, "image/png")
         self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+
+    def test_mineru_jpeg_is_served_with_its_actual_media_type(self) -> None:
+        with TemporaryDirectory() as directory:
+            storage = PaperReadingStorage(Path(directory))
+            storage.save_figure("paper-1", "mineru-image.jpg", b"jpeg")
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper_storage=storage)))
+
+            response = paper_reading_figure("paper-1", "mineru-image.jpg", request)
+
+        self.assertEqual(response.media_type, "image/jpeg")
 
     def test_agent_answers_use_markdown_renderer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")

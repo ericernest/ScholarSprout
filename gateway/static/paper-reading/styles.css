@@ -614,6 +614,9 @@ select option { color: #07120f; }
   margin: .4rem 0; padding: .7rem .9rem; border-left: 3px solid rgba(32,185,151,.5);
   color: #596762; background: rgba(32,185,151,.05);
 }
+.mineru-figure { margin: 1rem auto; display: grid; justify-items: center; gap: .45rem; }
+.mineru-figure img { display: block; max-width: 100%; height: auto; border-radius: 10px; }
+.mineru-figure figcaption { max-width: 72ch; color: #65716d; font-size: .78rem; line-height: 1.55; text-align: center; }
 .mineru-table-wrap { margin: 1rem 0; overflow: auto; border: 1px solid rgba(35,75,64,.14); border-radius: 12px; background: #fff; }
 .mineru-table { width: 100%; border-collapse: collapse; font-size: .76rem; line-height: 1.45; }
 .mineru-table th, .mineru-table td { min-width: 6rem; padding: .48rem .58rem; border: 1px solid rgba(35,75,64,.12); vertical-align: top; text-align: left; }

@@ -112,6 +112,7 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
+  $("reparse-paper-button")?.addEventListener("click", reparsePaper);
   $("reading-map-toggle-button")?.addEventListener("click", () => toggleReadingMapPanel());
   syncReadingMapPanelState();
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
@@ -223,7 +224,7 @@ function updateReaderModeHint() {
   hint.textContent = state.readerMode === "reflow"
     ? "AI 论文重排展示 MinerU Markdown 正文；缺失的图片资源请切换 PDF 原文核对。"
     : state.readerMode === "pdf"
-      ? "PDF 原文支持直接划选并让右侧 Agent 分析。"
+      ? "PDF 原文支持直接划选并让右侧智能体分析。"
       : "智能索引提供面向科研新手的章节导读，不与 AI 论文重排混合。";
   hint.hidden = false;
 }
@@ -683,6 +684,33 @@ async function enterWorkbench() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
+async function reparsePaper() {
+  if (!state.paperId) {
+    toast("请先上传或打开一篇论文。", true);
+    return;
+  }
+  const button = $("reparse-paper-button");
+  if (button) button.disabled = true;
+  try {
+    const { payload } = await callPaperReading({
+      action: "reparse_paper",
+      paper_id: state.paperId,
+      session_id: state.sessionId || "",
+    });
+    const data = payload.data || {};
+    state.parseStatus = data.parse_status || "parsing";
+    if (state.paper) state.paper.parse_status = state.parseStatus;
+    toast(data.message || "已重新提交论文解析。");
+    renderPaperMetadata();
+    renderOutlineSourceWarning();
+    startParsePolling();
+  } catch (error) {
+    toast(error.message || "重新解析论文失败。", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function ensureReadingSession() {
   if (state.sessionId) return true;
   if (!state.paperId) return false;
@@ -953,7 +981,12 @@ function renderPaperMetadata() {
   if (parsing) meta.push("正在解析论文信息");
   else {
     if (paper.year) meta.push(String(paper.year));
-    if (sections.length) meta.push(`${sections.length} sections`);
+    if (sections.length) meta.push(`${sections.length} 个章节`);
+  }
+  const reparseButton = $("reparse-paper-button");
+  if (reparseButton) {
+    reparseButton.disabled = parsing || !state.paperId;
+    reparseButton.textContent = parsing ? "正在解析…" : "重新解析论文";
   }
   $("paper-ribbon-title").textContent = paper.title || "论文已上传";
   $("paper-ribbon-meta").textContent = meta.join(" · ");
@@ -983,7 +1016,7 @@ function renderOutline() {
     button.type = "button";
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", label);
-    button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "Untitled section"));
+    button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "未命名章节"));
     button.addEventListener("click", () => {
       if (isReferenceSection(section)) jumpToPdfPage(section.start_page || 1, section.section_id);
       else selectSection(section.section_id, false);
@@ -1165,7 +1198,7 @@ function renderSections() {
     article.id = domSectionId(section.section_id);
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
-    meta.append(create("span", "", `Section ${String(index + 1).padStart(2, "0")}`));
+    meta.append(create("span", "", `章节 ${String(index + 1).padStart(2, "0")}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
 
     const body = create("div", "paper-section-body");
@@ -1210,7 +1243,7 @@ function renderReflowSections() {
     const article = create("section", `paper-section ai-reflow-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
-    meta.append(create("span", "", `AI Reflow ${String(index + 1).padStart(2, "0")}`));
+    meta.append(create("span", "", `AI 重排 ${String(index + 1).padStart(2, "0")}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
     const body = create("div", "paper-section-body ai-reflow-content");
     body.append(renderMineruMarkdown(section.content));
@@ -1223,17 +1256,48 @@ function renderReflowSections() {
 function renderMineruMarkdown(source) {
   const root = create("div", "mineru-markdown");
   const cleaned = cleanMineruMarkdown(source);
-  const segments = cleaned.split(/(<table\b[\s\S]*?<\/table>)/giu).filter(Boolean);
+  const segments = cleaned
+    .split(/(<table\b[\s\S]*?<\/table>|!\[[^\]]*\]\([^)]+\))/giu)
+    .filter(Boolean);
   segments.forEach((segment) => {
-    if (/^<table\b/iu.test(segment.trim())) {
+    const trimmed = segment.trim();
+    if (/^<table\b/iu.test(trimmed)) {
       const table = renderSafeHtmlTable(segment);
       if (table) root.append(table);
+      return;
+    }
+    if (/^!\[[^\]]*\]\([^)]+\)$/u.test(trimmed)) {
+      const image = renderMineruImage(trimmed);
+      if (image) root.append(image);
       return;
     }
     const rendered = renderMarkdown(segment);
     if (rendered.textContent?.trim() || rendered.querySelector("img,table")) root.append(rendered);
   });
   return root;
+}
+
+function renderMineruImage(source) {
+  const match = source.match(/^!\[([^\]]*)\]\(([^)]+)\)$/u);
+  if (!match) return null;
+  let url;
+  try {
+    url = new URL(match[2], window.location.origin);
+  } catch (_) {
+    return null;
+  }
+  if (url.origin !== window.location.origin || !url.pathname.startsWith("/paper_reading/figures/")) {
+    return null;
+  }
+  const figure = create("figure", "mineru-figure");
+  const image = create("img");
+  image.src = `${url.pathname}${url.search}`;
+  image.alt = match[1].trim() || "论文图表";
+  image.loading = "lazy";
+  image.decoding = "async";
+  figure.append(image);
+  if (match[1].trim()) figure.append(create("figcaption", "", match[1].trim()));
+  return figure;
 }
 
 function cleanMineruMarkdown(source) {
@@ -1243,7 +1307,8 @@ function cleanMineruMarkdown(source) {
     .replace(/^Received\s+month\s+dd,\s*yyyy;.*$/gimu, "")
     .replace(/^E-?mail\s*:.*$/gimu, "")
     .replace(/^\\?\*?Both authors contribute equally to this paper\.?$/gimu, "")
-    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*([a-z])/gu, "$1$2")
+    .replace(/\b([A-Za-z]{2,4})-[ \t]*\n+[ \t]*([a-z]{2,})(?![-A-Za-z])/gu, "$1$2")
+    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(?=[a-z])/gu, "$1-")
     .replace(/\n{3,}/gu, "\n\n")
     .trim();
 }
@@ -3332,9 +3397,9 @@ function renderReadingMapLegacy() {
   grid.replaceChildren();
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", "Reading Map"),
+      create("p", "panel-label", "导读地图"),
       create("h3", "", "论文阅读地图"),
-      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧 Agent 解释这一段。")
+      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧智能体解释这一段。")
     );
   }
 
@@ -3355,7 +3420,7 @@ function renderReadingMapLegacy() {
   const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent || !mapReady;
   if (!hasContent) {
-    grid.append(create("div", "reading-map-pending", status === "failed" ? "解析失败，暂时无法生成阅读地图。" : "正在解析 PDF。你可以先阅读原文、划选内容并让 Agent 分析。"));
+    grid.append(create("div", "reading-map-pending", status === "failed" ? "解析失败，暂时无法生成阅读地图。" : "正在解析 PDF。你可以先阅读原文、划选内容并让智能体分析。"));
     return;
   }
 
@@ -3383,14 +3448,14 @@ function renderReadingMap() {
   if (!grid) return;
   grid.classList.toggle("is-survey-vertical", isSurvey);
   grid.replaceChildren();
-  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "Survey reading map" : "Research overview";
+  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "综述导读" : "研究总览";
   if ($("reading-map-title")) $("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览";
   syncReadingMapPanelState();
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", isSurvey ? "Survey guide" : "Research overview"),
+      create("p", "panel-label", isSurvey ? "综述导读" : "研究总览"),
       create("h3", "", isSurvey ? "综述导读地图" : "研究总览"),
-      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧 Agent 解释。")
+      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧智能体解释。")
     );
   }
 
@@ -3547,7 +3612,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
     const section = state.paper?.sections?.find((item) => item.section_id === source.section_id);
     jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "");
   });
-  const ask = create("button", "mini-button is-accent", "让 Agent 解释");
+  const ask = create("button", "mini-button is-accent", "让智能体解释");
   ask.type = "button";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;

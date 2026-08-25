@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -233,7 +234,7 @@ def paper_reading_figure(
 
     return FileResponse(
         figure_path,
-        media_type="image/png",
+        media_type=mimetypes.guess_type(asset_name)[0] or "application/octet-stream",
         filename=asset_name,
         content_disposition_type="inline",
     )
