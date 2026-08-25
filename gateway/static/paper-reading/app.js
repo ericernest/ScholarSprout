@@ -112,7 +112,6 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
-  $("research-overview-button")?.addEventListener("click", () => toggleReadingMapPanel());
   $("reading-map-toggle-button")?.addEventListener("click", () => toggleReadingMapPanel());
   syncReadingMapPanelState();
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
@@ -201,6 +200,8 @@ function setupPdfFirstReaderDom() {
     if (empty) reader.append(empty);
   }
   ensureSelectionPdfActions();
+  const selectionToolbar = $("selection-toolbar");
+  if (selectionToolbar && selectionToolbar.parentElement !== document.body) document.body.append(selectionToolbar);
   $("structured-reader").hidden = true;
   $("pdf-reader").hidden = false;
 }
@@ -1015,11 +1016,6 @@ function syncReadingMapPanelState() {
   const expanded = Boolean(state.readingMapExpanded);
   const label = isSurvey ? "综述地图" : "研究总览";
   panel.classList.toggle("is-collapsed", !expanded);
-  const ribbonButton = $("research-overview-button");
-  if (ribbonButton) {
-    ribbonButton.textContent = expanded ? `收起${label}` : `展开${label}`;
-    ribbonButton.setAttribute("aria-expanded", String(expanded));
-  }
   const panelButton = $("reading-map-toggle-button");
   if (panelButton) {
     panelButton.textContent = expanded ? "收起" : "展开";
@@ -2644,20 +2640,31 @@ function captureSelection(event) {
   syncComposerContext();
   const toolbar = $("selection-toolbar");
   toolbar.hidden = false;
-  const toolbarWidth = toolbar.offsetWidth || 430;
-  const toolbarHeight = toolbar.offsetHeight || 42;
-  const margin = 10;
   const readerBounds = (pdfPage || structured)?.closest(".reader-panel")?.getBoundingClientRect();
-  const minX = Math.max(8, (readerBounds?.left || 0) + 8);
-  const maxX = Math.min(window.innerWidth - 8, (readerBounds?.right || window.innerWidth) - 8);
   const rangeRect = selection.getRangeAt(0).getBoundingClientRect();
-  const pointerX = Number.isFinite(event?.clientX) ? event.clientX : rangeRect.right;
-  const pointerY = Number.isFinite(event?.clientY) ? event.clientY : rangeRect.top;
-  const rightX = pointerX + margin;
-  const leftX = pointerX - toolbarWidth - margin;
-  const targetX = rightX + toolbarWidth <= maxX ? rightX : leftX;
-  toolbar.style.left = `${Math.max(minX, Math.min(maxX - toolbarWidth, targetX))}px`;
-  toolbar.style.top = `${Math.max(72, Math.min(window.innerHeight - toolbarHeight - 8, pointerY - toolbarHeight / 2))}px`;
+  const pointer = {
+    x: Number.isFinite(event?.clientX) && event.clientX > 0 ? event.clientX : rangeRect.right,
+    y: Number.isFinite(event?.clientY) && event.clientY > 0 ? event.clientY : rangeRect.bottom,
+  };
+  requestAnimationFrame(() => positionSelectionToolbar(toolbar, pointer, readerBounds));
+}
+
+function positionSelectionToolbar(toolbar, pointer, readerBounds) {
+  const gap = 6;
+  const minX = Math.max(8, (readerBounds?.left ?? 0) + 6);
+  const maxX = Math.min(window.innerWidth - 8, (readerBounds?.right ?? window.innerWidth) - 6);
+  const availableWidth = Math.max(0, maxX - minX);
+  toolbar.style.maxWidth = `${availableWidth}px`;
+  const toolbarRect = toolbar.getBoundingClientRect();
+  const toolbarWidth = Math.min(toolbarRect.width || toolbar.offsetWidth || 1, availableWidth);
+  const toolbarHeight = toolbarRect.height || toolbar.offsetHeight || 1;
+  const rightX = pointer.x + gap;
+  const leftX = pointer.x - toolbarWidth - gap;
+  const useRight = rightX + toolbarWidth <= maxX;
+  const preferredX = useRight ? rightX : leftX;
+  toolbar.style.left = `${Math.max(minX, Math.min(maxX - toolbarWidth, preferredX))}px`;
+  toolbar.style.top = `${Math.max(8, Math.min(window.innerHeight - toolbarHeight - 8, pointer.y - toolbarHeight / 2))}px`;
+  toolbar.dataset.side = useRight ? "right" : "left";
 }
 
 async function handleSelectionAction(event) {
@@ -3335,7 +3342,7 @@ function surveyReadingMapGroups(map) {
     { key: "evaluation_protocols", title: "评测方式", items: survey.evaluation_protocols || [] },
     { key: "applications", title: "应用场景", items: survey.applications || [] },
     { key: "open_challenges", title: "开放问题", items: survey.open_challenges || [] },
-  ];
+  ].map((group) => ({ ...group, items: prepareSurveyMapItems(group.key, group.items) }));
 }
 
 function renderReadingMapCard(item, groupKey, groupIndex, index) {
@@ -3348,10 +3355,19 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
   const card = create("article", `reading-map-card reading-map-${groupKey}`);
   card.append(create("strong", "", title));
-  if (summary) card.append(create("p", "", summary));
-  if (why && why !== summary) card.append(create("p", "reading-map-why", why));
+  const fields = readingMapCardFields(item, groupKey, title);
+  if (fields.length) {
+    const list = create("dl", "reading-map-fields");
+    fields.forEach(([label, value]) => {
+      list.append(create("dt", "", label), create("dd", "", value));
+    });
+    card.append(list);
+  } else {
+    if (summary) card.append(create("p", "", summary));
+    if (why && why !== summary) card.append(create("p", "reading-map-why", why));
+  }
 
-  if (["experimental_support", "datasets", "technical_routes", "representative_methods"].includes(groupKey)) {
+  if (["experimental_support"].includes(groupKey)) {
     const meta = [
       ...mapArray(item.datasets), ...mapArray(item.metrics), ...mapArray(item.figures_or_tables),
       ...mapArray(item.strengths), ...mapArray(item.mentioned_terms), item.year, item.url,
@@ -3376,10 +3392,55 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   actions.append(jump, ask);
   card.append(actions);
   if (sources.length) {
-    const sourceText = sources.map((entry) => entry.title || entry.section_id || (entry.page ? `Page ${entry.page}` : "")).filter(Boolean).slice(0, 3).join(" · ");
+    const hiddenRouteLabels = new Set(["edgeandtopologyevolution", "nodeandfeatureevolution"]);
+    const sourceText = sources
+      .map((entry) => entry.title || entry.section_id || (entry.page ? `Page ${entry.page}` : ""))
+      .filter((value) => value && !(groupKey === "representative_methods" && hiddenRouteLabels.has(comparableMapText(value).toLowerCase())))
+      .slice(0, 3).join(" · ");
     if (sourceText) card.append(create("small", "reading-map-source", sourceText));
   }
   return card;
+}
+
+function prepareSurveyMapItems(groupKey, rawItems) {
+  const blockedMethods = new Set(["edgeandtopologyevolution", "nodeandfeatureevolution"]);
+  const items = (Array.isArray(rawItems) ? rawItems : []).filter((item) => item && Object.keys(item).length);
+  const seenTitles = new Set();
+  const seenMechanisms = new Set();
+  return items.filter((item) => {
+    const title = comparableMapText(readingMapCardTitle(item, groupKey));
+    if (groupKey === "representative_methods" && blockedMethods.has(title.toLowerCase())) return false;
+    const mechanism = groupKey === "technical_routes"
+      ? comparableMapText(firstUsefulField(item, ["core_mechanism", "typical_pipeline", "typical_flow", "core_idea"]))
+      : "";
+    if ((title && seenTitles.has(title)) || (mechanism.length >= 12 && seenMechanisms.has(mechanism))) return false;
+    if (title) seenTitles.add(title);
+    if (mechanism.length >= 12) seenMechanisms.add(mechanism);
+    return true;
+  });
+}
+
+function readingMapCardFields(item, groupKey, title) {
+  const specs = {
+    field_overview: [["领域范围", ["field_scope", "field"]], ["核心任务", ["core_tasks", "core_task"]], ["当前价值", ["why_now"]], ["新手结论", ["novice_takeaway"]], ["常见误解", ["common_misunderstanding"]]],
+    development_timeline: [["时间范围", ["time_range"]], ["关键变化", ["key_change"]], ["代表工作", ["representative_work", "representative_works"]], ["阶段意义", ["why_important", "why_it_matters"]]],
+    pain_points: [["为什么难", ["why_hard"]], ["实际影响", ["impact"]], ["已有尝试", ["existing_attempts"]], ["未解决部分", ["unresolved_part"]]],
+    taxonomy: [["分类依据", ["basis"]], ["典型方法", ["typical_methods"]], ["适合问题", ["problem_fit", "solved_problems"]], ["局限", ["limitations"]]],
+    technical_routes: [["核心机制", ["core_mechanism", "core_idea"]], ["典型流程", ["typical_flow", "typical_pipeline"]], ["优势", ["strengths"]], ["局限", ["limitations", "weaknesses"]], ["代表方法", ["representative_methods", "representative_method_ids"]]],
+    representative_methods: [["论文", ["paper_title"]], ["年份", ["year"]], ["解决问题", ["problem_addressed"]], ["方法简介", ["method_summary", "core_mechanism"]], ["具体方案", ["specific_solution"]], ["改进对象", ["improves_on"]], ["剩余局限", ["remaining_limits", "limitations"]]],
+    datasets: [["数据集类型", ["dataset_type", "task"]], ["一句话介绍", ["one_sentence_intro", "content", "description"]], ["数据结构", ["structure"]], ["规模", ["scale"]], ["评测指标", ["metrics"]], ["论文中的具体例子", ["paper_examples", "examples_in_paper"]], ["使用方法", ["used_by_methods"]]],
+    evaluation_protocols: [["评测任务", ["task"]], ["评测指标", ["metrics", "metric"]], ["实验设置", ["setting"]], ["验证内容", ["what_it_tests"]]],
+    applications: [["应用场景", ["scenario"]], ["适用原因", ["why_suitable"]], ["典型方法", ["typical_methods"]], ["落地限制", ["constraints"]]],
+    open_challenges: [["为什么重要", ["why_it_matters"]], ["当前瓶颈", ["current_bottleneck", "why_hard"]], ["已有尝试", ["existing_attempts"]], ["可能方向", ["future_direction", "possible_directions"]]],
+  };
+  const seen = new Set([comparableMapText(title)]);
+  return (specs[groupKey] || []).flatMap(([label, keys]) => {
+    const value = firstUsefulField(item, keys);
+    const key = comparableMapText(value);
+    if (!value || !key || seen.has(key)) return [];
+    seen.add(key);
+    return [[label, value]];
+  });
 }
 
 function readingMapCardTitle(item, groupKey) {
@@ -3388,7 +3449,7 @@ function readingMapCardTitle(item, groupKey) {
     development_timeline: ["stage", "time_range", "key_change", "title"],
     pain_points: ["problem", "challenge", "title"],
     taxonomy: ["category", "name", "basis", "title"],
-    technical_routes: ["name", "route", "route_id", "core_mechanism", "title"],
+    technical_routes: ["route_name", "name", "route", "route_id", "core_mechanism", "title"],
     representative_methods: ["paper_title", "method_name", "name", "title"],
     datasets: ["name", "dataset", "task", "title"],
     evaluation_protocols: ["protocol", "task", "metric", "title"],
@@ -3409,7 +3470,7 @@ function readingMapCardSummary(item, groupKey) {
     development_timeline: ["key_change", "why_it_matters", "evidence", "summary"],
     pain_points: ["why_hard", "impact", "unresolved_part", "evidence", "summary"],
     taxonomy: ["basis", "solved_problems", "summary", "evidence"],
-    technical_routes: ["core_mechanism", "typical_pipeline", "summary", "evidence"],
+    technical_routes: ["core_mechanism", "typical_flow", "typical_pipeline", "summary", "evidence"],
     representative_methods: ["method_summary", "specific_solution", "improves_on", "evidence"],
     datasets: ["task", "content", "structure", "scale", "evidence"],
     evaluation_protocols: ["what_it_tests", "setting", "metrics", "evidence"],

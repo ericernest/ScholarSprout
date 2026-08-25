@@ -323,6 +323,33 @@ More results.
         self.assertEqual(repaired["sections"][1]["title"], "1. Introduction")
         self.assertEqual(stored["title"], "G-Memory: Tracing Hierarchical Memory for")
 
+    def test_loading_mineru_paper_restores_markdown_sections(self) -> None:
+        markdown = (
+            "# RCR-Router\n\n## Abstract\n\nA role-aware routing system.\n\n"
+            "## 1 Introduction\n\nThe research problem.\n\n"
+            "## 2 Method\n\nThe routing method."
+        )
+        stored = {
+            "paper_id": "rcr-router",
+            "title": "RCR-Router",
+            "sections": [{"section_id": "sec:full", "title": "Full Text", "content": markdown[:100]}],
+            "full_text": markdown,
+            "parse_status": "done",
+            "section_extraction_source": "mineru_markdown",
+            "section_extraction_status": "mineru_used",
+        }
+
+        class Storage:
+            @staticmethod
+            def load_paper(paper_id: str) -> dict:
+                return stored
+
+        repaired = _load_paper_data(Storage(), "rcr-router")
+
+        self.assertEqual([section["title"] for section in repaired["sections"]], ["Abstract", "1 Introduction", "2 Method"])
+        self.assertEqual(repaired["outline_entries_count"], 3)
+        self.assertEqual(stored["sections"][0]["title"], "Full Text")
+
     def test_parse_bytes_extracts_complete_caption_anchored_figure(self) -> None:
         metadata = self.parser.parse_bytes(synthetic_figure_pdf())
 

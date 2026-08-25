@@ -930,7 +930,7 @@ class LocalResearchStore:
         parent_session_id = str(data.get("parent_session_id") or "") or None
         self.ensure_conversation(
             session_id,
-            title=f"论文精读：{paper_title[:70]}",
+            title=paper_title[:70],
             user_id=str(data.get("user_id") or "") or None,
             parent_conversation_id=parent_session_id,
         )

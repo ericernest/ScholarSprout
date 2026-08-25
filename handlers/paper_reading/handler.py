@@ -1241,7 +1241,13 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
             and PDFParser.sections_need_repair(paper.get("sections"))
         ):
             parser = PDFParser()
-            repaired = parser.extract_sections(full_text)
+            if paper.get("section_extraction_source") == "mineru_markdown":
+                mineru_reflow = reflow_document(full_text)
+                repaired_sections = mineru_reflow.get("sections") or []
+                repaired = None
+            else:
+                repaired_sections = []
+                repaired = parser.extract_sections(full_text)
             if repaired:
                 paper = dict(paper)
                 paper["sections"] = [section.model_dump(mode="json") for section in repaired]
@@ -1254,6 +1260,10 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
                         author.model_dump(mode="json")
                         for author in repaired_authors
                     ]
+            elif repaired_sections:
+                paper = dict(paper)
+                paper["sections"] = repaired_sections
+                paper["outline_entries_count"] = len(repaired_sections)
         return paper
     except Exception as error:
         logger.warning("Failed to load paper %s: %s", paper_id, error)
@@ -2670,7 +2680,7 @@ def _survey_card_output_schema(task: dict[str, Any]) -> str:
     elif group_key == "representative_methods":
         schema = {"items": [{"paper_title": "", "year": "", "method_name": "", "route": "", "problem_addressed": "", "core_mechanism": "", "specific_solution": "", "improves_on": "", "limitations": "", "evidence": "", "source_sections": []}]}
     elif group_key == "datasets":
-        schema = {"items": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": "", "used_by_methods": [], "evidence": "", "source_sections": []}]}
+        schema = {"items": [{"name": "", "dataset_type": "", "task": "", "one_sentence_intro": "", "content": "", "structure": "", "scale": "", "metrics": "", "paper_examples": [{"name": "", "usage": ""}], "used_by_methods": [], "evidence": "", "source_sections": []}]}
     elif group_key == "technical_routes":
         schema = {"items": [{"route_name": "", "core_mechanism": "", "typical_flow": "", "strengths": "", "limitations": "", "representative_methods": [], "evidence": "", "source_sections": []}]}
     elif group_key == "taxonomy":
@@ -2710,6 +2720,8 @@ def _generate_survey_card(
         "Every card/item must include source_sections and concise evidence. Each formal item should contain at least 4-6 useful fields; "
         "if evidence is insufficient, return insufficient_evidence: true with a short reason. "
         "Avoid Item 1, Point 1, Front., Comput., only one-sentence summaries, or section-title-only content. "
+        "For representative_methods, output only concrete named papers or methods, never taxonomy labels or section headings. "
+        "For datasets, label the dataset type and one-sentence introduction, and include concrete paper_examples only when those dataset names occur in the selected paper text. "
         "Write Chinese content for novice researchers.\n\n"
         f"Task:\n{json.dumps(task, ensure_ascii=False)}\n"
         f"Target group: {group_key}\n"
@@ -2952,11 +2964,36 @@ def _insert_survey_map_item(survey_map: dict[str, Any], group_key: str, item: An
         return
     if _is_low_quality_survey_item(group_key, item):
         return
+    if group_key == "representative_methods" and _is_taxonomy_label_as_method(item):
+        return
     if group_key == "field_overview":
         survey_map["field_overview"] = _dict_with_fallback(item, survey_map.get("field_overview", {}))
         return
     survey_map.setdefault(group_key, [])
+    identity = _survey_item_identity(group_key, item)
+    if identity and any(_survey_item_identity(group_key, existing) == identity for existing in survey_map[group_key]):
+        return
     survey_map[group_key].append(item)
+
+
+def _survey_item_identity(group_key: str, item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    keys = {
+        "technical_routes": ("route_name", "name", "route", "title"),
+        "representative_methods": ("paper_title", "method_name", "name", "title"),
+        "datasets": ("name", "dataset", "title"),
+    }.get(group_key, ("title", "name"))
+    for key in keys:
+        value = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(item.get(key) or "").lower())
+        if value:
+            return value
+    return ""
+
+
+def _is_taxonomy_label_as_method(item: dict[str, Any]) -> bool:
+    title = _survey_item_identity("representative_methods", item)
+    return title in {"edgeandtopologyevolution", "nodeandfeatureevolution"}
 
 
 def _is_low_quality_survey_item(group_key: str, item: dict[str, Any]) -> bool:
@@ -3330,7 +3367,7 @@ def _extract_survey_chunk_facts(
         '  "taxonomy": [{"category": "", "basis": "", "typical_methods": [], "solved_problems": "", "limitations": "", "evidence": "", "source_sections": []}],\n'
         '  "technical_routes": [{"name": "", "core_mechanism": "", "typical_pipeline": [], "strengths": [], "weaknesses": [], "representative_method_ids": [], "evidence": "", "source_sections": []}],\n'
         '  "representative_methods": [{"paper_title": "", "year": "", "method_name": "", "route": "", "method_summary": "", "specific_solution": "", "improves_on": "", "remaining_limits": "", "url": "", "evidence": "", "source_sections": []}],\n'
-        '  "datasets": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": [], "url": "", "evidence": "", "source_sections": []}],\n'
+        '  "datasets": [{"name": "", "dataset_type": "", "task": "", "one_sentence_intro": "", "content": "", "structure": "", "scale": "", "metrics": [], "paper_examples": [{"name": "", "usage": ""}], "url": "", "evidence": "", "source_sections": []}],\n'
         '  "evaluation_protocols": [{"protocol": "", "task": "", "metrics": [], "setting": "", "what_it_tests": "", "evidence": "", "source_sections": []}],\n'
         '  "applications": [{"application": "", "scenario": "", "why_suitable": "", "typical_methods": [], "constraints": "", "evidence": "", "source_sections": []}],\n'
         '  "open_challenges": [{"challenge": "", "why_it_matters": "", "current_bottleneck": "", "future_direction": "", "evidence": "", "source_sections": []}],\n'
@@ -3339,7 +3376,8 @@ def _extract_survey_chunk_facts(
         "Every non-empty item must include source_sections with section_id,title,page and an evidence string copied or tightly paraphrased from the chunk. "
         "Limit each list field to at most 5 high-value items, section_guide_candidates to at most 4 items, and each evidence string to at most 160 Chinese characters. "
         "Do not output generic titles such as Item 1 or Point 1. Do not output fragment-only values such as Front. or Comput. "
-        "Do not treat a section title as a representative method. Omit weak facts instead of padding lists. "
+        "Do not treat a section title or taxonomy category such as Edge and Topology Evolution or Node and Feature Evolution as a representative method. "
+        "For dataset-type entries, include concrete paper_examples only when the chunk explicitly names those datasets. Omit weak facts instead of padding lists. "
         "Write Chinese content.\n\n"
         f"Paper title: {paper.get('title', '')}\n"
         f"Abstract: {str(paper.get('abstract') or '')[:1200]}\n"
@@ -3388,10 +3426,10 @@ def _merge_survey_facts(
         "- taxonomy: category, basis, typical_methods, solved_problems, limitations, source_sections, evidence.\n"
         "- technical_routes: name, core_mechanism, typical_pipeline, strengths, weaknesses, representative_method_ids, source_sections, evidence.\n"
         "- representative_methods: paper_title, year, method_name, route, method_summary, specific_solution, improves_on, remaining_limits, url, source_sections, evidence.\n"
-        "- datasets: name, task, content, structure, scale, metrics, url, source_sections, evidence.\n"
+        "- datasets: name, dataset_type, task, one_sentence_intro, content, structure, scale, metrics, paper_examples (concrete names and usage explicitly present in the paper), url, source_sections, evidence.\n"
         "- section_guides_seed: one item per important section with 2-4 cards. Each card content should include core_message, why_it_matters, key_points, connections, next_reading.\n"
-        "For representative_methods, keep concrete paper title/year/method when available; otherwise omit that item. "
-        "For datasets, keep concrete dataset or benchmark names when available; otherwise omit that item. "
+        "For representative_methods, keep concrete paper title/year/method when available; otherwise omit that item. Never turn taxonomy labels such as Edge and Topology Evolution or Node and Feature Evolution into representative methods. "
+        "For datasets, label type and one-sentence introduction, keep concrete dataset or benchmark names when available, and populate paper_examples only from explicit names in the extracted evidence; otherwise omit that example. "
         "Do not output Item 1, Point 1, Front., Comput., or isolated sentence fragments. Do not replace specific facts with generic summaries. "
         "Keep no more than 12 items per list except representative_methods up to 24 and section_guides_seed up to 80 compact items. "
         "Keep evidence concise, at most 160 Chinese characters. Write Chinese.\n\n"

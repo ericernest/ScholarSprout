@@ -37,6 +37,11 @@ def _paper_authors(value: str | None) -> list[str]:
     return result
 
 
+def _conversation_display_title(value: Any) -> str:
+    title = re.sub(r"\s+", " ", str(value or "")).strip()
+    return re.sub(r"^论文精读\s*[:：]\s*", "", title, count=1).strip() or "新会话"
+
+
 def _paper_display_fields(
     title_value: Any, abstract_value: Any, document_value: Any = None
 ) -> tuple[str, str]:
@@ -194,7 +199,7 @@ class ResearchCatalog:
         return [
             {
                 "conversation_id": row["conversation_id"],
-                "title": row["title"],
+                "title": _conversation_display_title(row["title"]),
                 "state": row["state"],
                 "parent_conversation_id": row["parent_conversation_id"],
                 "created_at": row["created_at"],
@@ -239,7 +244,7 @@ class ResearchCatalog:
             ).fetchone()
         return {
             "conversation_id": conversation["conversation_id"],
-            "title": conversation["title"],
+            "title": _conversation_display_title(conversation["title"]),
             "state": conversation["state"],
             "parent_conversation_id": conversation["parent_conversation_id"],
             "created_at": conversation["created_at"],

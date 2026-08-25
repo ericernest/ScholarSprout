@@ -98,7 +98,7 @@ when_not_to_use:
 - `taxonomy`：综述的分类体系。每项包含类别、分类依据、代表路线、优缺点、来源章节。
 - `technical_routes`：技术路线。每项包含路线名、核心思想、典型流程、优势、局限、代表方法 id。
 - `representative_methods`：具体论文及具体方法。每项包含论文标题、年份、链接、所属路线、方法摘要、具体方案、改进对象、残留局限。
-- `datasets`：公开数据集。每项包含名称、任务、内容、结构、规模、指标、链接、来源章节。
+- `datasets`：公开数据集。每项明确标注数据集类型、一句话介绍、任务、内容、结构、规模、指标、链接、来源章节；原文列出具体数据集时补充论文中的具体例子及用途。
 - `evaluation_protocols`：评测协议、指标、公平比较注意事项。
 - `applications`：应用场景、适用路线、落地限制。
 - `open_challenges`：开放问题、为什么难、已有尝试、可能方向。
@@ -231,7 +231,7 @@ Intro 应重点用于：
 }
 ```
 
-没有论文标题时，可以展示“方法/系统/路线级代表方案”，但必须有 `method_name/core_mechanism/specific_solution/evidence`，不能把章节标题当方法。
+没有论文标题时，可以展示“方法/系统级代表方案”，但必须有 `method_name/core_mechanism/specific_solution/evidence`，不能把章节标题、分类标签或技术路线名当作代表方法。
 
 ### 数据集强 schema
 
@@ -240,18 +240,21 @@ Intro 应重点用于：
 ```json
 {
   "name": "数据集或 benchmark 名称",
+  "dataset_type": "数据集类型",
   "task": "任务",
+  "one_sentence_intro": "一句话介绍",
   "content": "数据内容",
   "structure": "数据结构或标注形式",
   "scale": "规模；原文没有就留空",
   "metrics": "评测指标",
+  "paper_examples": [{"name": "论文明确提到的具体数据集", "usage": "该例子在论文中的用途"}],
   "used_by_methods": ["哪些方法/路线使用"],
   "evidence": "具体证据",
   "source_sections": []
 }
 ```
 
-没有具体名称时不要作为正式公开数据集卡片。
+没有具体名称时不要作为正式公开数据集卡片。`paper_examples` 只能来自论文正文明确出现的名称，不能根据类型自行补全。
 
 ### 综述 chunk 事实抽取规范
 

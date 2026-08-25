@@ -415,7 +415,7 @@ select option { color: #07120f; }
 .reader-panel .empty-state { color: #68736f; }
 .empty-state, .reading-map-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
 .selection-toolbar {
-  position: fixed; z-index: 80; display: flex; align-items: center; gap: .25rem; max-width: calc(100vw - 16px); padding: .35rem; border: 1px solid var(--line-strong);
+  position: fixed; z-index: 120; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; max-width: calc(100vw - 16px); padding: .35rem; border: 1px solid var(--line-strong);
   border-radius: 12px; background: rgba(4,16,14,.96); box-shadow: var(--shadow);
 }
 .selection-toolbar button { padding: .45rem .55rem; border: 0; border-radius: 8px; color: var(--ink); background: transparent; font-size: .7rem; }
@@ -615,6 +615,9 @@ select option { color: #07120f; }
 .reading-map-card strong { color: #f1fffb; line-height: 1.32; overflow-wrap: anywhere; }
 .reading-map-card p { margin: 0; color: #b7d7ce; font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
 .reading-map-card small { color: #82aaa0; font-size: .7rem; line-height: 1.5; overflow-wrap: anywhere; }
+.reading-map-fields { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: .36rem .65rem; margin: 0; }
+.reading-map-fields dt { color: #7faaa0; font-size: .7rem; line-height: 1.55; }
+.reading-map-fields dd { margin: 0; color: #c4e1da; font-size: .78rem; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line; }
 .reading-map-why { color: #d5eee7 !important; }
 .reading-map-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .reading-map-panel.is-collapsed .reading-map-header { border-bottom: 0; }

@@ -82,7 +82,6 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "reading-map-kicker",
             "reading-map-title",
             "reading-map-status-copy",
-            "research-overview-button",
             "regenerate-reading-map-button",
             "fork-panel",
             "pdf-fit-select",
@@ -102,11 +101,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('class="paper-reading-body is-booting"', html)
         self.assertNotIn('id="new-paper-button"', html)
 
-    def test_research_overview_is_named_and_reachable_from_workbench_header(self) -> None:
+    def test_research_overview_is_named_without_workbench_expand_button(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('id="research-overview-button"', html)
+        self.assertNotIn('id="research-overview-button"', html)
         self.assertIn('id="reading-map-title">研究总览</h2>', html)
         self.assertIn('$("reading-map-panel")?.scrollIntoView', javascript)
         self.assertIn('$("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览"', javascript)
@@ -114,6 +113,15 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('`正在并行生成${taskLabel}，请稍候。`', javascript)
         self.assertIn('title: "研究问题"', javascript)
         self.assertIn('title: "核心方法"', javascript)
+
+    def test_selection_toolbar_is_portaled_and_positioned_next_to_pointer(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("document.body.append(selectionToolbar)", javascript)
+        self.assertIn("function positionSelectionToolbar", javascript)
+        self.assertIn("const rightX = pointer.x + gap", javascript)
+        self.assertIn("const leftX = pointer.x - toolbarWidth - gap", javascript)
+        self.assertIn('toolbar.dataset.side = useRight ? "right" : "left"', javascript)
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")

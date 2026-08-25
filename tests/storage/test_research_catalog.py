@@ -63,6 +63,15 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(detail["reading_session_id"], self.reading_id)
         self.assertEqual(detail["paper_id"], self.paper_id)
 
+    def test_conversation_titles_hide_paper_reading_prefix(self) -> None:
+        conversation_id = self.store.create_conversation("论文精读：AMEM：Agentic Memory")
+
+        listed = next(item for item in self.catalog.list_conversations() if item["conversation_id"] == conversation_id)
+        detail = self.catalog.get_conversation(conversation_id)
+
+        self.assertEqual(listed["title"], "AMEM：Agentic Memory")
+        self.assertEqual(detail["title"], "AMEM：Agentic Memory")
+
     def test_paper_cards_normalize_structured_text_and_author_objects(self) -> None:
         malformed_id = self.store.upsert_paper(
             paper_id="paper-malformed-card",
@@ -256,7 +265,9 @@ class ResearchLibraryApiTests(unittest.TestCase):
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)
         self.assertIn("function domainWorkspace", script)
-        self.assertIn("function conversationWorkspace", script)
+        self.assertIn("function conversationUrl", script)
+        self.assertNotIn("function conversationWorkspace", script)
+        self.assertNotIn("workspace_kind ===", script)
         self.assertNotIn("function openDomainDetail", script)
         self.assertIn("function attachManagedPaper", script)
         self.assertIn("function renderFolderBranch", script)
