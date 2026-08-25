@@ -193,6 +193,13 @@ class WeightedPaperRanker:
                 relevance = max(
                     relevance, self.config.ranking_canonical_relevance_floor
                 )
+            # Dense-vector cosine similarity is useful for ordering and gates,
+            # but it is not a human percentage: relevant papers commonly land
+            # around 0.2-0.5. Keep the raw value for admission decisions and
+            # calibrate only the reader-facing score when embeddings were used.
+            topic_relevance = self._calibrate_topic_relevance(
+                relevance, vectorizer_backend
+            )
             role = canonical.role if canonical else self._classify_role(paper)
             reading_priority = self._reading_priority(role, canonical is not None)
             query_coverage = (
@@ -202,7 +209,7 @@ class WeightedPaperRanker:
             )
             metadata_completeness = self._metadata_completeness(paper)
             final = (
-                self.config.paper_score_relevance_weight * relevance
+                self.config.paper_score_relevance_weight * topic_relevance
                 + self.config.paper_score_query_coverage_weight * query_coverage
                 + self.config.paper_score_recency_weight * recency
                 + self.config.paper_score_metadata_weight * metadata_completeness
@@ -214,9 +221,13 @@ class WeightedPaperRanker:
                     context_score=round(context_score, 6),
                     recency_score=round(recency, 6),
                     final_score=round(min(1.0, final), 6),
-                    score_version="paper-score-v2",
+                    score_version=(
+                        "paper-score-v3"
+                        if vectorizer_backend.startswith("embedding")
+                        else "paper-score-v2"
+                    ),
                     score_breakdown={
-                        "topic_relevance": round(relevance, 6),
+                        "topic_relevance": round(topic_relevance, 6),
                         "query_coverage": round(query_coverage, 6),
                         "recency": round(recency, 6),
                         "metadata_completeness": round(metadata_completeness, 6),
@@ -323,6 +334,13 @@ class WeightedPaperRanker:
     @staticmethod
     def _vectorizer_name(vectorizer: TextVectorizer) -> str:
         return str(getattr(vectorizer, "name", type(vectorizer).__name__)).strip().lower()
+
+    @staticmethod
+    def _calibrate_topic_relevance(relevance: float, backend: str) -> float:
+        bounded = min(1.0, max(0.0, relevance))
+        if not backend.startswith("embedding"):
+            return bounded
+        return min(1.0, 1.0 - math.exp(-3.0 * bounded))
 
     def _limit_candidates_by_source(
         self,

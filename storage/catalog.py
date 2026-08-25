@@ -37,7 +37,9 @@ def _paper_authors(value: str | None) -> list[str]:
     return result
 
 
-def _paper_display_fields(title_value: Any, abstract_value: Any) -> tuple[str, str]:
+def _paper_display_fields(
+    title_value: Any, abstract_value: Any, document_value: Any = None
+) -> tuple[str, str]:
     title = str(title_value or "").strip()
     abstract = str(abstract_value or "").strip()
     for raw, target in ((title, "title"), (abstract, "abstract")):
@@ -61,6 +63,17 @@ def _paper_display_fields(title_value: Any, abstract_value: Any) -> tuple[str, s
             abstract = str(parsed.get("abstract") or parsed.get("summary") or parsed.get("text") or "").strip()
     title = re.sub(r"\s+", " ", title).strip(" \t\r\n\"'")
     abstract = re.sub(r"\s+", " ", abstract).strip(" \t\r\n\"'")
+    title = re.sub(
+        r"^Published\s+in\s+.+?\(\d{1,2}/\d{4}\)\s*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
+    document = _loads(document_value, {}) if isinstance(document_value, str) else document_value
+    if _looks_like_publication_header(title) and isinstance(document, dict):
+        repaired = _title_from_document_text(str(document.get("full_text") or ""))
+        if repaired:
+            title = repaired
     parts = re.split(r"\s+(?:Abstract|摘要)\s*[:：.\-—–]?\s*", title, maxsplit=1, flags=re.IGNORECASE)
     if len(parts) == 2 and len(parts[1]) >= 40:
         title = parts[0].strip()
@@ -77,6 +90,45 @@ def _paper_display_fields(title_value: Any, abstract_value: Any) -> tuple[str, s
     if title.startswith(("{", "[")) or not title:
         title = "未命名论文"
     return title, abstract
+
+
+def _looks_like_publication_header(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", value or "").strip().lower()
+    return bool(
+        re.match(r"^(?:ieee|acm)\s+transactions?.*\bvol\.?\s+", normalized)
+        or normalized.startswith("published in ")
+    )
+
+
+def _title_from_document_text(text: str) -> str:
+    candidates: list[str] = []
+    for raw_line in text.splitlines()[:24]:
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.lower() in {"abstract", "摘要"}:
+            if candidates:
+                break
+            continue
+        line = re.sub(
+            r"^Published\s+in\s+.+?\(\d{1,2}/\d{4}\)\s*",
+            "",
+            line,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not line or _looks_like_publication_header(line) or re.fullmatch(r"\d+", line):
+            continue
+        if line.startswith(("arXiv", "http", "DOI")):
+            continue
+        if candidates and (
+            "," in line
+            or "@" in line
+            or re.search(r"\b(?:University|Institute|Laboratory|Corresponding author)\b", line)
+        ):
+            break
+        if 5 < len(line) < 220:
+            candidates.append(line)
+        if len(" ".join(candidates)) >= 20 and line.endswith((".", "?", "!")):
+            break
+    return " ".join(candidates[:3]).strip()[:300]
 
 
 class ResearchCatalog:
@@ -185,6 +237,9 @@ class ResearchCatalog:
         with self.store._connection() as connection:
             rows = connection.execute(
                 """SELECT d.*, w.title, w.state, w.created_at, w.updated_at,
+                          (SELECT link.conversation_id FROM conversation_artifacts link
+                           WHERE link.artifact_id = d.artifact_id
+                           ORDER BY link.linked_at DESC LIMIT 1) AS conversation_id,
                           COUNT(r.paper_id) AS recommendation_count
                    FROM domain_onboardings d
                    JOIN work_artifacts w ON w.artifact_id = d.artifact_id
@@ -200,6 +255,7 @@ class ResearchCatalog:
             items.append(
                 {
                     "artifact_id": row["artifact_id"],
+                    "conversation_id": row["conversation_id"] or "",
                     "title": row["title"],
                     "query": row["query"],
                     "language": row["language"],
@@ -222,7 +278,10 @@ class ResearchCatalog:
     def get_domain_onboarding(self, artifact_id: str) -> dict[str, Any] | None:
         with self.store._connection() as connection:
             row = connection.execute(
-                """SELECT d.*, w.title, w.state, w.created_at, w.updated_at
+                """SELECT d.*, w.title, w.state, w.created_at, w.updated_at,
+                          (SELECT link.conversation_id FROM conversation_artifacts link
+                           WHERE link.artifact_id = d.artifact_id
+                           ORDER BY link.linked_at DESC LIMIT 1) AS conversation_id
                    FROM domain_onboardings d JOIN work_artifacts w USING(artifact_id)
                    WHERE d.artifact_id = ?""",
                 (artifact_id,),
@@ -265,6 +324,7 @@ class ResearchCatalog:
             )
         return {
             "artifact_id": row["artifact_id"],
+            "conversation_id": row["conversation_id"] or "",
             "title": row["title"],
             "query": row["query"],
             "state": row["state"],
@@ -305,7 +365,7 @@ class ResearchCatalog:
         for row in rows:
             document = _loads(row["document_json"], {})
             display_title, display_abstract = _paper_display_fields(
-                row["paper_title"], row["paper_abstract"]
+                row["paper_title"], row["paper_abstract"], row["document_json"]
             )
             current_section_title = ""
             for section in document.get("sections", []) if isinstance(document, dict) else []:
@@ -385,7 +445,8 @@ class ResearchCatalog:
                             WHERE latest.paper_id = p.paper_id
                             ORDER BY latest.updated_at DESC LIMIT 1) AS latest_reading_session_id,
                            COUNT(DISTINCT a.annotation_id) AS annotation_count,
-                           CASE WHEN d.paper_id IS NULL THEN 0 ELSE 1 END AS has_document
+                           CASE WHEN d.paper_id IS NULL THEN 0 ELSE 1 END AS has_document,
+                           d.document_json AS document_json
                     FROM papers p
                     LEFT JOIN library_items l ON l.paper_id = p.paper_id
                     LEFT JOIN paper_folders f ON f.folder_id = l.folder_id
@@ -405,7 +466,7 @@ class ResearchCatalog:
         items = []
         for row in rows:
             display_title, display_abstract = _paper_display_fields(
-                row["title"], row["abstract"]
+                row["title"], row["abstract"], row["document_json"]
             )
             items.append({
                 "paper_id": row["paper_id"],

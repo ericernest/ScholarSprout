@@ -7,6 +7,7 @@ const STORAGE = {
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
   copilotWidth: "paper_reading_copilot_width",
+  navigatorWidth: "paper_reading_navigator_width",
   noteHeight: "paper_reading_note_height_ratio",
   pdfMarks: "paper_reading_pdf_marks",
 };
@@ -56,6 +57,7 @@ const create = (tag, className = "", text = "") => {
 boot();
 
 function boot() {
+  syncReturnChatLink();
   setupPdfFirstReaderDom();
   if (isDedicatedWorkspace) {
     $("paper-intake").hidden = true;
@@ -205,10 +207,6 @@ function setupPdfFirstReaderDom() {
 function createPdfToolbar() {
   const toolbar = create("div", "pdf-toolbar");
   toolbar.id = "pdf-toolbar";
-  const zoomOut = create("button", "pdf-tool-button", "−");
-  zoomOut.type = "button";
-  zoomOut.title = "缩小";
-  zoomOut.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) - 10));
   const zoomInput = create("input", "pdf-zoom-input");
   zoomInput.id = "pdf-zoom-input";
   zoomInput.type = "number";
@@ -219,10 +217,6 @@ function createPdfToolbar() {
   zoomInput.title = "自由缩放百分比";
   zoomInput.addEventListener("change", () => setPdfZoom(Number(zoomInput.value || 100)));
   const zoomUnit = create("span", "pdf-tool-label", "%");
-  const zoomIn = create("button", "pdf-tool-button", "+");
-  zoomIn.type = "button";
-  zoomIn.title = "放大";
-  zoomIn.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) + 10));
   const fitWidth = create("button", "pdf-tool-button", "适宽");
   fitWidth.type = "button";
   fitWidth.title = "适应宽度";
@@ -242,7 +236,7 @@ function createPdfToolbar() {
   undo.type = "button";
   undo.title = "撤销最近一次高亮或注释";
   undo.addEventListener("click", undoLastPdfMark);
-  toolbar.append(zoomOut, zoomInput, zoomUnit, zoomIn, fitWidth, fitPage, save, divider, colorLabel, colors, undo);
+  toolbar.append(zoomInput, zoomUnit, fitWidth, fitPage, save, divider, colorLabel, colors, undo);
   return toolbar;
 }
 
@@ -291,8 +285,8 @@ function bindResizeHandle() {
   const grid = $("workbench-grid");
   const saved = Number(localStorage.getItem(STORAGE.copilotWidth));
   if (saved >= 300) setCopilotWidth(saved, false);
-  $("copilot-narrow-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width - 80));
-  $("copilot-wide-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width + 80));
+  const savedNavigator = Number(localStorage.getItem(STORAGE.navigatorWidth));
+  if (savedNavigator >= 190) setNavigatorWidth(savedNavigator, false);
 
   let dragging = false;
   let startX = 0;
@@ -321,6 +315,32 @@ function bindResizeHandle() {
     document.body.style.userSelect = "";
     const width = $("copilot-panel").getBoundingClientRect().width;
     localStorage.setItem(STORAGE.copilotWidth, String(Math.round(width)));
+  });
+
+  const navigatorHandle = $("navigator-resize-handle");
+  let navigatorDragging = false;
+  let navigatorStartX = 0;
+  let navigatorStartWidth = 0;
+  navigatorHandle.addEventListener("mousedown", (event) => {
+    navigatorDragging = true;
+    navigatorStartX = event.clientX;
+    navigatorStartWidth = document.querySelector(".navigator-panel").getBoundingClientRect().width;
+    navigatorHandle.classList.add("is-active");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  });
+  document.addEventListener("mousemove", (event) => {
+    if (navigatorDragging) setNavigatorWidth(navigatorStartWidth + event.clientX - navigatorStartX, false);
+  });
+  document.addEventListener("mouseup", () => {
+    if (!navigatorDragging) return;
+    navigatorDragging = false;
+    navigatorHandle.classList.remove("is-active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    const width = document.querySelector(".navigator-panel").getBoundingClientRect().width;
+    localStorage.setItem(STORAGE.navigatorWidth, String(Math.round(width)));
   });
 }
 
@@ -1118,10 +1138,9 @@ function sectionSummaryTextLegacy(section, indexed = {}, guide = null) {
     ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
     : "";
   const chunks = indexed.text_chunks || [];
-  const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
-  if (guide) return `${pages}${quality}下方是面向科研新手的章节导读。`;
-  if (!chunks.length) return `${pages}${quality}此处是 Agent 索引锚点，请以 PDF 原文为准。`;
-  return `${pages}${quality}下方仅展示供 Agent 检索的章节摘要片段，不作为论文版面还原。`;
+  if (guide) return `${pages}下方是面向科研新手的章节导读。`;
+  if (!chunks.length) return `${pages}此处是 Agent 索引锚点，请以 PDF 原文为准。`;
+  return `${pages}下方仅展示供 Agent 检索的章节摘要片段，不作为论文版面还原。`;
 }
 
 function sectionGuideLegacy(sectionId) {
@@ -1152,22 +1171,21 @@ function sectionSummaryText(section, indexed = {}, guide = null) {
   const pages = section.start_page
     ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
     : "";
-  const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
   if (isReferenceSection(section)) {
-    return `${pages}${quality}参考文献章节按设计不生成智能索引卡片，请直接查看 PDF 原文。`;
+    return `${pages}参考文献属于检索型补充内容，因此不单独生成导读，请直接查看 PDF 原文。`;
   }
   if (!isReadingMapDisplayable()) {
     return isReadingMapFailed()
-      ? `${pages}${quality}智能索引生成失败，请点击“重新生成”。`
+      ? `${pages}智能索引生成失败，请点击“重新生成”。`
       : isReadingMapTimedOut()
-        ? `${pages}${quality}智能索引生成已超时，可以点击“重新生成”。`
-      : `${pages}${quality}智能索引正在生成中，完成前不展示临时 fallback 内容。`;
+        ? `${pages}智能索引生成已超时，可以点击“重新生成”。`
+      : `${pages}智能索引正在生成中，完成前不展示临时 fallback 内容。`;
   }
   return guide
-    ? `${pages}${quality}下方是面向科研新手的章节导读。`
+    ? `${pages}下方是面向科研新手的章节导读。`
     : strHasContent(section.content)
-      ? `${pages}${quality}该小节暂无独立导读，可查看 PDF 原文或直接分析本节。`
-      : `${pages}${quality}该条目暂无独立正文，可查看子章节、PDF 原文或直接分析本节。`;
+      ? `${pages}系统根据该小节与论文主线的关联度，将其归为补充阅读，因此未单独生成导读。该小节暂无独立导读，可查看 PDF 原文或直接分析本节。`
+      : `${pages}该条目主要承担章节组织作用，因此未单独生成导读。可查看子章节、PDF 原文或直接分析本节。`;
 }
 
 function sectionGuide(sectionId) {
@@ -2616,8 +2634,13 @@ function captureSelection() {
   const toolbar = $("selection-toolbar");
   toolbar.hidden = false;
   const toolbarWidth = toolbar.offsetWidth || 430;
-  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, rect.left))}px`;
-  toolbar.style.top = `${Math.max(72, rect.top - toolbar.offsetHeight - 10)}px`;
+  const margin = 10;
+  const right = rect.right + margin;
+  const left = right + toolbarWidth <= window.innerWidth - 8
+    ? right
+    : rect.left - toolbarWidth - margin;
+  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, left))}px`;
+  toolbar.style.top = `${Math.max(72, Math.min(window.innerHeight - toolbar.offsetHeight - 8, rect.top + (rect.height - toolbar.offsetHeight) / 2))}px`;
 }
 
 async function handleSelectionAction(event) {
@@ -3182,6 +3205,7 @@ function renderReadingMap() {
   const empty = $("reading-map-empty");
   const detail = $("reading-map-detail");
   const isSurvey = map.map_variant === "survey";
+  grid.classList.toggle("is-survey-vertical", isSurvey);
   const taskLabel = isSurvey ? "综述导读地图与智能索引" : "研究总览与智能索引";
   if (!grid) return;
   grid.replaceChildren();
@@ -3535,7 +3559,7 @@ async function restoreLocalState() {
       renderReadyCard("继续阅读");
       $("paper-ready-section").hidden = false;
       startParsePolling();
-      toast("已找到上次的阅读记录。");
+      syncReturnChatLink();
     }
   } catch {
     localStorage.removeItem(STORAGE.session);
@@ -3551,12 +3575,27 @@ async function restoreLocalState() {
 }
 
 function persistState() {
+  syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);
   if (state.paperId) localStorage.setItem(STORAGE.paper, state.paperId);
   else localStorage.removeItem(STORAGE.paper);
   if (state.currentSection) localStorage.setItem(STORAGE.section, state.currentSection);
   else localStorage.removeItem(STORAGE.section);
+}
+
+function setNavigatorWidth(width, persist = true) {
+  const next = Math.min(460, Math.max(190, Number(width) || 270));
+  $("workbench-grid").style.setProperty("--navigator-width", `${Math.round(next)}px`);
+  if (persist) localStorage.setItem(STORAGE.navigatorWidth, String(Math.round(next)));
+}
+
+function syncReturnChatLink() {
+  const link = $("return-chat-link");
+  if (!link) return;
+  link.href = state.sessionId
+    ? `/app?conversation_id=${encodeURIComponent(state.sessionId)}`
+    : "/app?mode=paper_reading";
 }
 
 function saveBeforeUnload() {

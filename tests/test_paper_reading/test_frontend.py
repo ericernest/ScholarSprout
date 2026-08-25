@@ -119,12 +119,13 @@ class PaperReadingFrontendTests(unittest.TestCase):
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("function isReferenceSection", javascript)
-        self.assertIn("参考文献章节按设计不生成智能索引卡片", javascript)
+        self.assertIn("参考文献属于检索型补充内容，因此不单独生成导读", javascript)
+        self.assertNotIn("解析质量：", javascript)
         self.assertIn(".filter((section) => !isReferenceSection(section))", javascript)
         self.assertIn("if (isReferenceSection(section)) jumpToPdfPage", javascript)
         self.assertIn("if (renderedGuide) body.append(renderedGuide)", javascript)
         self.assertIn("if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null", javascript)
-        self.assertIn("该条目只有目录标题，没有提取到独立正文", javascript)
+        self.assertIn("该条目主要承担章节组织作用，因此未单独生成导读", javascript)
         self.assertNotIn("智能索引正在生成中，完成前不会展示启发式 fallback 或检索片段。", javascript)
 
     def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
@@ -257,8 +258,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function typesetResponseMath", javascript)
         self.assertIn("window.katex.render", javascript)
         self.assertIn('closest("code,pre,script,style,textarea,.katex")', javascript)
-        self.assertIn('id="copilot-narrow-button"', html)
-        self.assertIn('id="copilot-wide-button"', html)
+        self.assertNotIn('id="copilot-narrow-button"', html)
+        self.assertNotIn('id="copilot-wide-button"', html)
+        self.assertIn('id="copilot-resize-handle"', html)
+        self.assertIn('id="navigator-resize-handle"', html)
         self.assertIn("function setCopilotWidth", javascript)
         self.assertIn(".response-math-block", styles)
 

@@ -20,7 +20,7 @@
         <button id="paper-note-button" class="ghost-button" type="button" hidden>论文笔记</button>
         <button id="fullscreen-button" class="ghost-button" type="button">全屏阅读</button>
         <a class="ghost-button" href="/library?view=paper-readings">精读列表</a>
-        <a class="ghost-button" href="/app">返回对话</a>
+        <a id="return-chat-link" class="ghost-button" href="/app">返回对话</a>
       </nav>
     </header>
 
@@ -127,6 +127,8 @@
             <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><p id="outline-source-warning" class="outline-source-warning" hidden></p><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
           </aside>
 
+          <div id="navigator-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整论文索引宽度"></div>
+
           <article class="workspace-panel reader-panel">
             <header class="reader-toolbar">
               <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
@@ -152,7 +154,7 @@
           <div id="copilot-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整协作区宽度"></div>
 
           <aside id="copilot-panel" class="workspace-panel copilot-panel">
-            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="copilot-narrow-button" class="mini-button" type="button" title="缩窄回复区" aria-label="缩窄回复区">−</button><button id="copilot-wide-button" class="mini-button" type="button" title="加宽回复区" aria-label="加宽回复区">＋</button><button id="research-overview-button" class="mini-button is-accent" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开总览</button><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
+            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="research-overview-button" class="mini-button is-accent" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开总览</button><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
             <div id="copilot-tabs" class="copilot-tabs" role="tablist" aria-label="分析选项卡"></div>
             <div id="copilot-feeds" class="copilot-feeds">
               <div id="analysis-feed" class="analysis-feed copilot-feed is-active" data-feed-id="main" aria-live="polite">

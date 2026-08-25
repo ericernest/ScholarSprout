@@ -129,6 +129,26 @@ def synthetic_outline_pdf() -> bytes:
 
 
 class PDFParserTests(unittest.TestCase):
+    def test_title_skips_ieee_running_header(self) -> None:
+        text = """IEEE TRANSACTIONS ON KNOWLEDGE AND DATA ENGINEERING, VOL. XX, NO. X, 2026
+1
+Self-Evolving Agents as Dynamic Graph
+Transformation: A Survey and New Perspective
+Alice Example, Bob Example
+Abstract
+This survey studies self-evolving agents.
+"""
+
+        self.assertEqual(
+            PDFParser().extract_title(text),
+            "Self-Evolving Agents as Dynamic Graph Transformation: A Survey and New Perspective",
+        )
+
+    def test_title_strips_inline_publication_banner(self) -> None:
+        text = "Published in Transactions on Machine Learning Research (01/2026) A Survey of Self-Evolving Agents\nAbstract\nBody"
+
+        self.assertEqual(PDFParser().extract_title(text), "A Survey of Self-Evolving Agents")
+
     def setUp(self) -> None:
         self.parser = PDFParser()
 

@@ -81,6 +81,32 @@ class ResearchCatalogTests(unittest.TestCase):
         )
         self.assertEqual(paper["authors"], ["Alice Example"])
 
+    def test_paper_cards_repair_persisted_ieee_running_header(self) -> None:
+        paper_id = "paper-ieee-header"
+        bad_title = "IEEE TRANSACTIONS ON KNOWLEDGE AND DATA ENGINEERING, VOL. XX, NO. X, 2026"
+        self.store.save_paper_document(
+            paper_id,
+            {
+                "paper_id": paper_id,
+                "title": bad_title,
+                "abstract": "A survey abstract.",
+                "authors": [],
+                "full_text": (
+                    f"{bad_title}\n1\nSelf-Evolving Agents as Dynamic Graph\n"
+                    "Transformation: A Survey and New Perspective\nAlice Example, Bob Example\nAbstract"
+                ),
+                "sections": [],
+            },
+        )
+        self.store.add_to_library(paper_id)
+
+        paper = next(item for item in self.catalog.list_papers() if item["paper_id"] == paper_id)
+
+        self.assertEqual(
+            paper["title"],
+            "Self-Evolving Agents as Dynamic Graph Transformation: A Survey and New Perspective",
+        )
+
     def test_transient_paper_transport_conversations_are_hidden(self) -> None:
         transient = "paper-reading-transport-only"
         self.store.ensure_conversation(transient, title="论文精读：upload_paper")
@@ -284,11 +310,13 @@ class ResearchLibraryApiTests(unittest.TestCase):
             store = LocalResearchStore(Path(directory) / "research.sqlite3")
             store.initialize()
             task_id = "domain-task-from-library"
+            conversation_id = store.create_conversation("量子控制入门会话")
             store.create_domain_onboarding(
                 artifact_id=task_id,
                 title="领域入门：量子控制",
                 query="量子控制入门",
                 language="zh-CN",
+                conversation_id=conversation_id,
             )
             store.persist_domain_onboarding_result(
                 artifact_id=task_id,
@@ -312,6 +340,7 @@ class ResearchLibraryApiTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["workspace_source"], "catalog")
+            self.assertEqual(response.json()["request"]["session_id"], conversation_id)
             self.assertEqual(response.json()["result"]["domain"], "量子控制")
             self.assertEqual(
                 response.json()["result"]["learning_path"][0]["title"], "基础"

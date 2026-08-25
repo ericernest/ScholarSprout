@@ -4,21 +4,29 @@ const apiKey = document.querySelector("#api-key");
 const modelName = document.querySelector("#model-name");
 const embeddingModelName = document.querySelector("#embedding-model-name");
 const embeddingBaseUrl = document.querySelector("#embedding-base-url");
+const embeddingApiKey = document.querySelector("#embedding-api-key");
+const mineruBaseUrl = document.querySelector("#mineru-base-url");
+const mineruApiKey = document.querySelector("#mineru-api-key");
 const dataDir = document.querySelector("#data-dir");
 const saveButton = document.querySelector("#save-button");
 const message = document.querySelector("#message");
 const setupBadge = document.querySelector("#setup-badge");
 const apiKeyState = document.querySelector("#api-key-state");
 const dataDirHelp = document.querySelector("#data-dir-help");
-const configLocation = document.querySelector("#config-location");
+const embeddingApiKeyState = document.querySelector("#embedding-api-key-state");
+const mineruApiKeyState = document.querySelector("#mineru-api-key-state");
 const guideTitle = document.querySelector("#guide-title");
 
 loadConfig();
 
-document.querySelector("#toggle-secret").addEventListener("click", (event) => {
-  const visible = apiKey.type === "text";
-  apiKey.type = visible ? "password" : "text";
-  event.currentTarget.textContent = visible ? "显示" : "隐藏";
+document.querySelector("#toggle-secret").dataset.secretTarget = "api-key";
+document.querySelectorAll("#toggle-secret, .toggle-secret").forEach((button) => {
+  button.addEventListener("click", (event) => {
+    const input = document.getElementById(event.currentTarget.dataset.secretTarget);
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    event.currentTarget.textContent = visible ? "显示" : "隐藏";
+  });
 });
 
 form.addEventListener("submit", async (event) => {
@@ -31,9 +39,14 @@ form.addEventListener("submit", async (event) => {
     model_name: modelName.value.trim(),
     embedding_model_name: embeddingModelName.value.trim(),
     embedding_base_url: embeddingBaseUrl.value.trim(),
+    clear_embedding_api_key: !embeddingApiKey.value.trim(),
+    mineru_base_url: mineruBaseUrl.value.trim(),
+    clear_mineru_api_key: !mineruApiKey.value.trim(),
     data_dir: dataDir.value.trim(),
   };
   if (apiKey.value.trim()) payload.api_key = apiKey.value.trim();
+  if (embeddingApiKey.value.trim()) payload.embedding_api_key = embeddingApiKey.value.trim();
+  if (mineruApiKey.value.trim()) payload.mineru_api_key = mineruApiKey.value.trim();
 
   try {
     const response = await fetch("/api/config", {
@@ -45,7 +58,14 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok) throw new Error(readError(result));
     applyConfig(result);
     apiKey.value = "";
-    showMessage("配置已保存。请重启 NoviceSynapse 服务，让模型和数据目录配置生效。", "success");
+    embeddingApiKey.value = "";
+    mineruApiKey.value = "";
+    showMessage(
+      result.restart_required
+        ? "配置已保存；数据目录或运行时未能热更新，请重启服务后生效。"
+        : "配置已保存并立即生效，新请求会使用当前配置。",
+      "success",
+    );
   } catch (error) {
     showMessage(error.message || "保存失败，请检查配置。", "error");
   } finally {
@@ -71,17 +91,23 @@ function applyConfig(config) {
   modelName.value = config.client.model_name || "";
   embeddingModelName.value = config.embedding?.model_name || "qwen3-embedding";
   embeddingBaseUrl.value = config.embedding?.base_url || "";
+  mineruBaseUrl.value = config.mineru?.base_url || "";
   dataDir.value = config.storage.data_dir || "~/.novicesynapse";
   apiKeyState.textContent = config.client.api_key_configured
     ? "API Key 已配置；留空保存会保留原密钥。"
     : "API Key 尚未配置，请输入后保存。";
+  embeddingApiKeyState.textContent = config.embedding?.uses_client_api_key
+    ? "当前复用基础模型 API Key；输入后可改用独立 Key。"
+    : "已配置独立 Key；留空保存会改为复用基础模型 API Key。";
+  mineruApiKeyState.textContent = config.mineru?.api_key_configured
+    ? "MinerU API Key 已配置；留空保存会关闭 MinerU。"
+    : "尚未配置；MinerU 当前不启用。";
   setupBadge.textContent = config.setup_complete ? "已配置" : "首次配置";
   guideTitle.textContent = config.setup_complete ? "随时调整配置" : "三步完成配置";
-  configLocation.textContent = `配置文件：${config.config_file}`;
   if (config.storage.environment_override) {
     dataDirHelp.textContent = `环境变量当前覆盖此项，实际目录为：${config.storage.effective_data_dir}`;
   } else {
-    dataDirHelp.textContent = `重启后实际目录：${config.storage.effective_data_dir}`;
+    dataDirHelp.textContent = `当前数据目录：${config.storage.effective_data_dir}；修改后需重启。`;
   }
 }
 

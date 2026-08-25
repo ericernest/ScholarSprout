@@ -1,6 +1,7 @@
 const STORAGE_KEY = "domain_onboarding_workspace_v1_9";
 const LEGACY_STORAGE_KEYS = ["domain_onboarding_workspace_v1_5"];
 const PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
+const PANEL_WIDTHS_KEY = "domain_onboarding_panel_widths_v1";
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const EVENT_NAMES = [
   "accepted",
@@ -83,6 +84,7 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 bindInteractions();
+bindPanelResizers();
 initialize();
 
 async function initialize() {
@@ -295,6 +297,7 @@ function consumeSnapshot(snapshot, persist = true) {
   if (Object.prototype.hasOwnProperty.call(snapshot, "result")) {
     state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : null;
   }
+  syncReturnChatLink();
   render();
   if (persist) saveWorkspace();
 
@@ -444,12 +447,8 @@ function renderStatus() {
 }
 
 function renderOverview(data) {
-  const tags = [
-    data.schema_version ? `<span class="tag">${escapeHtml(data.schema_version)}</span>` : "",
-  ].join("");
   $("overview-content").classList.remove("loading-section");
   $("overview-content").innerHTML = `
-    <div class="hero-kicker">${tags}</div>
     <h2 class="hero-title">${escapeHtml(data.domain || data.query || state.snapshot?.request?.query || "正在理解你的学习目标")}</h2>
     <p class="hero-copy">${escapeHtml(data.text || "正在检索论文并构建领域发展脉络，已完成的内容会自动出现在下方。")}</p>
     <div class="profile-strip">
@@ -460,7 +459,7 @@ function renderOverview(data) {
     </div>
   `;
   $("sidebar-domain").textContent = data.domain || "领域入门";
-  $("sidebar-policy").textContent = data.policy_version || "生成策略执行中";
+  syncReturnChatLink();
 }
 
 function renderPrerequisites(data) {
@@ -830,11 +829,8 @@ function showDetail(kind, id) {
 function renderPaperDetail(paper) {
   const guidance = paperGuidance(paper);
   const contribution = paper.contribution || guidance.contribution;
-  const readingFocus = (paper.reading_focus || []).length
-    ? paper.reading_focus
-    : guidance.reading_focus;
   const scoreBreakdown = paper.score_breakdown;
-  const explainableScore = paper.score_version === "paper-score-v2"
+  const explainableScore = ["paper-score-v2", "paper-score-v3"].includes(paper.score_version)
     && scoreBreakdown
     && typeof scoreBreakdown === "object";
   const scoreRows = explainableScore
@@ -892,7 +888,6 @@ function renderPaperDetail(paper) {
         <h3>主要贡献</h3>
         <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
       </div>
-      ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${pdfUrl ? `<a class="source-link" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">查看 PDF 原文 ↗</a>` : ""}
       <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}" ${pdfUrl ? "" : "disabled"}>
@@ -1082,7 +1077,6 @@ function paperGuidance(paper) {
   const matches = references.filter((item) => String(item.paper_id) === String(paper.paper_id));
   return {
     contribution: matches.find((item) => item.contribution)?.contribution || "",
-    reading_focus: [...new Set(matches.flatMap((item) => item.reading_focus || []))],
   };
 }
 
@@ -1240,6 +1234,64 @@ function formatPercentScore(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
+}
+
+function syncReturnChatLink() {
+  const conversationId = String(state.snapshot?.request?.session_id || "").trim();
+  const href = conversationId
+    ? `/app?conversation_id=${encodeURIComponent(conversationId)}`
+    : "/app";
+  ["return-chat-link", "brand-chat-link"].forEach((id) => {
+    const link = $(id);
+    if (link) link.href = href;
+  });
+}
+
+function bindPanelResizers() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || "{}"); } catch { saved = {}; }
+  if (Number(saved.sidebar) >= 180) workspace.style.setProperty("--sidebar-width", `${saved.sidebar}px`);
+  if (Number(saved.inspector) >= 260) workspace.style.setProperty("--inspector-width", `${saved.inspector}px`);
+
+  const bind = (id, side) => {
+    const handle = $(id);
+    if (!handle) return;
+    handle.addEventListener("pointerdown", (event) => {
+      if (window.innerWidth <= 820) return;
+      const startX = event.clientX;
+      const panel = side === "sidebar" ? document.querySelector(".sidebar") : document.querySelector(".inspector");
+      const startWidth = panel?.getBoundingClientRect().width || 0;
+      handle.setPointerCapture(event.pointerId);
+      handle.classList.add("is-active");
+      document.body.style.userSelect = "none";
+      const move = (moveEvent) => {
+        const direction = side === "sidebar" ? 1 : -1;
+        const min = side === "sidebar" ? 180 : 260;
+        const max = side === "sidebar" ? 420 : 620;
+        const width = Math.round(Math.min(max, Math.max(min, startWidth + direction * (moveEvent.clientX - startX))));
+        workspace.style.setProperty(`--${side}-width`, `${width}px`);
+      };
+      const finish = () => {
+        handle.classList.remove("is-active");
+        document.body.style.userSelect = "";
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", finish);
+        handle.removeEventListener("pointercancel", finish);
+        const widths = {
+          sidebar: Math.round(document.querySelector(".sidebar")?.getBoundingClientRect().width || 230),
+          inspector: Math.round(document.querySelector(".inspector")?.getBoundingClientRect().width || 330),
+        };
+        localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify(widths));
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", finish);
+      handle.addEventListener("pointercancel", finish);
+    });
+  };
+  bind("sidebar-resizer", "sidebar");
+  bind("inspector-resizer", "inspector");
 }
 
 function escapeHtml(value) {

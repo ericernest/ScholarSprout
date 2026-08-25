@@ -24,6 +24,7 @@ from skills.models import CapabilitySelection
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
+from handlers.paper_reading.pipeline.mineru import reflow_document
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
@@ -410,11 +411,7 @@ def _build_quick_paper_payload(
             if doc.page_count:
                 first_text = doc[0].get_text("text")[:2500]
                 if not doc_title and not metadata_title:
-                    for line in first_text.splitlines():
-                        cleaned = line.strip()
-                        if len(cleaned) >= 8:
-                            title = cleaned[:180]
-                            break
+                    title = PDFParser().extract_title(first_text)
             year = year or PDFParser.extract_year(
                 first_text,
                 document_metadata=doc.metadata,
@@ -506,11 +503,47 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
     paper["parse_status"] = "parsing"
     storage.save_paper(paper_id, paper)
     try:
-        metadata = pipeline.parse_pdf_bytes(pdf_bytes)
+        mineru_client = getattr(app_state, "mineru_client", None)
+        mineru_future = None
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="paper-parser") as executor:
+            local_future = executor.submit(pipeline.parse_pdf_bytes, pdf_bytes)
+            if mineru_client is not None and getattr(mineru_client, "configured", False):
+                mineru_future = executor.submit(mineru_client.parse_pdf, pdf_bytes)
+            metadata = local_future.result()
+            mineru_result = None
+            mineru_error = ""
+            if mineru_future is not None:
+                try:
+                    mineru_result = mineru_future.result()
+                except Exception as error:
+                    mineru_error = str(error)
+                    logger.warning("MinerU parse unavailable for %s: %s", paper_id, error)
         metadata.paper_id = paper_id
         payload = _preserve_imported_paper_metadata(
             metadata.model_dump(mode="json"), paper
         )
+        if mineru_result is not None:
+            reflow = reflow_document(mineru_result.markdown)
+            if reflow.get("sections"):
+                for field in (
+                    "sections", "full_text", "section_extraction_source",
+                    "section_extraction_status", "section_extraction_message",
+                    "outline_entries_count",
+                ):
+                    payload[field] = reflow[field]
+                if reflow.get("title"):
+                    payload["title"] = reflow["title"]
+                if reflow.get("abstract"):
+                    payload["abstract"] = reflow["abstract"]
+                payload["parse_backend"] = "mineru"
+                payload["mineru_status"] = "done"
+        elif mineru_future is not None:
+            payload["parse_backend"] = "local"
+            payload["mineru_status"] = "unavailable"
+            payload["mineru_error"] = mineru_error[:500]
+        else:
+            payload["parse_backend"] = "local"
+            payload["mineru_status"] = "disabled"
         payload["paper_id"] = paper_id
         payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
         payload["page_count"] = paper.get("page_count", 0)

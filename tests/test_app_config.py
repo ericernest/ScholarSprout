@@ -11,7 +11,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 from config.manager import load_config, resolve_data_dir, save_config
-from config.schema import AppConfig, EmbeddingConfig, OpenAIClientConfig, StorageConfig
+from config.schema import AppConfig, EmbeddingConfig, MinerUConfig, OpenAIClientConfig, StorageConfig
 from config.web import _is_local_request
 from gateway.app import app
 
@@ -29,6 +29,11 @@ class ConfigManagerTests(unittest.TestCase):
                 embedding=EmbeddingConfig(
                     model_name="qwen3-embedding",
                     base_url="https://embedding.example.test/v1",
+                    api_key="embedding-secret",
+                ),
+                mineru=MinerUConfig(
+                    base_url="https://mineru.example.test/file_parse",
+                    api_key="mineru-secret",
                 ),
                 storage=StorageConfig(data_dir=str(Path(directory) / "data")),
             )
@@ -121,7 +126,37 @@ class ConfigWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('id="embedding-model-name"', response.text)
         self.assertIn('id="embedding-base-url"', response.text)
+        self.assertIn('id="embedding-api-key"', response.text)
+        self.assertIn('id="mineru-base-url"', response.text)
+        self.assertIn('id="mineru-api-key"', response.text)
+        self.assertNotIn("配置文件：", response.text)
         self.assertIn("三步完成配置", response.text)
+
+    def test_runtime_connection_changes_can_apply_without_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = AppConfig(
+                client=OpenAIClientConfig(api_key="secret", model_name="old-model"),
+                storage=StorageConfig(data_dir=directory),
+            )
+            app.state.reload_runtime_config = lambda updated: {"runtime_reloaded": True}
+            try:
+                with (
+                    patch("config.web.load_config", return_value=config),
+                    patch("config.web.save_config"),
+                ):
+                    response = TestClient(app).put(
+                        "/api/config",
+                        json={
+                            "model_name": "new-model",
+                            "data_dir": directory,
+                        },
+                    )
+            finally:
+                del app.state.reload_runtime_config
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["runtime_reloaded"])
+            self.assertFalse(response.json()["restart_required"])
 
     def test_remote_configuration_is_rejected_by_default(self) -> None:
         request = Request(

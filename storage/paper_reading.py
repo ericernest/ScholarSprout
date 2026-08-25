@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from storage.local_store import LocalResearchStore
+from storage.catalog import _paper_display_fields
 
 
 class PaperReadingStorage:
@@ -46,7 +47,15 @@ class PaperReadingStorage:
         self.research_store.save_paper_document(paper_id, payload)
 
     def load_paper(self, paper_id: str) -> dict[str, Any] | None:
-        return self.research_store.load_paper_document(paper_id)
+        paper = self.research_store.load_paper_document(paper_id)
+        if paper is None:
+            return None
+        title, abstract = _paper_display_fields(
+            paper.get("title"), paper.get("abstract"), paper
+        )
+        paper["title"] = title
+        paper["abstract"] = abstract
+        return paper
 
     def delete_paper(self, paper_id: str) -> bool:
         deleted = self.research_store.delete_paper(paper_id)
