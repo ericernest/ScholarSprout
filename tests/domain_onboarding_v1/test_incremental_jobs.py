@@ -56,6 +56,45 @@ class IncrementalJobTests(unittest.TestCase):
         replay = self.store.events_after(first["task_id"], events[1]["id"])
         self.assertEqual([item["event"] for item in replay], ["development_ready", "completed"])
 
+    def test_job_database_does_not_retain_internal_quality_payloads(self):
+        task_id = "no-quality-persistence"
+        self.store.create(task_id, {"query": "RAG"}, None)
+        self.store.append_event(
+            task_id,
+            "quality_ready",
+            0.9,
+            True,
+            ["quality"],
+            {"quality": {"passed_hard_gates": False}, "domain": "RAG"},
+        )
+        self.store.finish(
+            task_id,
+            "completed",
+            {
+                "status": "ok",
+                "domain": "RAG",
+                "quality": {"score": 0.2},
+                "quality_attempts": [{"attempt": 1}],
+                "final_quality": {"verdict": "failed"},
+                "repair_record": {"triggered": True},
+            },
+            None,
+        )
+
+        snapshot = self.store.get(task_id)
+        events = self.store.events_after(task_id, 0)
+        self.assertEqual(snapshot["result"], {"status": "ok", "domain": "RAG"})
+        self.assertNotIn("quality", events[0]["data"])
+
+        # Existing rows from older versions are scrubbed when the store opens.
+        with self.store._connect() as db:
+            db.execute(
+                "UPDATE jobs SET result_json=? WHERE task_id=?",
+                ('{"status":"ok","quality":{"score":0.1}}', task_id),
+            )
+        reopened = SQLiteJobStore(self.store.path)
+        self.assertEqual(reopened.get(task_id)["result"], {"status": "ok"})
+
     def test_llm_deltas_are_batched_and_flushed_before_section_events(self):
         task_id = "batched-deltas"
         self.store.create(

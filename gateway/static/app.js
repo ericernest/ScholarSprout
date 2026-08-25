@@ -17,6 +17,7 @@ const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "int
 let currentMode = "chat";
 let isGenerating = false;
 let activeResponseController = null;
+let activeGenerationId = "";
 let selectedPaperFile = null;
 let activeDiscussion = null;
 let conversationContexts = [];
@@ -345,6 +346,12 @@ function setMode(mode) {
 // Send user message to current backend endpoint.
 async function sendMessage() {
   if (isGenerating) {
+    if (activeGenerationId) {
+      fetch(`/chat/generations/${encodeURIComponent(activeGenerationId)}/cancel`, {
+        method: "POST",
+        keepalive: true,
+      }).catch(() => {});
+    }
     activeResponseController?.abort();
     return;
   }
@@ -380,7 +387,10 @@ async function sendMessage() {
     }
 
     const controller = new AbortController();
+    const generationId = globalThis.crypto?.randomUUID?.()
+      || `generation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     activeResponseController = controller;
+    activeGenerationId = generationId;
     const streaming = appendStreamingMessage();
     const response = await fetch(`${endpoint}/stream`, {
       method: "POST",
@@ -391,13 +401,14 @@ async function sendMessage() {
         session_id: sessionId,
         content,
         user_id: "local-web",
-        metadata: activeDiscussion ? {
-          active_context: {
+        metadata: {
+          generation_id: generationId,
+          ...(activeDiscussion ? { active_context: {
             kind: activeDiscussion.kind,
             id: activeDiscussion.id,
             title: activeDiscussion.title || "",
-          },
-        } : {},
+          } } : {}),
+        },
       }),
       signal: controller.signal,
     });
@@ -419,6 +430,7 @@ async function sendMessage() {
     }
   } finally {
     activeResponseController = null;
+    activeGenerationId = "";
     setLoading(false);
   }
 }

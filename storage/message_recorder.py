@@ -42,10 +42,16 @@ def record_outbound(app_state: Any, message: ChannelMessage) -> None:
     if store is None or message.mode == "paper_reading":
         return
     try:
+        text = message_text(message.mode, message.content, outbound=True)
+        # A cancelled/empty chat result is transport state, not an assistant
+        # reply. In particular, never turn it into a visible {"status":"ok"}
+        # history row.
+        if not text:
+            return
         store.append_message(
             message.session_id,
             role="assistant",
-            content=message_text(message.mode, message.content, outbound=True),
+            content=text,
             mode=message.mode,
             channel=message.channel,
             message_id=message.message_id,
@@ -56,7 +62,7 @@ def record_outbound(app_state: Any, message: ChannelMessage) -> None:
 
 def message_text(mode: str, content: Any, *, outbound: bool) -> str:
     if isinstance(content, str):
-        return content.strip() or "（空消息）"
+        return content.strip() or ("" if outbound else "（空消息）")
     if not isinstance(content, dict):
         return str(content)
     if outbound:
@@ -69,6 +75,8 @@ def message_text(mode: str, content: Any, *, outbound: bool) -> str:
         ):
             if isinstance(value, str) and value.strip():
                 return value.strip()
+        if mode == "chat":
+            return ""
         summary = {
             key: content[key]
             for key in ("status", "action", "session_id", "paper_id", "error")

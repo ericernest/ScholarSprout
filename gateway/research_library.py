@@ -120,10 +120,8 @@ def domain_onboarding_workspace(artifact_id: str, request: Request) -> dict:
         }
 
     overview = item.get("overview") if isinstance(item.get("overview"), dict) else {}
-    quality = item.get("quality") if isinstance(item.get("quality"), dict) else {}
     result = {
         **overview,
-        **quality,
         "schema_version": item.get("output_schema_version") or "",
         "query": item.get("query") or "",
         "learner_profile": item.get("learner_profile") or {},

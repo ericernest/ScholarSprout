@@ -68,7 +68,12 @@ class ResearchContextToolTests(unittest.TestCase):
                 "domain": "图神经网络",
                 "text": "领域概览",
                 "research_plan": {"goal": "入门"},
-                "learning_path": [{"stage": "基础"}],
+                "learning_path": [{
+                    "stage": "基础",
+                    "papers": [{"paper_id": "paper-path-1", "title": "路径论文"}],
+                }],
+                "quality": {"score": 0.2, "passed_hard_gates": False},
+                "quality_attempts": [{"attempt": 1}],
             },
         )
         result = GetDomainOnboardingResultTool(self.store).run({
@@ -81,7 +86,17 @@ class ResearchContextToolTests(unittest.TestCase):
         })
 
         self.assertEqual(result["query"], "图神经网络")
+        self.assertEqual(result["paper_list"][0]["title"], "路径论文")
+        self.assertNotIn("quality", result)
         self.assertIn("不属于当前主会话", denied["error"])
+
+        detail = ResearchCatalog(self.store).get_domain_onboarding(artifact_id)
+        self.assertNotIn("quality", detail)
+        with self.store._connection() as connection:
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(domain_onboardings)")
+            }
+        self.assertNotIn("quality_json", columns)
 
     def test_legacy_paper_messages_migrate_to_hidden_dialogue(self) -> None:
         message_id = self.store.append_message(

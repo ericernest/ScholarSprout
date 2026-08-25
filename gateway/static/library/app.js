@@ -731,7 +731,7 @@ function previewFor(item) {
 
 function metaFor(item) {
   if (state.view === "conversations") return [[`${item.message_count} 条消息`], ...(item.modes || []).map((mode) => [modeLabel(mode), true]), item.parent_conversation_id ? ["Fork 会话", true] : null].filter(Boolean);
-  if (state.view === "domain-onboardings") return [[stateLabel(item.state)], [`阶段：${item.current_stage}`, true], [`${item.recommendation_count} 篇推荐论文`], item.quality_score != null ? [`质量 ${Math.round(item.quality_score * 100)}%`, true] : null].filter(Boolean);
+  if (state.view === "domain-onboardings") return [[stateLabel(item.state)], [`阶段：${item.current_stage}`, true], [`${item.recommendation_count} 篇推荐论文`]].filter(Boolean);
   if (state.view === "paper-readings") return [[readingState(item.state)], [`${Math.round(Number(item.progress?.percentage || 0))}%`], [`${item.block_count} 个分析块`, true], [`${item.annotation_count} 条标注`, true]];
   return [[item.in_library ? statusLabel(item.reading_status) : "未加入论文库"], item.folder_path ? [`文件夹：${item.folder_path}`, true] : ["未放入文件夹"], item.publication_year ? [String(item.publication_year), true] : null, [`${item.reading_count} 次精读`], [`${item.annotation_count} 条标注`, true]].filter(Boolean);
 }

@@ -18,7 +18,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _now() -> str:
@@ -217,7 +217,6 @@ class LocalResearchStore:
                     overview_json TEXT,
                     research_plan_json TEXT,
                     learning_path_json TEXT,
-                    quality_json TEXT,
                     knowledge_graph_json TEXT,
                     error_summary TEXT
                 );
@@ -366,10 +365,21 @@ class LocalResearchStore:
             )
             self._migrate_paper_reading_dialogues(connection)
             self._repair_cross_conversation_memory_watermarks(connection)
+            self._clear_legacy_domain_quality(connection)
             connection.execute(
                 "INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now()),
             )
+
+    @staticmethod
+    def _clear_legacy_domain_quality(connection: sqlite3.Connection) -> None:
+        """Stop retaining internal evaluator payloads in existing databases."""
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(domain_onboardings)").fetchall()
+        }
+        if "quality_json" in columns:
+            connection.execute("UPDATE domain_onboardings SET quality_json = NULL")
 
     @staticmethod
     def _repair_cross_conversation_memory_watermarks(
@@ -840,11 +850,6 @@ class LocalResearchStore:
             "reproducibility",
         )
         overview = {key: response[key] for key in overview_keys if key in response}
-        quality = {
-            key: response[key]
-            for key in ("quality", "quality_attempts", "final_quality", "repair_record")
-            if key in response
-        }
         self.save_domain_blocks(
             artifact_id,
             output_schema_version=str(
@@ -854,7 +859,6 @@ class LocalResearchStore:
             overview=overview or None,
             research_plan=response.get("research_plan"),
             learning_path=response.get("learning_path"),
-            quality=quality or None,
             knowledge_graph=response.get("knowledge_graph"),
             state=state,
             current_stage="completed" if state == "completed" else status,
@@ -894,7 +898,6 @@ class LocalResearchStore:
         overview: dict[str, Any] | None = None,
         research_plan: dict[str, Any] | None = None,
         learning_path: list[dict[str, Any]] | None = None,
-        quality: dict[str, Any] | None = None,
         knowledge_graph: dict[str, Any] | None = None,
         state: str = "completed",
         current_stage: str = "completed",
@@ -905,11 +908,11 @@ class LocalResearchStore:
         with self._connection() as connection:
             connection.execute(
                 """UPDATE domain_onboardings SET current_stage = ?, output_schema_version = ?, learner_profile_json = ?,
-                   overview_json = ?, research_plan_json = ?, learning_path_json = ?, quality_json = ?, knowledge_graph_json = ?, error_summary = ?
+                   overview_json = ?, research_plan_json = ?, learning_path_json = ?, knowledge_graph_json = ?, error_summary = ?
                    WHERE artifact_id = ?""",
                 (current_stage, output_schema_version, _json(learner_profile) if learner_profile is not None else None,
                  _json(overview) if overview is not None else None, _json(research_plan) if research_plan is not None else None,
-                 _json(learning_path) if learning_path is not None else None, _json(quality) if quality is not None else None,
+                 _json(learning_path) if learning_path is not None else None,
                  _json(knowledge_graph) if knowledge_graph is not None else None, error_summary, artifact_id),
             )
             connection.execute(

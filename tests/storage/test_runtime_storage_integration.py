@@ -68,6 +68,33 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             self.assertEqual(rows, [("user", "chat", "今天讨论数据库"), ("assistant", "chat", "好的。")])
             self.assertEqual(title, "今天讨论数据库")
 
+    def test_empty_chat_transport_result_is_not_persisted_as_status_ok(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            store = LocalResearchStore(database)
+            store.initialize()
+            state = SimpleNamespace(research_storage=store)
+            inbound = ChannelMessage(
+                session_id="cancelled-chat",
+                channel="web",
+                direction="inbound",
+                mode="chat",
+                content="继续回答",
+            )
+
+            process_channel_message(
+                _Channel(),
+                inbound,
+                lambda _message, _state: {"text": "", "interrupted": True, "status": "ok"},
+                state,
+            )
+
+            with closing(sqlite3.connect(database)) as connection:
+                rows = connection.execute(
+                    "SELECT role, content FROM messages ORDER BY sequence_number"
+                ).fetchall()
+            self.assertEqual(rows, [("user", "继续回答")])
+
     def test_paper_message_does_not_persist_uploaded_base64(self) -> None:
         with TemporaryDirectory() as directory:
             database = Path(directory) / "research.sqlite3"

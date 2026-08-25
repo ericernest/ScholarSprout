@@ -40,7 +40,11 @@ from handlers.paper_reading_handler import (
     handle_paper_reading_message,
     resume_pending_reading_map_generations,
 )
-from gateway.message_flow import process_channel_input, process_channel_stream
+from gateway.message_flow import (
+    cancel_stream_generation,
+    process_channel_input,
+    process_channel_stream,
+)
 from models.client import OpenAIClient, SetupRequiredModel
 from memory import ConversationMemoryService
 from handlers.paper_reading.harness.session import SessionManager
@@ -176,6 +180,14 @@ async def chat_stream(request: Request) -> StreamingResponse:
         handler=handle_chat_message,
         app_state=request.app.state,
     )
+
+
+@app.post("/chat/generations/{generation_id}/cancel")
+def cancel_chat_generation(generation_id: str) -> dict[str, object]:
+    return {
+        "generation_id": generation_id,
+        "cancelled": cancel_stream_generation(generation_id),
+    }
 
 
 # paper_reading 功能入口。

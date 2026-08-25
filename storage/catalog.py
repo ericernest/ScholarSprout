@@ -313,7 +313,6 @@ class ResearchCatalog:
             ).fetchall()
         items = []
         for row in rows:
-            quality = _loads(row["quality_json"], {})
             overview = _loads(row["overview_json"], {})
             items.append(
                 {
@@ -325,7 +324,6 @@ class ResearchCatalog:
                     "state": row["state"],
                     "current_stage": row["current_stage"],
                     "recommendation_count": int(row["recommendation_count"]),
-                    "quality_score": quality.get("score") if isinstance(quality, dict) else None,
                     "preview": str(
                         overview.get("summary")
                         or overview.get("domain_definition")
@@ -397,7 +395,6 @@ class ResearchCatalog:
             "overview": _loads(row["overview_json"], {}),
             "research_plan": _loads(row["research_plan_json"], {}),
             "learning_path": _loads(row["learning_path_json"], []),
-            "quality": _loads(row["quality_json"], {}),
             "knowledge_graph": _loads(row["knowledge_graph_json"], {}),
             "error_summary": row["error_summary"] or "",
             "recommendations": recommendation_items,

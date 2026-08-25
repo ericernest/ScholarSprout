@@ -26,6 +26,25 @@ from .schemas import DomainOnboardingRequest, PipelineResult
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "interrupted"}
 RETRYABLE_STATES = {"failed", "cancelled", "interrupted"}
+_INTERNAL_QUALITY_KEYS = {
+    "quality",
+    "quality_attempts",
+    "final_quality",
+    "repair_record",
+}
+
+
+def _without_internal_quality(value: Any) -> Any:
+    """Remove evaluator-only payloads before a job snapshot reaches SQLite."""
+    if isinstance(value, dict):
+        return {
+            key: _without_internal_quality(item)
+            for key, item in value.items()
+            if key not in _INTERNAL_QUALITY_KEYS
+        }
+    if isinstance(value, list):
+        return [_without_internal_quality(item) for item in value]
+    return value
 
 
 class JobQueueFullError(RuntimeError):
@@ -117,6 +136,33 @@ class SQLiteJobStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS job_metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
+            self._scrub_existing_quality_payloads(db)
+
+    @staticmethod
+    def _scrub_existing_quality_payloads(db: sqlite3.Connection) -> None:
+        for row in db.execute(
+            "SELECT task_id, partial_json, result_json FROM jobs"
+        ).fetchall():
+            partial = _without_internal_quality(json.loads(row["partial_json"] or "{}"))
+            result = (
+                _without_internal_quality(json.loads(row["result_json"]))
+                if row["result_json"]
+                else None
+            )
+            db.execute(
+                "UPDATE jobs SET partial_json = ?, result_json = ? WHERE task_id = ?",
+                (
+                    json.dumps(partial, ensure_ascii=False),
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    row["task_id"],
+                ),
+            )
+        for row in db.execute("SELECT id, data_json FROM job_events").fetchall():
+            data = _without_internal_quality(json.loads(row["data_json"] or "{}"))
+            db.execute(
+                "UPDATE job_events SET data_json = ? WHERE id = ?",
+                (json.dumps(data, ensure_ascii=False), row["id"]),
+            )
 
     @staticmethod
     def _ensure_column(
@@ -192,6 +238,7 @@ class SQLiteJobStore:
         replace_paths: list[str],
         data: dict[str, Any],
     ) -> dict[str, Any]:
+        data = _without_internal_quality(data)
         with self._lock, self._connect() as db:
             row = db.execute(
                 "SELECT revision,partial_json,state FROM jobs WHERE task_id=?", (task_id,)
@@ -249,6 +296,7 @@ class SQLiteJobStore:
         result: dict[str, Any] | None,
         error: str | None,
     ) -> None:
+        result = _without_internal_quality(result) if result is not None else None
         with self._lock, self._connect() as db:
             db.execute(
                 "UPDATE jobs SET state=?,progress=CASE WHEN ?='completed' THEN 1.0 ELSE progress END,result_json=?,error=?,retryable=?,partial_json=CASE WHEN ?='completed' THEN '{}' ELSE partial_json END,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
@@ -273,6 +321,7 @@ class SQLiteJobStore:
         progress: float,
     ) -> None:
         """Commit terminal state and its replay event in one transaction."""
+        result = _without_internal_quality(result) if result is not None else None
         with self._lock, self._connect() as db:
             row = db.execute(
                 "SELECT revision FROM jobs WHERE task_id=?", (task_id,)

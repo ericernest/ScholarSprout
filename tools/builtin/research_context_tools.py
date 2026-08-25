@@ -176,10 +176,29 @@ class GetDomainOnboardingResultTool(_ResearchTool):
             return {"error": "领域入门结果不存在"}
         if detail.get("conversation_id") != conversation_id:
             return {"error": "该领域入门结果不属于当前主会话"}
+        learning_path = detail.get("learning_path") or []
+        paper_list: list[dict[str, Any]] = []
+        seen_papers: set[str] = set()
+        for paper in detail.get("recommendations") or []:
+            if isinstance(paper, dict):
+                key = str(paper.get("paper_id") or paper.get("title") or "").strip()
+                if key and key not in seen_papers:
+                    paper_list.append(paper)
+                    seen_papers.add(key)
+        for step in learning_path if isinstance(learning_path, list) else []:
+            if not isinstance(step, dict):
+                continue
+            for paper in step.get("papers") or []:
+                if not isinstance(paper, dict):
+                    continue
+                key = str(paper.get("paper_id") or paper.get("title") or "").strip()
+                if key and key not in seen_papers:
+                    paper_list.append(paper)
+                    seen_papers.add(key)
         return {
             key: detail.get(key)
             for key in (
                 "artifact_id", "title", "query", "state", "current_stage",
-                "overview", "research_plan", "learning_path", "quality", "recommendations",
+                "overview", "research_plan", "learning_path", "recommendations",
             )
-        }
+        } | {"paper_list": paper_list}
