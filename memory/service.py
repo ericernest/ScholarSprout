@@ -250,7 +250,7 @@ class ConversationMemoryService:
             for raw in re.split(r"[\r\n]+|(?<=[。！？!?])", str(source or "")):
                 text = " ".join(raw.split()).strip()
                 key = cls._key(text)
-                if not text or not key or key in seen:
+                if not text or not key or key in seen or cls._is_memory_noise(text):
                     continue
                 if sum(len(item) + 1 for item in units) + len(text) > 2000:
                     break
@@ -271,19 +271,30 @@ class ConversationMemoryService:
     @classmethod
     def _sanitize(cls, payload: dict[str, Any]) -> dict[str, Any]:
         goal = cls._text(payload.get("current_goal"), 300)
-        decisions = cls._items(payload.get("confirmed_decisions"), limit=12)
+        if cls._is_memory_noise(goal):
+            goal = ""
+        decisions = [
+            item
+            for item in cls._items(payload.get("confirmed_decisions"), limit=12)
+            if not cls._is_memory_noise(item)
+        ]
         decision_keys = {cls._key(item) for item in decisions}
         questions = [
             item
             for item in cls._items(payload.get("open_questions"), limit=12)
-            if cls._key(item) not in decision_keys
+            if cls._key(item) not in decision_keys and not cls._is_memory_noise(item)
         ]
         occupied = {cls._key(goal), *decision_keys, *(cls._key(item) for item in questions)}
-        summary_lines = [
-            line.strip()
-            for line in cls._text(payload.get("summary"), 2400).splitlines()
-            if line.strip() and cls._key(line) not in occupied
-        ]
+        summary_lines: list[str] = []
+        raw_summary = cls._redact(str(payload.get("summary") or ""))[:2400]
+        for raw in re.split(r"[\r\n]+|(?<=[。！？!?])", raw_summary):
+            line = " ".join(raw.split()).strip()
+            if (
+                line
+                and cls._key(line) not in occupied
+                and not cls._is_memory_noise(line)
+            ):
+                summary_lines.append(line)
         return {
             "schema_version": MEMORY_SCHEMA_VERSION,
             "current_goal": goal,
@@ -350,6 +361,50 @@ class ConversationMemoryService:
     @staticmethod
     def _key(value: str) -> str:
         return "".join(str(value or "").casefold().split()).strip(".,;:!?，。；：！？")
+
+    @staticmethod
+    def _is_memory_noise(value: str) -> bool:
+        """Drop assistant self-diagnostics that should never become durable memory."""
+        text = "".join(str(value or "").casefold().split())
+        if not text:
+            return False
+        internal_markers = (
+            "hard_gate",
+            "hardgate",
+            "paper_validity",
+            "quality_score",
+            "qualityfailed",
+            "质量检查未通过",
+            "质量未通过",
+            "质量门禁",
+            "路由诊断",
+        )
+        if any(marker in text for marker in internal_markers):
+            return True
+        if "我不记得" in text or "助手不记得" in text:
+            return True
+        memory_markers = (
+            "记忆",
+            "存档",
+            "持久化记录",
+            "历史记录",
+            "聊天历史",
+            "对话历史",
+        )
+        denial_markers = (
+            "不记得",
+            "不算",
+            "不认为",
+            "不存在",
+            "没有",
+            "无任何",
+            "无法确认",
+            "为空",
+            "未保存",
+        )
+        return any(marker in text for marker in memory_markers) and any(
+            marker in text for marker in denial_markers
+        )
 
     @staticmethod
     def _context_messages(

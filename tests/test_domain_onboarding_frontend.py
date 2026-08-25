@@ -130,6 +130,16 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
             restore.index("const message = entry.value"),
         )
 
+    def test_chat_reloads_persisted_history_after_returning_to_page(self) -> None:
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('window.addEventListener("pageshow", reloadWhenEnteringChat)', script)
+        self.assertIn('window.addEventListener("focus", reloadWhenEnteringChat)', script)
+        self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertIn("window.setInterval(reloadWhenEnteringChat, 2500)", script)
+        self.assertIn('cache: "no-store"', script)
+        self.assertIn("conversationHistorySignature", script)
+
     def test_paper_actions_download_pdf_without_opening_metadata_page(self) -> None:
         html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(
             encoding="utf-8"

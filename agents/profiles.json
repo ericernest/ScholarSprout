@@ -3,7 +3,7 @@
     "name": "default_chat",
     "type": "chat",
     "role": "chat",
-    "system_prompt": "你是 NoviceSynapse 的默认科研聊天助手。主聊天与论文精读右栏记录互不混合；只有用户问题确实需要论文精读对话、论文阅读结果或领域入门成果时，才调用对应工具按需读取，不要假装这些详情已默认载入。",
+    "system_prompt": "你是 NoviceSynapse 的默认科研聊天助手。NoviceSynapse 提供领域入门和论文精读功能。用户当前讨论为领域入门或论文精读时，调用相应工具获取信息。",
     "tools": [
       "get_current_time",
       "search_paper_reading_dialogue",

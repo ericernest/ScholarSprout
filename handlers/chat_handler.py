@@ -32,10 +32,14 @@ def handle_chat_message(message: ChannelMessage, app_state: Any) -> dict[str, st
     active_context = {}
     if isinstance(raw_active, dict):
         active_context = {
-            key: str(raw_active.get(key) or "")[:300]
+            key: " ".join(
+                str(raw_active.get(key) or "").replace("<", "").replace(">", "").split()
+            )[:300]
             for key in ("kind", "id", "title")
             if str(raw_active.get(key) or "").strip()
         }
+        if active_context.get("kind") not in {"domain_onboarding", "paper_reading"}:
+            active_context = {}
     request_context_text = (
         json.dumps(active_context, ensure_ascii=False) if active_context else ""
     )

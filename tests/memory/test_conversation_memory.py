@@ -287,6 +287,48 @@ class ConversationMemoryTests(unittest.TestCase):
         self.assertNotIn("hunter2-value", serialized)
         self.assertGreaterEqual(serialized.count("[已隐藏敏感信息]"), 4)
 
+    def test_memory_sanitizer_drops_assistant_denial_and_internal_quality_diagnostics(self) -> None:
+        memory = ConversationMemoryService._sanitize(
+            {
+                "current_goal": "继续聊昨天的烧烤",
+                "summary": (
+                    "用户昨天独自吃烧烤花了130元。\n"
+                    "助手称这不算记忆并且没有存档。\n"
+                    "论文推荐的 paper_validity=0，质量检查未通过。"
+                ),
+                "confirmed_decisions": ["后续自然引用已确认事实"],
+                "open_questions": [],
+            }
+        )
+
+        self.assertIn("烧烤花了130元", memory["summary"])
+        self.assertNotIn("不算记忆", memory["summary"])
+        self.assertNotIn("paper_validity", memory["summary"])
+
+    def test_memory_and_active_discussion_are_system_context_not_user_messages(self) -> None:
+        model = AnswerModel()
+        profile = SimpleNamespace(
+            system_prompt="system", tools=[], default_skill="", skills=[], role="assistant"
+        )
+        run_agent_detailed(
+            SimpleNamespace(llm=model, profile=profile),
+            "还记得吗？",
+            EmptyTools(),
+            memory_text="[用户在本会话中确认的事实]\n- 用户烧烤花了130元",
+            request_context_text=json.dumps(
+                {"kind": "domain_onboarding", "id": "domain-1", "title": "情感大模型"},
+                ensure_ascii=False,
+            ),
+        )
+
+        messages = model.calls[0]["messages"]
+        self.assertIn("用户烧烤花了130元", messages[0]["content"])
+        self.assertIn("情感大模型", messages[0]["content"])
+        self.assertIn("我们为你配备了会话记忆系统", messages[0]["content"])
+        self.assertIn("调用 get_domain_onboarding_result 获取相关信息", messages[0]["content"])
+        self.assertNotIn("不要假装", messages[0]["content"])
+        self.assertEqual(messages[1:], [{"role": "user", "content": "还记得吗？"}])
+
     def test_legacy_snapshot_secret_is_redacted_before_prompt_rendering(self) -> None:
         conversation_id = self.conversation()
         message_id = self.store.append_message(
@@ -429,7 +471,7 @@ class ConversationMemoryTests(unittest.TestCase):
         self.assertIn("math_verifier", parent.active_skills)
         self.assertIsNotNone(self.store.get_fork_memory_link(parent.session_id, fork.session_id))
         parent_context = service.prepare_context(parent.session_id)
-        self.assertIn("[Merged Fork 1: fork]", parent_context.memory_text)
+        self.assertIn("[已并入的 Fork 记忆 1: fork]", parent_context.memory_text)
         self.assertIn("公式解释", result.key_findings[0])
 
     def test_finalize_twice_reuses_sanitized_snapshot_metadata(self) -> None:

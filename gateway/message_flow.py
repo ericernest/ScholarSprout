@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from threading import Event
+import logging
+from threading import Event, Lock
 from typing import Any, Callable
 
 from fastapi import Request
@@ -16,6 +17,39 @@ from channels.base import BaseChannel, ChannelMessage
 from storage.message_recorder import record_inbound, record_outbound
 
 MessageHandler = Callable[[ChannelMessage, Any], Any]
+logger = logging.getLogger(__name__)
+
+# Keep detached generations alive after their browser SSE connection closes.
+# asyncio only keeps weak references to tasks; this set is also useful for
+# observing failures that can no longer be delivered to the disconnected page.
+_BACKGROUND_STREAM_TASKS: set[asyncio.Task[Any]] = set()
+_STREAM_CANCEL_EVENTS: dict[str, Event] = {}
+_STREAM_CANCEL_LOCK = Lock()
+
+
+def cancel_stream_generation(generation_id: str) -> bool:
+    """Explicitly cancel a generation without conflating it with navigation."""
+    with _STREAM_CANCEL_LOCK:
+        event = _STREAM_CANCEL_EVENTS.get(str(generation_id or "").strip())
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def _track_stream_task(task: asyncio.Task[Any]) -> None:
+    _BACKGROUND_STREAM_TASKS.add(task)
+
+    def finished(completed: asyncio.Task[Any]) -> None:
+        _BACKGROUND_STREAM_TASKS.discard(completed)
+        try:
+            completed.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Detached channel generation failed")
+
+    task.add_done_callback(finished)
 
 
 # 将 handler 输出包装成 outbound message。
@@ -87,15 +121,26 @@ async def process_channel_stream(
     async def events():
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[str] = asyncio.Queue()
+        delivery_closed = Event()
         cancel_event = Event()
+        generation_id = str(inbound_message.metadata.get("generation_id") or "").strip()[:100]
+        if generation_id:
+            with _STREAM_CANCEL_LOCK:
+                _STREAM_CANCEL_EVENTS[generation_id] = cancel_event
 
         def emit_text(delta: str) -> None:
-            if delta and not cancel_event.is_set():
-                loop.call_soon_threadsafe(queue.put_nowait, _sse("delta", {"text": delta}))
+            if delta and not delivery_closed.is_set():
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, _sse("delta", {"text": delta}))
+                except RuntimeError:
+                    delivery_closed.set()
 
         def emit_reasoning(delta: str) -> None:
-            if delta and not cancel_event.is_set():
-                loop.call_soon_threadsafe(queue.put_nowait, _sse("reasoning", {"text": delta}))
+            if delta and not delivery_closed.is_set():
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, _sse("reasoning", {"text": delta}))
+                except RuntimeError:
+                    delivery_closed.set()
 
         inbound_message.metadata["_stream_text_delta"] = emit_text
         inbound_message.metadata["_stream_reasoning_delta"] = emit_reasoning
@@ -109,6 +154,14 @@ async def process_channel_stream(
                 app_state=app_state,
             )
         )
+        _track_stream_task(task)
+        if generation_id:
+            def clear_cancel_handle(_completed: asyncio.Task[Any]) -> None:
+                with _STREAM_CANCEL_LOCK:
+                    if _STREAM_CANCEL_EVENTS.get(generation_id) is cancel_event:
+                        _STREAM_CANCEL_EVENTS.pop(generation_id, None)
+
+            task.add_done_callback(clear_cancel_handle)
         disconnected = False
         try:
             yield _sse("ready", {"mode": mode})
@@ -118,7 +171,10 @@ async def process_channel_stream(
                 except asyncio.TimeoutError:
                     if await source.is_disconnected():
                         disconnected = True
-                        cancel_event.set()
+                        # Navigation closes only the delivery channel. Generation
+                        # must continue so its normal answer is persisted and can
+                        # be restored when the user returns to this conversation.
+                        delivery_closed.set()
                         break
             await asyncio.sleep(0)
             while not queue.empty() and not disconnected:
@@ -130,10 +186,10 @@ async def process_channel_stream(
                 except Exception as error:
                     yield _sse("error", {"message": str(error)})
         except asyncio.CancelledError:
-            cancel_event.set()
+            delivery_closed.set()
             raise
         finally:
-            cancel_event.set()
+            delivery_closed.set()
 
     return StreamingResponse(
         events(),
