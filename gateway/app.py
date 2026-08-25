@@ -42,6 +42,7 @@ from handlers.paper_reading_handler import (
 )
 from gateway.message_flow import process_channel_input, process_channel_stream
 from models.client import OpenAIClient, SetupRequiredModel
+from memory import ConversationMemoryService
 from handlers.paper_reading.harness.session import SessionManager
 from storage import LocalResearchStore, PaperReadingStorage
 from handlers.paper_reading.harness.fork_merge import ForkMergeManager
@@ -474,6 +475,7 @@ def start_gateway_server(host: str, port: int) -> None:
     data_root = resolve_data_dir(config)
     research_storage = LocalResearchStore(data_root / "research.sqlite3")
     research_storage.initialize()
+    memory_service = ConversationMemoryService(research_storage, model, recent_message_limit=8)
     paper_storage = PaperReadingStorage(
         data_root / "paper_reading", research_store=research_storage
     )
@@ -481,7 +483,9 @@ def start_gateway_server(host: str, port: int) -> None:
     kg_builder = ProgressiveKGBuilder(kg_engine)
     kg_query_engine = KGQueryEngine(kg_engine, model)
     session_manager = SessionManager(storage=paper_storage)
-    fork_manager = ForkMergeManager(session_manager, kg_engine)
+    fork_manager = ForkMergeManager(
+        session_manager, kg_engine, memory_service=memory_service, research_store=research_storage
+    )
     paper_pipeline = PaperPipeline()
 
     # 依赖注入：KG 工具需要访问 KG 引擎和构建器
@@ -489,7 +493,7 @@ def start_gateway_server(host: str, port: int) -> None:
     set_kg_builder(kg_builder)
     message_bus = MessageBus()
     input_channel = WebChannel(bus=message_bus)
-    tool_registry = create_builtin_tool_registry()
+    tool_registry = create_builtin_tool_registry(research_storage)
     skill_registry = create_skill_registry()
     capability_selector = CapabilitySelector()
     input_channel.start()
@@ -500,6 +504,7 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.domain_onboarding_agent = domain_onboarding_agent
     app.state.paper_reading_agent = paper_reading_agent
     app.state.research_storage = research_storage
+    app.state.memory_service = memory_service
     configure_domain_onboarding_runtime(
         app.state,
         model,
@@ -575,6 +580,9 @@ def reload_runtime_config(app_state: object, config: object) -> dict[str, object
     app_state.chat_agent = create_agent(model, "chat")
     app_state.domain_onboarding_agent = create_agent(model, "domain_onboarding")
     app_state.paper_reading_agent = create_agent(model, "paper_reading")
+    memory_service = getattr(app_state, "memory_service", None)
+    if memory_service is not None:
+        memory_service.model = model
     app_state.domain_onboarding_pipeline = new_pipeline
     manager = getattr(app_state, "domain_onboarding_job_manager", None)
     if manager is not None:

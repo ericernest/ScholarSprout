@@ -200,7 +200,7 @@ select option { color: #07120f; }
 .soft-button, .mini-button { padding: .58rem .7rem; }
 
 .reader-panel {
-  position: relative; display: grid; grid-template-rows: auto auto 1fr; color: #1c2724;
+  position: relative; display: grid; grid-template-rows: auto minmax(0,1fr); color: #1c2724;
   border-color: rgba(205,213,207,.9);
   background: linear-gradient(180deg,#fbfaf6 0%,#f5f2e9 100%);
   box-shadow: 0 24px 80px rgba(0,0,0,.2), inset 0 1px 0 white;
@@ -342,8 +342,8 @@ select option { color: #07120f; }
   flex: 0 0 auto; padding: .38rem .55rem; border: 1px solid rgba(20,133,109,.22); border-radius: 99px;
   color: #0b725d; background: rgba(32,185,151,.08); font-size: .7rem;
 }
-.pdf-reader { position: relative; min-height: 0; overflow: hidden; background: #d8dedc; }
-.pdf-reader iframe { width: 100%; height: 100%; border: 0; background: #d8dedc; }
+.pdf-reader { position: relative; min-height: 0; height: 100%; overflow: hidden; background: #d8dedc; }
+.pdf-reader iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #d8dedc; }
 .pdf-toolbar {
   position: absolute; top: 10px; left: 50%; z-index: 8; display: flex; align-items: center; gap: 4px;
   padding: 6px; border: 1px solid rgba(35,55,50,.16); border-radius: 12px;
@@ -375,6 +375,7 @@ select option { color: #07120f; }
   position: absolute; inset: 0; display: grid; align-content: start; justify-items: center;
   gap: 18px; padding: 60px 18px 18px; overflow: auto; background: #d8dedc;
 }
+.pdf-document[hidden] { display: none; }
 .pdf-page {
   position: relative; flex: 0 0 auto; overflow: hidden; background: white;
   box-shadow: 0 8px 28px rgba(20,30,28,.24);
@@ -602,6 +603,16 @@ select option { color: #07120f; }
 .ai-reflow-content .markdown-content table { width: 100%; overflow-wrap: anywhere; }
 .reflow-reader { background: #fbfaf6; }
 .reflow-reader .ai-reflow-section { max-width: 860px; }
+.reflow-annotation {
+  padding: 0 .04em; border-radius: 2px; color: inherit; background: rgba(255,223,77,.42);
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+.reflow-annotation.pdf-mark-green { background: rgba(104,224,151,.36); }
+.reflow-annotation.pdf-mark-blue { background: rgba(112,163,255,.34); }
+.reflow-annotation.pdf-mark-pink { background: rgba(255,126,171,.34); }
+.reflow-annotation.pdf-mark-note {
+  outline: 1px solid rgba(5,112,91,.48); cursor: pointer;
+}
 .reflow-document-header { width: min(100%,860px); margin: .4rem auto 1.2rem; padding: 1rem 1.1rem 1.15rem; border-bottom: 1px solid rgba(35,75,64,.16); }
 .reflow-document-header h1 { margin: .25rem 0 0; color: #172f29; font: 700 clamp(1.45rem,2.5vw,2.25rem)/1.25 Georgia,"Noto Serif CJK SC",serif; }
 .mineru-markdown { display: grid; gap: .9rem; }

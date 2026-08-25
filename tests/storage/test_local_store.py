@@ -110,9 +110,12 @@ class LocalResearchStoreTests(unittest.TestCase):
                 parent_conversation_id=parent,
                 forked_from_message_id=message_id,
             )
+            child_message_id = store.append_message(
+                child, role="user", content="先确认分支问题"
+            )
             store.save_memory_snapshot(
                 child,
-                through_message_id=message_id,
+                through_message_id=child_message_id,
                 current_goal="推导公式",
                 confirmed_decisions=["先检查符号定义"],
                 open_questions=["损失函数如何构造？"],
@@ -129,6 +132,59 @@ class LocalResearchStoreTests(unittest.TestCase):
 
             self.assertEqual(parent_count, 0)
             self.assertEqual(child_count, 1)
+
+    def test_v7_cross_conversation_memory_watermark_is_cleared_idempotently(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            store = LocalResearchStore(database)
+            store.initialize()
+            parent = store.create_conversation("旧主会话")
+            child = store.create_conversation("旧分支", parent_conversation_id=parent)
+            parent_message = store.append_message(
+                parent, role="user", content="旧库中的父会话消息"
+            )
+            with store._connection() as connection:
+                connection.execute("DELETE FROM schema_versions WHERE version = 8")
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (7, ?)",
+                    ("2026-01-01T00:00:00+00:00",),
+                )
+                connection.execute(
+                    """INSERT INTO conversation_memory_snapshots(
+                           memory_snapshot_id, conversation_id, through_message_id,
+                           current_goal, confirmed_decisions_json,
+                           open_questions_json, summary, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        "legacy-memory",
+                        child,
+                        parent_message,
+                        "保留旧目标",
+                        '["保留旧决定"]',
+                        '["保留旧问题"]',
+                        "保留旧摘要",
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+
+            store.initialize()
+            store.initialize()
+
+            memory = store.get_latest_memory(child)
+            self.assertIsNone(memory["through_message_id"])
+            self.assertEqual(memory["current_goal"], "保留旧目标")
+            self.assertEqual(memory["summary"], "保留旧摘要")
+            self.assertEqual(memory["confirmed_decisions"], ["保留旧决定"])
+            self.assertEqual(memory["open_questions"], ["保留旧问题"])
+            self.assertEqual(
+                store.read_conversation_memory_window(child)["recent_messages"], []
+            )
+            with store._connection() as connection:
+                connection.execute(
+                    "DELETE FROM messages WHERE message_id = ?", (parent_message,)
+                )
+                violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            self.assertEqual(violations, [])
 
     def test_paper_document_stores_author_names_instead_of_dict_strings(self) -> None:
         with TemporaryDirectory() as directory:

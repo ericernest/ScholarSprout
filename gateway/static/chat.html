@@ -21,6 +21,32 @@
         </div>
       </header>
 
+      <section id="discussion-context-bar" class="discussion-context-bar" hidden>
+        <div class="discussion-context-copy">
+          <span class="discussion-context-label">当前讨论</span>
+          <span class="discussion-context-hint">内容按需读取，不会自动塞入对话</span>
+        </div>
+        <div class="discussion-context-picker">
+          <button
+            id="discussion-context-button"
+            class="discussion-context-button"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+          >
+            <span id="discussion-context-value" class="discussion-context-value">不指定</span>
+            <span class="discussion-context-chevron" aria-hidden="true"></span>
+          </button>
+          <div
+            id="discussion-context-menu"
+            class="discussion-context-menu"
+            role="listbox"
+            aria-label="选择当前讨论的论文或领域"
+            hidden
+          ></div>
+        </div>
+      </section>
+
       <section id="messages" class="messages" aria-live="polite">
         <article class="message assistant">
           <div class="bubble">你好，我是 NoviceSynapse。可以从科研讨论、代码思路或方向规划开始。</div>

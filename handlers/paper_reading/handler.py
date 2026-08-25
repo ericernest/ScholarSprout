@@ -306,6 +306,7 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     """上传 PDF 论文。"""
     pipeline = getattr(app_state, "paper_pipeline", None)
     storage = getattr(app_state, "paper_storage", None)
+    research_store = getattr(storage, "research_store", None)
 
     if pipeline is None:
         return _error("论文处理流水线未初始化", action="upload_paper")
@@ -327,7 +328,6 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     except Exception as e:
         return _error(f"PDF 获取失败: {e}", action="upload_paper")
 
-    research_store = getattr(storage, "research_store", None)
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
     matched_by_hash = (
         research_store.find_paper_by_file_hash(file_hash)
@@ -802,6 +802,7 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
     """Create the conversation carrier for a paper workspace without an LLM turn."""
     session_mgr = getattr(app_state, "session_manager", None)
     storage = getattr(app_state, "paper_storage", None)
+    research_store = getattr(storage, "research_store", None)
     if session_mgr is None:
         return _error("Session manager 未初始化", action="create_session")
     if not request.paper_id:
@@ -817,11 +818,17 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
 
     paper_data = _load_paper_data(storage, request.paper_id) or {}
     if session is None:
+        conversation_id = str(request.conversation_id or request.session_id or "").strip()
+        if not conversation_id and research_store is not None:
+            conversation_id = research_store.create_conversation(
+                str(paper_data.get("title") or "论文精读")[:70],
+                user_id="local-web",
+            )
         session = session_mgr.create_session(
-            session_id=request.session_id or None,
             paper_id=request.paper_id,
             paper_title=str(paper_data.get("title") or ""),
-            user_id=request.session_id or "default",
+            user_id="local-web",
+            conversation_id=conversation_id,
         )
     else:
         if not session.paper_id:
@@ -831,15 +838,19 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
 
     sections = paper_data.get("sections", []) or []
     session_mgr.set_total_sections(session.session_id, len(sections))
-    research_store = getattr(storage, "research_store", None)
     if research_store is not None:
         research_store.ensure_library_item(request.paper_id, reading_status="reading")
 
     return _ok(
         "create_session",
-        {"session_id": session.session_id, "paper_id": request.paper_id},
+        {
+            "session_id": session.session_id,
+            "conversation_id": session.conversation_id,
+            "paper_id": request.paper_id,
+        },
         session={
             "session_id": session.session_id,
+            "conversation_id": session.conversation_id,
             "paper_id": session.paper_id,
             "paper_title": session.paper_title,
             "state": session.state,
@@ -874,11 +885,18 @@ def _handle_start_reading(
 
     if session is None:
         paper_data_for_title = _load_paper_data(storage, request.paper_id)
+        research_store = getattr(storage, "research_store", None)
+        conversation_id = str(request.conversation_id or request.session_id or "").strip()
+        if not conversation_id and research_store is not None:
+            conversation_id = research_store.create_conversation(
+                str((paper_data_for_title or {}).get("title") or "论文精读")[:70],
+                user_id="local-web",
+            )
         session = session_mgr.create_session(
-            session_id=request.session_id or None,
             paper_id=request.paper_id,
             paper_title=(paper_data_for_title or {}).get("title", ""),
-            user_id=request.session_id or "default",
+            user_id="local-web",
+            conversation_id=conversation_id,
         )
 
     paper_data = _load_paper_data(storage, session.paper_id or request.paper_id)
@@ -900,12 +918,29 @@ def _handle_start_reading(
         paper_data=paper_data,
         current_section=current_section,
     )
-    _record_reading_message(
+    user_message_id = _record_reading_message(
         storage,
         session.session_id,
         role="user",
         content=request.content,
     )
+    memory_text = ""
+    context_messages: list[dict[str, str]] = []
+    memory_service = getattr(app_state, "memory_service", None)
+    if memory_service is not None:
+        try:
+            dialogue_id = (
+                research_store.get_reading_dialogue_conversation_id(session.session_id)
+                if research_store is not None
+                else session.session_id
+            )
+            conversation_context = memory_service.prepare_context(
+                dialogue_id, exclude_message_id=user_message_id
+            )
+            memory_text = conversation_context.memory_text
+            context_messages = conversation_context.context_messages
+        except Exception:
+            logger.exception("Failed to prepare paper-reading memory for %s", session.session_id)
 
     # 3. 执行 Agent
     result: AgentRunResult = run_agent_detailed(
@@ -918,6 +953,8 @@ def _handle_start_reading(
             if interaction_type == "section_analysis"
             else app_state.capability_selector
         ),
+        memory_text=memory_text,
+        context_messages=context_messages,
         max_steps=PAPER_READING_AGENT_MAX_STEPS,
         on_text_delta=on_text_delta,
         on_reasoning_delta=on_reasoning_delta,
@@ -938,6 +975,7 @@ def _handle_start_reading(
             },
             session={
                 "session_id": session.session_id,
+                "conversation_id": session.conversation_id,
                 "paper_id": session.paper_id,
                 "paper_title": session.paper_title,
                 "state": session.state,
@@ -976,6 +1014,7 @@ def _handle_start_reading(
     # 5. 构建响应
     data = {
         "session_id": session.session_id,
+        "conversation_id": session.conversation_id,
         "agent_response": result.text,
         "reasoning": result.reasoning,
         "model_calls": result.model_calls,
@@ -997,6 +1036,7 @@ def _handle_start_reading(
     return _ok("start_reading", data,
         session={
             "session_id": session.session_id,
+            "conversation_id": session.conversation_id,
             "paper_id": session.paper_id,
             "paper_title": session.paper_title,
             "state": session.state,
@@ -1039,14 +1079,15 @@ def _record_reading_message(
     *,
     role: str,
     content: str,
-) -> None:
+) -> str | None:
     """Persist only visible Agent Q&A under the resolved reading session."""
     text = str(content or "").strip()
     research_store = getattr(storage, "research_store", None)
     if research_store is None or not session_id or not text:
-        return
-    research_store.append_message(
-        session_id,
+        return None
+    dialogue_id = research_store.get_reading_dialogue_conversation_id(session_id)
+    return research_store.append_message(
+        dialogue_id,
         role=role,
         content=text,
         mode="paper_reading",
@@ -1120,7 +1161,16 @@ def _handle_merge(request: PaperReadingRequest, app_state: Any) -> dict:
     if not merge_id:
         return _error("请指定 merge_session_id", action="merge")
 
-    result = fork_mgr.merge_fork(merge_id)
+    session_mgr = getattr(app_state, "session_manager", None)
+    fork_session = session_mgr.get_session(merge_id) if session_mgr is not None else None
+    if fork_session is None:
+        return _error("Fork session not found", action="merge")
+    if fork_session.parent_session_id != request.session_id:
+        return _error("merge session does not belong to the requested parent", action="merge")
+
+    result = fork_mgr.merge_fork(
+        merge_id, expected_parent_session_id=request.session_id
+    )
     if not result.success:
         return _error(result.error, action="merge")
 
@@ -1173,8 +1223,17 @@ def _handle_get_session_state(request: PaperReadingRequest, app_state: Any) -> d
     if session is None:
         return _error("会话不存在", action="get_session_state", session_id=request.session_id)
 
+    storage = getattr(app_state, "paper_storage", None)
+    research_store = getattr(storage, "research_store", None)
+    dialogue_id = (
+        research_store.get_reading_dialogue_conversation_id(session.session_id)
+        if research_store is not None
+        else session.session_id
+    )
     return _ok("get_session_state", {
         "session_id": session.session_id,
+        "conversation_id": session.conversation_id,
+        "dialogue_conversation_id": dialogue_id,
         "paper_id": session.paper_id,
         "paper_title": session.paper_title,
         "state": session.state,

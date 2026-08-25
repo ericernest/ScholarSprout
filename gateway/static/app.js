@@ -18,6 +18,8 @@ let currentMode = "chat";
 let isGenerating = false;
 let activeResponseController = null;
 let selectedPaperFile = null;
+let activeDiscussion = null;
+let conversationContexts = [];
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -38,6 +40,10 @@ const paperFileInput = document.querySelector("#paper-file-input");
 const paperFileButton = document.querySelector("#paper-file-button");
 const paperFileLabel = document.querySelector("#paper-file-label");
 const paperUrlInput = document.querySelector("#paper-url-input");
+const discussionBar = document.querySelector("#discussion-context-bar");
+const discussionButton = document.querySelector("#discussion-context-button");
+const discussionValue = document.querySelector("#discussion-context-value");
+const discussionMenu = document.querySelector("#discussion-context-menu");
 
 bindChatPage();
 startParticleField();
@@ -75,11 +81,15 @@ function bindChatPage() {
     if (!event.target.closest(".mode-menu-wrap")) {
       closeModeMenu();
     }
+    if (!event.target.closest(".discussion-context-picker")) {
+      setDiscussionMenuOpen(false);
+    }
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeModeMenu();
+      setDiscussionMenuOpen(false);
     }
   });
 
@@ -98,6 +108,17 @@ function bindChatPage() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     await sendMessage();
+  });
+
+  discussionButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setDiscussionMenuOpen(discussionMenu.hidden);
+  });
+  discussionMenu?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const option = event.target.closest("button[data-context-key]");
+    if (!option) return;
+    selectDiscussion(option.dataset.contextKey || "");
   });
 
   paperFileButton.addEventListener("click", () => paperFileInput.click());
@@ -132,26 +153,34 @@ async function restoreConversationHistory() {
     const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
+    conversationContexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    restoreDiscussionSelector();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
-    if (!history.length && !conversation.reading_session_id) return;
+    if (!history.length && !conversationContexts.length) return;
     messages.replaceChildren();
-    await restorePaperReadingCard(conversation);
-    history.forEach((message) => {
-      if (message.role === "assistant" && message.mode === "domain_onboarding") {
-        restoreDomainOnboardingCard();
-        return;
+    const timeline = [
+      ...history.map((message) => ({ type: "message", time: message.created_at || "", value: message })),
+      ...conversationContexts.map((context) => ({ type: "context", time: context.linked_at || "", value: context })),
+    ].sort((left, right) => String(left.time).localeCompare(String(right.time)));
+    for (const entry of timeline) {
+      if (entry.type === "context") {
+        if (entry.value.kind === "paper_reading") await restorePaperReadingCard(entry.value);
+        if (entry.value.kind === "domain_onboarding") restoreDomainContextCard(entry.value);
+        continue;
       }
+      const message = entry.value;
+      if (message.role === "assistant" && message.mode === "domain_onboarding") continue;
       if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
-    });
-    if (conversation.reading_session_id) messages.scrollTop = 0;
+    }
+    scrollRestoredConversation();
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
 }
 
-async function restorePaperReadingCard(conversation) {
-  const paperId = String(conversation.paper_id || "").trim();
-  const readingSessionId = String(conversation.reading_session_id || "").trim();
+async function restorePaperReadingCard(context) {
+  const paperId = String(context.paper_id || "").trim();
+  const readingSessionId = String(context.id || "").trim();
   if (!paperId || !readingSessionId) return;
   try {
     const detail = await callPaperReading({
@@ -161,16 +190,128 @@ async function restorePaperReadingCard(conversation) {
       paperId,
       sessionId: readingSessionId,
       sourceLabel: "当前论文精读",
-      placement: "prepend",
     });
   } catch {
-    appendPaperCard({ title: conversation.title || "当前论文精读", parse_status: "" }, {
+    appendPaperCard({ title: context.title || "当前论文精读", parse_status: "" }, {
       paperId,
       sessionId: readingSessionId,
       sourceLabel: "当前论文精读",
-      placement: "prepend",
     });
   }
+}
+
+function restoreDomainContextCard(context) {
+  if (!context?.id || document.querySelector(`.domain-card-message[data-task-id="${CSS.escape(context.id)}"]`)) return;
+  const item = document.createElement("article");
+  item.className = "message assistant domain-card-message";
+  item.dataset.taskId = context.id;
+  item.dataset.contextKey = contextKey(context);
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "domain-chat-card";
+  card.innerHTML = `
+    <span class="paper-card-kicker">DOMAIN ONBOARDING · 已保存</span>
+    <strong>${escapeHtml(context.title || "领域入门")}</strong>
+    <span class="domain-card-copy">继续查看领域概览、学习路线与论文清单。</span>
+    <span class="paper-card-enter">进入领域学习工作台 <b>↗</b></span>
+  `;
+  card.addEventListener("click", () => {
+    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(context.id)}`;
+  });
+  item.append(card);
+  messages.append(item);
+}
+
+function contextKey(context) {
+  return `${context?.kind || ""}:${context?.id || ""}`;
+}
+
+function restoreDiscussionSelector() {
+  if (!discussionMenu || !discussionButton || !discussionValue || !discussionBar) return;
+  discussionMenu.replaceChildren(createDiscussionOption(null));
+  conversationContexts.forEach((context) => {
+    discussionMenu.append(createDiscussionOption(context));
+  });
+  const params = new URLSearchParams(window.location.search);
+  const requested = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  activeDiscussion = conversationContexts.find((item) => contextKey(item) === requested)
+    || conversationContexts.find((item) => contextKey(item) === contextKey(activeDiscussion))
+    || conversationContexts.at(-1)
+    || null;
+  syncDiscussionPicker();
+  discussionBar.hidden = !conversationContexts.length;
+}
+
+function createDiscussionOption(context) {
+  const option = document.createElement("button");
+  const key = context ? contextKey(context) : "";
+  const kind = context?.kind === "paper_reading" ? "论文" : context ? "领域" : "通用";
+  option.type = "button";
+  option.className = "discussion-context-option";
+  option.dataset.contextKey = key;
+  option.setAttribute("role", "option");
+  option.innerHTML = `
+    <span class="discussion-context-option-kind">${kind}</span>
+    <span class="discussion-context-option-title">${escapeHtml(context?.title || "不指定")}</span>
+    <span class="discussion-context-option-check" aria-hidden="true"></span>
+  `;
+  return option;
+}
+
+function selectDiscussion(key) {
+  activeDiscussion = conversationContexts.find((item) => contextKey(item) === key) || null;
+  const params = new URLSearchParams(window.location.search);
+  if (activeDiscussion) {
+    params.set("context_kind", activeDiscussion.kind);
+    params.set("context_id", activeDiscussion.id);
+  } else {
+    params.delete("context_kind");
+    params.delete("context_id");
+  }
+  const query = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  syncDiscussionPicker();
+  setDiscussionMenuOpen(false);
+}
+
+function syncDiscussionPicker() {
+  if (!discussionValue || !discussionMenu) return;
+  const selectedKey = activeDiscussion ? contextKey(activeDiscussion) : "";
+  const kind = activeDiscussion?.kind === "paper_reading" ? "论文" : "领域";
+  discussionValue.textContent = activeDiscussion
+    ? `${kind} · ${activeDiscussion.title || "未命名"}`
+    : "不指定论文或领域";
+  discussionMenu.querySelectorAll(".discussion-context-option").forEach((option) => {
+    const selected = option.dataset.contextKey === selectedKey;
+    option.classList.toggle("is-selected", selected);
+    option.setAttribute("aria-selected", String(selected));
+    const check = option.querySelector(".discussion-context-option-check");
+    if (check) check.textContent = selected ? "✓" : "";
+  });
+}
+
+function setDiscussionMenuOpen(open) {
+  if (!discussionMenu || !discussionButton) return;
+  discussionMenu.hidden = !open;
+  discussionButton.setAttribute("aria-expanded", String(open));
+}
+
+function scrollRestoredConversation() {
+  const params = new URLSearchParams(window.location.search);
+  const requestedKey = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  const requestedCard = requestedKey === ":"
+    ? null
+    : messages.querySelector(`[data-context-key="${CSS.escape(requestedKey)}"]`);
+  requestAnimationFrame(() => {
+    if (!requestedCard) {
+      messages.scrollTop = messages.scrollHeight;
+      return;
+    }
+    const targetTop = requestedCard.getBoundingClientRect().top
+      - messages.getBoundingClientRect().top
+      + messages.scrollTop;
+    messages.scrollTop = Math.max(0, targetTop - 14);
+  });
 }
 
 // Close mode menu and sync accessibility state.
@@ -250,7 +391,13 @@ async function sendMessage() {
         session_id: sessionId,
         content,
         user_id: "local-web",
-        metadata: {},
+        metadata: activeDiscussion ? {
+          active_context: {
+            kind: activeDiscussion.kind,
+            id: activeDiscussion.id,
+            title: activeDiscussion.title || "",
+          },
+        } : {},
       }),
       signal: controller.signal,
     });
@@ -259,7 +406,10 @@ async function sendMessage() {
       (delta) => streaming.append(delta),
       (delta) => streaming.appendReasoning(delta),
     );
-    streaming.finish(extractReply(data), data?.reasoning || "");
+    streaming.finish(
+      extractReply(data),
+      data?.reasoning || "",
+    );
   } catch (error) {
     if (error.name === "AbortError") {
       finishInterruptedMessage();
@@ -413,6 +563,11 @@ function appendDomainOnboardingCard(job, query) {
   item.append(card, cancel);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
+  if (!conversationContexts.some((context) => contextKey(context) === `domain_onboarding:${job.task_id}`)) {
+    conversationContexts.push({ kind: "domain_onboarding", id: job.task_id, title: query });
+  }
+  activeDiscussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`) || activeDiscussion;
+  restoreDiscussionSelector();
 }
 
 // Keep the chat card useful while the user decides when to open the workspace.
@@ -563,14 +718,17 @@ async function submitPaper() {
     clearPreviousPaperSession();
     const createdSession = await callPaperReading({
       action: "create_session",
-      session_id: sessionId,
+      session_id: "",
+      conversation_id: sessionId,
       paper_id: paperId,
       content: "",
       metadata: {},
     });
-    const readingSessionId = createdSession.data?.session_id || sessionId;
+    const readingSessionId = createdSession.data?.session_id || "";
+    if (!readingSessionId) throw new Error("创建论文精读后未返回 reading session ID。");
     localStorage.setItem("paper_reading_paper_id", paperId);
     localStorage.setItem("paper_reading_session_id", readingSessionId);
+    localStorage.setItem("paper_reading_conversation_id", sessionId);
     const detail = await callPaperReading({
       action: "get_paper_detail",
       session_id: "",
@@ -584,6 +742,15 @@ async function submitPaper() {
       sourceLabel,
       kgBuild: upload.data?.kg_build || {},
     });
+    const discussion = {
+      kind: "paper_reading",
+      id: readingSessionId,
+      paper_id: paperId,
+      title: detail.data?.paper?.title || "当前论文",
+    };
+    conversationContexts.push(discussion);
+    activeDiscussion = discussion;
+    restoreDiscussionSelector();
     watchPaperCard(paperCard, paperId, sourceLabel);
     resetPaperComposer();
   } catch (error) {
@@ -630,6 +797,7 @@ async function callPaperReading(body) {
 function appendPaperCard(paper, context) {
   const item = document.createElement("article");
   item.className = "message assistant paper-card-message";
+  if (context.sessionId) item.dataset.contextKey = `paper_reading:${context.sessionId}`;
 
   const card = document.createElement("button");
   card.type = "button";
@@ -638,8 +806,9 @@ function appendPaperCard(paper, context) {
   card.addEventListener("click", () => {
     localStorage.setItem("paper_reading_paper_id", context.paperId);
     if (context.sessionId) localStorage.setItem("paper_reading_session_id", context.sessionId);
+    localStorage.setItem("paper_reading_conversation_id", sessionId);
     const query = context.sessionId
-      ? `?paper_id=${encodeURIComponent(context.paperId)}&session_id=${encodeURIComponent(context.sessionId)}`
+      ? `?paper_id=${encodeURIComponent(context.paperId)}&session_id=${encodeURIComponent(context.sessionId)}&conversation_id=${encodeURIComponent(sessionId)}`
       : "";
     window.location.href = `/app/paper-reading${query}`;
   });

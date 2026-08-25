@@ -6,6 +6,12 @@ from .base import BaseTool
 from .builtin.time_tool import CurrentTimeTool
 from .builtin.paper_search_tool import PaperSearchTool
 from .builtin.pdf_parse_tool import PDFParseTool
+from .builtin.research_context_tools import (
+    GetDomainOnboardingResultTool,
+    GetPaperReadingContextTool,
+    SearchPaperReadingDialogueTool,
+)
+from storage.local_store import LocalResearchStore
 
 
 # 管理当前可用工具实例。
@@ -46,9 +52,13 @@ class ToolRegistry:
 
 
 # 创建内置工具注册表。
-def create_builtin_tool_registry() -> ToolRegistry:
+def create_builtin_tool_registry(research_store: LocalResearchStore | None = None) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(CurrentTimeTool())
     registry.register(PaperSearchTool())
     registry.register(PDFParseTool())
+    if research_store is not None:
+        registry.register(SearchPaperReadingDialogueTool(research_store))
+        registry.register(GetPaperReadingContextTool(research_store))
+        registry.register(GetDomainOnboardingResultTool(research_store))
     return registry

@@ -84,10 +84,7 @@ class StormLitePlanner:
         del profile
         domain_query = self._extract_domain(query)
         system_prompt = planning_system_prompt()
-        user_prompt = json.dumps(
-            {"domain_query": domain_query},
-            ensure_ascii=False,
-        )
+        user_prompt = json.dumps({"domain_query": domain_query}, ensure_ascii=False)
         try:
             payload, stats = invoke_json(
                 self.model,

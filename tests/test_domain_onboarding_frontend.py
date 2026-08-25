@@ -123,10 +123,11 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         )[0]
 
         self.assertIn('message.mode === "domain_onboarding"', restore)
-        self.assertIn("restoreDomainOnboardingCard();", restore)
+        self.assertIn("const timeline = [", restore)
+        self.assertIn("restoreDomainContextCard(entry.value)", restore)
         self.assertLess(
-            restore.index("restoreDomainOnboardingCard();"),
-            restore.index('appendMessage(message.role, message.content)'),
+            restore.index('if (entry.type === "context")'),
+            restore.index("const message = entry.value"),
         )
 
     def test_paper_actions_download_pdf_without_opening_metadata_page(self) -> None:

@@ -863,6 +863,43 @@ class PipelineTests(unittest.TestCase):
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
+    def test_sync_handler_does_not_read_conversation_memory(self) -> None:
+        class CapturingPipeline:
+            request = None
+
+            def run(self, request, trace):
+                self.request = request
+                return SimpleNamespace(
+                    status="ok",
+                    to_response=lambda: {"status": "ok", "query": request.query},
+                )
+
+        class MemoryService:
+            def prepare_context(self, session_id, *, exclude_message_id=None):
+                raise AssertionError("domain onboarding must not read memory")
+
+        pipeline = CapturingPipeline()
+        app_state = SimpleNamespace(
+            domain_onboarding_pipeline=pipeline,
+            memory_service=MemoryService(),
+        )
+        message = ChannelMessage(
+            session_id="session-sync",
+            user_id="user",
+            channel="test",
+            direction="inbound",
+            mode="domain_onboarding",
+            content="RAG 原始查询",
+            metadata={"source": "direct"},
+            message_id="message-current",
+        )
+
+        response = handle_domain_onboarding_message(message, app_state)
+
+        self.assertEqual(response["query"], "RAG 原始查询")
+        self.assertEqual(pipeline.request.query, "RAG 原始查询")
+        self.assertEqual(pipeline.request.metadata, {"source": "direct"})
+
     def test_metrics_aggregate_quality_and_repair_audit_fields(self) -> None:
         metrics = DomainOnboardingMetrics()
         metrics.record(

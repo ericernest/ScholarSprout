@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from typing import Any
 
@@ -19,6 +20,14 @@ from .fakes import FakeJSONModel, make_candidates, make_plan, make_profile
 
 
 class PlannerTests(unittest.TestCase):
+    def test_plan_prompt_contains_only_the_domain_query(self) -> None:
+        model = FakeJSONModel([make_plan().model_dump(mode="json")])
+
+        StormLitePlanner(model, DomainOnboardingConfig()).plan("RAG", make_profile())
+
+        user_payload = json.loads(model.calls[0]["messages"][1]["content"])
+        self.assertEqual(user_payload, {"domain_query": "检索增强生成"})
+
     def test_plan_normalizes_common_role_and_priority_labels_without_fallback(
         self,
     ) -> None:
