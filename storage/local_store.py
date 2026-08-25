@@ -18,7 +18,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _now() -> str:
@@ -287,6 +287,14 @@ class LocalResearchStore:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS conversation_memory_merges (
+                    parent_conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    fork_conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    source_memory_snapshot_id TEXT NOT NULL REFERENCES conversation_memory_snapshots(memory_snapshot_id),
+                    merged_at TEXT NOT NULL,
+                    PRIMARY KEY(parent_conversation_id, fork_conversation_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation_sequence
                     ON messages(conversation_id, sequence_number);
                 CREATE INDEX IF NOT EXISTS idx_artifacts_kind_state
@@ -331,10 +339,27 @@ class LocalResearchStore:
                 "progress_json",
                 "TEXT NOT NULL DEFAULT '{}'",
             )
+            self._repair_cross_conversation_memory_watermarks(connection)
             connection.execute(
                 "INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now()),
             )
+
+    @staticmethod
+    def _repair_cross_conversation_memory_watermarks(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Clear pre-v8 logical FK mismatches without discarding memory content."""
+        connection.execute(
+            """UPDATE conversation_memory_snapshots
+               SET through_message_id = NULL
+               WHERE through_message_id IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM messages
+                     WHERE messages.message_id = conversation_memory_snapshots.through_message_id
+                       AND messages.conversation_id = conversation_memory_snapshots.conversation_id
+                 )"""
+        )
 
     @staticmethod
     def _migrate_folder_name_uniqueness(connection: sqlite3.Connection) -> None:
@@ -644,12 +669,21 @@ class LocalResearchStore:
         message_id = message_id or _id("message")
         now = _now()
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT conversation_id FROM messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["conversation_id"]) != conversation_id:
+                    raise ValueError("message_id already belongs to another conversation")
+                return message_id
             sequence_number = connection.execute(
                 "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM messages WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()[0]
             connection.execute(
-                "INSERT OR IGNORE INTO messages(message_id, conversation_id, sequence_number, role, mode, channel, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages(message_id, conversation_id, sequence_number, role, mode, channel, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (message_id, conversation_id, sequence_number, role, mode, channel, content, now),
             )
             connection.execute(
@@ -1097,15 +1131,197 @@ class LocalResearchStore:
         open_questions: list[str] | None = None,
         through_message_id: str | None = None,
     ) -> str:
+        """Compatibility wrapper that keeps only the latest memory per conversation."""
+        return self.save_latest_memory(
+            conversation_id,
+            memory={
+                "current_goal": current_goal,
+                "summary": summary,
+                "confirmed_decisions": confirmed_decisions or [],
+                "open_questions": open_questions or [],
+            },
+            through_message_id=through_message_id,
+            expected_previous_through_message_id=None,
+            check_expected=False,
+        )
+
+    def save_latest_memory(
+        self,
+        conversation_id: str,
+        *,
+        memory: dict[str, Any],
+        through_message_id: str | None,
+        expected_previous_through_message_id: str | None,
+        check_expected: bool = True,
+    ) -> str:
         snapshot_id = _id("memory")
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone() is None:
+                raise KeyError(f"Conversation not found: {conversation_id}")
+            if through_message_id is not None and connection.execute(
+                "SELECT 1 FROM messages WHERE message_id = ? AND conversation_id = ?",
+                (through_message_id, conversation_id),
+            ).fetchone() is None:
+                raise ValueError("through_message_id must belong to the same conversation")
+            previous = connection.execute(
+                """SELECT through_message_id FROM conversation_memory_snapshots
+                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
+            previous_through = str(previous["through_message_id"]) if previous and previous["through_message_id"] else None
+            if check_expected and previous_through != expected_previous_through_message_id:
+                raise RuntimeError("conversation memory watermark changed concurrently")
+            connection.execute(
+                """DELETE FROM conversation_memory_snapshots
+                   WHERE conversation_id = ?
+                     AND NOT EXISTS (
+                         SELECT 1 FROM conversation_memory_merges merge
+                         WHERE merge.source_memory_snapshot_id = conversation_memory_snapshots.memory_snapshot_id
+                     )""",
+                (conversation_id,),
+            )
             connection.execute(
                 """INSERT INTO conversation_memory_snapshots(memory_snapshot_id, conversation_id, through_message_id, current_goal,
                    confirmed_decisions_json, open_questions_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (snapshot_id, conversation_id, through_message_id, current_goal, _json(confirmed_decisions or []),
-                 _json(open_questions or []), summary, _now()),
+                (
+                    snapshot_id,
+                    conversation_id,
+                    through_message_id,
+                    str(memory.get("current_goal") or ""),
+                    _json(memory.get("confirmed_decisions") or []),
+                    _json(memory.get("open_questions") or []),
+                    str(memory.get("summary") or ""),
+                    _now(),
+                ),
             )
         return snapshot_id
+
+    def get_latest_memory(self, conversation_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM conversation_memory_snapshots
+                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
+        return self._memory_row(row) if row is not None else None
+
+    def read_conversation_memory_window(
+        self, conversation_id: str, *, recent_limit: int = 8
+    ) -> dict[str, Any]:
+        """Atomically read memory, overflow, recent messages and linked Fork memories."""
+        limit = max(1, int(recent_limit))
+        with self._connection() as connection:
+            connection.execute("BEGIN")
+            memory_row = connection.execute(
+                """SELECT * FROM conversation_memory_snapshots
+                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
+            through_message_id = (
+                str(memory_row["through_message_id"])
+                if memory_row is not None and memory_row["through_message_id"]
+                else None
+            )
+            watermark = 0
+            if through_message_id:
+                boundary = connection.execute(
+                    "SELECT sequence_number FROM messages WHERE message_id = ? AND conversation_id = ?",
+                    (through_message_id, conversation_id),
+                ).fetchone()
+                if boundary is None:
+                    raise ValueError("stored memory watermark does not belong to conversation")
+                watermark = int(boundary["sequence_number"])
+            maximum = int(connection.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()[0])
+            cutoff = max(watermark, maximum - limit)
+            overflow = connection.execute(
+                """SELECT message_id, sequence_number, role, mode, channel, content, created_at
+                   FROM messages WHERE conversation_id = ? AND sequence_number > ? AND sequence_number <= ?
+                   ORDER BY sequence_number""",
+                (conversation_id, watermark, cutoff),
+            ).fetchall()
+            recent = connection.execute(
+                """SELECT message_id, sequence_number, role, mode, channel, content, created_at
+                   FROM messages WHERE conversation_id = ?
+                     AND sequence_number > ? AND sequence_number <= ?
+                   ORDER BY sequence_number""",
+                (conversation_id, cutoff, maximum),
+            ).fetchall()
+            fork_rows = connection.execute(
+                """SELECT child.*, merge.fork_conversation_id
+                   FROM conversation_memory_merges merge
+                   JOIN conversation_memory_snapshots child
+                     ON child.memory_snapshot_id = merge.source_memory_snapshot_id
+                   WHERE merge.parent_conversation_id = ?
+                   ORDER BY merge.merged_at""",
+                (conversation_id,),
+            ).fetchall()
+        return {
+            "memory": self._memory_row(memory_row) if memory_row is not None else None,
+            "through_message_id": through_message_id,
+            "messages_to_compress": [dict(row) for row in overflow],
+            "recent_messages": [dict(row) for row in recent],
+            "linked_forks": [
+                {**self._memory_row(row), "conversation_id": str(row["fork_conversation_id"])}
+                for row in fork_rows
+            ],
+        }
+
+    def link_fork_memory(
+        self,
+        parent_conversation_id: str,
+        fork_conversation_id: str,
+        source_memory_snapshot_id: str,
+    ) -> bool:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source = connection.execute(
+                """SELECT 1 FROM conversation_memory_snapshots
+                   WHERE memory_snapshot_id = ? AND conversation_id = ?""",
+                (source_memory_snapshot_id, fork_conversation_id),
+            ).fetchone()
+            if source is None:
+                raise ValueError("source memory snapshot must belong to the Fork conversation")
+            cursor = connection.execute(
+                """INSERT OR IGNORE INTO conversation_memory_merges(
+                       parent_conversation_id, fork_conversation_id,
+                       source_memory_snapshot_id, merged_at
+                   ) VALUES (?, ?, ?, ?)""",
+                (parent_conversation_id, fork_conversation_id, source_memory_snapshot_id, _now()),
+            )
+        return cursor.rowcount > 0
+
+    def get_fork_memory_link(
+        self, parent_conversation_id: str, fork_conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT child.* FROM conversation_memory_merges merge
+                   JOIN conversation_memory_snapshots child
+                     ON child.memory_snapshot_id = merge.source_memory_snapshot_id
+                   WHERE merge.parent_conversation_id = ? AND merge.fork_conversation_id = ?""",
+                (parent_conversation_id, fork_conversation_id),
+            ).fetchone()
+        return self._memory_row(row) if row is not None else None
+
+    @staticmethod
+    def _memory_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "memory_snapshot_id": str(row["memory_snapshot_id"]),
+            "conversation_id": str(row["conversation_id"]),
+            "through_message_id": str(row["through_message_id"]) if row["through_message_id"] else None,
+            "schema_version": "conversation-memory-v1",
+            "current_goal": str(row["current_goal"] or ""),
+            "summary": str(row["summary"] or ""),
+            "confirmed_decisions": json.loads(row["confirmed_decisions_json"] or "[]"),
+            "open_questions": json.loads(row["open_questions_json"] or "[]"),
+            "created_at": str(row["created_at"]),
+        }
 
     def list_table_names(self) -> set[str]:
         with self._connection() as connection:

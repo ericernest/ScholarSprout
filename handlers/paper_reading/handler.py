@@ -900,12 +900,24 @@ def _handle_start_reading(
         paper_data=paper_data,
         current_section=current_section,
     )
-    _record_reading_message(
+    user_message_id = _record_reading_message(
         storage,
         session.session_id,
         role="user",
         content=request.content,
     )
+    memory_text = ""
+    context_messages: list[dict[str, str]] = []
+    memory_service = getattr(app_state, "memory_service", None)
+    if memory_service is not None:
+        try:
+            conversation_context = memory_service.prepare_context(
+                session.session_id, exclude_message_id=user_message_id
+            )
+            memory_text = conversation_context.memory_text
+            context_messages = conversation_context.context_messages
+        except Exception:
+            logger.exception("Failed to prepare paper-reading memory for %s", session.session_id)
 
     # 3. 执行 Agent
     result: AgentRunResult = run_agent_detailed(
@@ -918,6 +930,8 @@ def _handle_start_reading(
             if interaction_type == "section_analysis"
             else app_state.capability_selector
         ),
+        memory_text=memory_text,
+        context_messages=context_messages,
         max_steps=PAPER_READING_AGENT_MAX_STEPS,
         on_text_delta=on_text_delta,
         on_reasoning_delta=on_reasoning_delta,
@@ -1039,13 +1053,13 @@ def _record_reading_message(
     *,
     role: str,
     content: str,
-) -> None:
+) -> str | None:
     """Persist only visible Agent Q&A under the resolved reading session."""
     text = str(content or "").strip()
     research_store = getattr(storage, "research_store", None)
     if research_store is None or not session_id or not text:
-        return
-    research_store.append_message(
+        return None
+    return research_store.append_message(
         session_id,
         role=role,
         content=text,
@@ -1120,7 +1134,16 @@ def _handle_merge(request: PaperReadingRequest, app_state: Any) -> dict:
     if not merge_id:
         return _error("请指定 merge_session_id", action="merge")
 
-    result = fork_mgr.merge_fork(merge_id)
+    session_mgr = getattr(app_state, "session_manager", None)
+    fork_session = session_mgr.get_session(merge_id) if session_mgr is not None else None
+    if fork_session is None:
+        return _error("Fork session not found", action="merge")
+    if fork_session.parent_session_id != request.session_id:
+        return _error("merge session does not belong to the requested parent", action="merge")
+
+    result = fork_mgr.merge_fork(
+        merge_id, expected_parent_session_id=request.session_id
+    )
     if not result.success:
         return _error(result.error, action="merge")
 

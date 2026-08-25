@@ -49,9 +49,14 @@ class ForkMergeManager:
         self,
         session_manager: SessionManager,
         context_engine: Any | None = None,
+        *,
+        memory_service: Any | None = None,
+        research_store: Any | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._context_engine = context_engine
+        self._memory_service = memory_service
+        self._research_store = research_store
 
     def create_fork(
         self,
@@ -102,7 +107,9 @@ class ForkMergeManager:
         )
         return fork_session
 
-    def merge_fork(self, fork_session_id: str) -> MergeResult:
+    def merge_fork(
+        self, fork_session_id: str, *, expected_parent_session_id: str | None = None
+    ) -> MergeResult:
         """将 fork 会话的成果合并回主阅读流。
 
         Args:
@@ -126,6 +133,17 @@ class ForkMergeManager:
                 error="Fork session has no parent",
             )
 
+        if (
+            expected_parent_session_id is not None
+            and expected_parent_session_id != fork.parent_session_id
+        ):
+            return MergeResult(
+                parent_session_id=fork.parent_session_id,
+                fork_session_id=fork_session_id,
+                success=False,
+                error="merge session does not belong to the requested parent",
+            )
+
         parent = self._session_manager.get_session(fork.parent_session_id)
         if parent is None:
             return MergeResult(
@@ -135,8 +153,39 @@ class ForkMergeManager:
                 error=f"Parent session not found: {fork.parent_session_id}",
             )
 
-        # 收集 fork 中的有效 Skill 输出
+        # Finalize and link the complete visible Fork before mutating reading
+        # state. A compression failure therefore leaves skills/state untouched.
+        fork_memory: dict[str, Any] | None = None
+        if self._memory_service is not None and self._research_store is not None:
+            try:
+                fork_memory = self._research_store.get_fork_memory_link(
+                    parent.session_id, fork.session_id
+                )
+                if fork_memory is None:
+                    fork_memory = self._memory_service.finalize_conversation(fork.session_id)
+                    if fork_memory is not None:
+                        self._research_store.link_fork_memory(
+                            parent.session_id,
+                            fork.session_id,
+                            str(fork_memory["memory_snapshot_id"]),
+                        )
+            except Exception as error:
+                logger.exception("Fork memory finalization failed for %s", fork.session_id)
+                return MergeResult(
+                    parent_session_id=parent.session_id,
+                    fork_session_id=fork.session_id,
+                    success=False,
+                    error=f"Fork memory compression failed: {error}",
+                )
+
+        # Preserve the original context/checkpoint findings and add the durable
+        # compressed conclusion used by future parent prompts.
         key_findings = self._extract_key_findings(fork)
+        if fork_memory and str(fork_memory.get("summary") or "").strip():
+            key_findings.append(str(fork_memory["summary"]).strip())
+
+        original_parent_skills = list(parent.active_skills)
+        original_fork_state = fork.state
 
         # 合并活跃 skills
         for sid in fork.active_skills:
@@ -145,8 +194,22 @@ class ForkMergeManager:
 
         # 标记 fork 为已完成
         fork.state = "completed"
-        self._session_manager._persist(fork)
-        self._session_manager._persist(parent)
+        try:
+            self._session_manager.persist_or_raise(fork)
+            self._session_manager.persist_or_raise(parent)
+        except Exception as error:
+            # The memory link is intentionally retained: retry reuses that
+            # immutable snapshot and converges partial session writes without
+            # invoking the compression model again.
+            parent.active_skills[:] = original_parent_skills
+            fork.state = original_fork_state
+            logger.exception("Fork session persistence failed for %s", fork.session_id)
+            return MergeResult(
+                parent_session_id=parent.session_id,
+                fork_session_id=fork.session_id,
+                success=False,
+                error=f"Fork session persistence failed: {error}",
+            )
 
         result = MergeResult(
             parent_session_id=parent.session_id,

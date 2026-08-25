@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 from typing import Any
 
@@ -24,6 +25,9 @@ from handlers.domain_onboarding.metrics import DomainOnboardingRequestTrace
 from handlers.domain_onboarding.schemas import DomainOnboardingRequest, PipelineResult
 
 
+logger = logging.getLogger(__name__)
+
+
 def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) -> dict[str, Any]:
     """使用 V1 Pipeline；未装配 Pipeline 时保持 V0 兼容行为。"""
     pipeline = getattr(app_state, "domain_onboarding_pipeline", None)
@@ -36,11 +40,29 @@ def handle_domain_onboarding_message(message: ChannelMessage, app_state: Any) ->
     started_at = perf_counter()
     try:
         try:
+            metadata = dict(message.metadata or {})
+            memory_service = getattr(app_state, "memory_service", None)
+            if memory_service is not None and message.session_id:
+                try:
+                    conversation_context = memory_service.prepare_context(
+                        message.session_id,
+                        exclude_message_id=message.message_id,
+                    )
+                    metadata["conversation_context"] = {
+                        "long_term_memory": conversation_context.memory_text,
+                        "recent_messages": conversation_context.context_messages,
+                    }
+                except Exception:
+                    logger.exception(
+                        "Failed to prepare domain-onboarding memory for %s",
+                        message.session_id,
+                    )
+                    metadata["conversation_context"] = {}
             request = DomainOnboardingRequest(
                 query=str(message.content or ""),
                 session_id=message.session_id,
                 user_id=message.user_id,
-                metadata=message.metadata,
+                metadata=metadata,
             )
         except ValidationError:
             trace.status = "invalid_input"

@@ -296,14 +296,18 @@ class SessionManager:
 
     def _persist(self, session: ReadingSession) -> None:
         """持久化到文件存储。"""
+        try:
+            self.persist_or_raise(session)
+        except Exception as e:
+            logger.error("Failed to persist session %s: %s", session.session_id, e)
+
+    def persist_or_raise(self, session: ReadingSession) -> None:
+        """Persist one session and surface storage failures to atomic callers."""
         if self._storage:
-            try:
-                self._storage.save_session(
-                    session.session_id,
-                    self._to_dict(session),
-                )
-            except Exception as e:
-                logger.error("Failed to persist session %s: %s", session.session_id, e)
+            self._storage.save_session(
+                session.session_id,
+                self._to_dict(session),
+            )
 
     @staticmethod
     def _to_dict(session: ReadingSession) -> dict:

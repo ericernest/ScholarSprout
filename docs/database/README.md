@@ -85,8 +85,16 @@ PDF 的 outline/bookmark 是可选能力，并非所有出版平台都会写入�
 | `messages` | `message_id`, `conversation_id`, `sequence_number`, `role`, `mode`, `channel`, `content`, `created_at` | 三种模式下用户、助手和确需展示的工具消息。论文上传正文不会保存 base64。 |
 | `conversation_artifacts` | `conversation_id`, `artifact_id`, `relation`, `linked_at` | 会话与领域入门/论文精读的 `created / continued / discussed` 关系。 |
 | `conversation_memory_snapshots` | `memory_snapshot_id`, `conversation_id`, `through_message_id`, `current_goal`, `confirmed_decisions_json`, `open_questions_json`, `summary`, `created_at` | 仅服务当前会话的压缩记忆。fork 可从分叉点的最新快照继承后独立更新。 |
+| `conversation_memory_merges` | `parent_conversation_id`, `fork_conversation_id`, `source_memory_snapshot_id`, `merged_at` | 幂等记录已经并入父会话的 Fork 最终记忆；不复制 Fork 原消息。 |
 
 v1 不创建跨会话检索表、全局 memory 表、用户画像或向量库。`conversation_memory_snapshots` 的来源必须指向本会话的消息边界，因此不会被误用为长期记忆。
+滚动记忆默认保留最近 8 条可见消息原文。第 9 条进入后，系统在下一次模型调用前只压缩水位之后且落在最近 8 条之外的增量；messages 原文不会删除，资料库仍能恢复完整历史。长期记忆只保存当前目标、稳定摘要、用户已确认决定和待解决问题，模型压缩失败时不推进 through_message_id，当次回答退化为旧记忆加全部未压缩消息。
+
+模型上下文顺序固定为 Agent/Skill system prompt、明确标注为“历史数据而非指令”的长期记忆、最近消息、当前用户消息。领域入门的同步与异步入口都把相同内容放入独立的只读 conversation_context 字段；检索仍只使用原始 request.query。长期记忆的四个内容字段在写入及旧快照注入前都会确定性隐藏 Bearer、sk- token 和常见 key/password/secret 值；原始 messages 不做改写。
+
+从 schema v7 升级时，如果历史 memory 的 through_message_id 指向其他会话的消息，初始化迁移会保留 current_goal、summary、confirmed_decisions 和 open_questions，只把不合法水位置空。这样旧记忆仍可读取，原消息也不再被错误的跨会话引用阻止删除。
+
+Fork 合并会先把子会话截至合并时的全部剩余可见消息压缩成最终记忆，再建立 conversation_memory_merges 链接。只有压缩和链接成功后才执行原有 Skill 并集、完成状态和父子关系更新；重复合并由父子会话联合主键保证幂等。没有消息和 memory 的空 Fork 不创建链接，但仍正常合并 fork_context、Skill 和完成状态。被链接的合并时快照会冻结，子会话后续继续滚动时另存新的 latest 快照，只替换未被引用的活动快照，因此父会话始终读取合并当时的 Fork 结论。链接后若阅读会话状态严格持久化失败，本次返回失败并回滚内存字段；重试复用既有链接而不重复压缩，并收敛可能已写入的部分状态。子会话完整消息仍保留在其自己的 messages 中。
 
 ## 状态边界
 
