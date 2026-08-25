@@ -267,7 +267,6 @@ class StructuredOnboardingGenerator:
             "domain": plan.normalized_domain,
             "translated_domain": plan.translated_domain,
             "expanded_terms": plan.expanded_terms,
-            "conversation_context": request.metadata.get("conversation_context") or {},
             "research_perspectives": [
                 perspective.model_dump(mode="json") for perspective in plan.perspectives
             ],
@@ -1024,7 +1023,6 @@ class StructuredOnboardingGenerator:
                 "domain": plan.normalized_domain,
                 "language": request.language,
             },
-            "conversation_context": request.metadata.get("conversation_context") or {},
             "research_plan": plan_payload,
             "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
             "completed_sections": {
@@ -1224,7 +1222,6 @@ class StructuredOnboardingGenerator:
         system_prompt = full_generation_system_prompt(request.language)
         user_payload: dict[str, Any] = {
             "request": {"domain": plan.normalized_domain, "language": request.language},
-            "conversation_context": request.metadata.get("conversation_context") or {},
             "research_plan": plan.model_dump(mode="json"),
             "allowed_papers": [self._paper_prompt_payload(paper) for paper in papers],
         }

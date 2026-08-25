@@ -159,7 +159,6 @@ class DomainOnboardingPipeline:
                     self.planner.plan,
                     request.query,
                     profile,
-                    conversation_context=request.metadata.get("conversation_context") or {},
                     on_delta=publish_llm_delta,
                 )
             except Exception as error:
@@ -740,27 +739,20 @@ class DomainOnboardingPipeline:
         function: Callable[..., Any],
         *args: Any,
         on_delta: Callable[[str, str], None] | None = None,
-        **optional_kwargs: Any,
     ) -> Any:
         """Preserve compatibility with test doubles and external implementations."""
 
         try:
-            parameters = inspect.signature(function).parameters
-            supports_kwargs = any(
-                item.kind == inspect.Parameter.VAR_KEYWORD
-                for item in parameters.values()
+            parameters = inspect.signature(function).parameters.values()
+            supports_delta = any(
+                item.name == "on_delta" or item.kind == inspect.Parameter.VAR_KEYWORD
+                for item in parameters
             )
         except (TypeError, ValueError):
-            parameters = {}
-            supports_kwargs = False
-        kwargs = {
-            name: value
-            for name, value in optional_kwargs.items()
-            if supports_kwargs or name in parameters
-        }
-        if supports_kwargs or "on_delta" in parameters:
-            kwargs["on_delta"] = on_delta
-        return function(*args, **kwargs)
+            supports_delta = False
+        if supports_delta:
+            return function(*args, on_delta=on_delta)
+        return function(*args)
 
     @staticmethod
     def _emit(

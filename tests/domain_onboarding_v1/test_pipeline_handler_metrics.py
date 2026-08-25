@@ -92,35 +92,6 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
-    def test_legacy_planner_without_conversation_context_remains_supported(self) -> None:
-        result = DomainOnboardingPipeline._call_with_optional_delta(
-            FakePlanner().plan,
-            "RAG",
-            object(),
-            conversation_context={"summary": "已有会话摘要"},
-            on_delta=None,
-        )
-
-        self.assertEqual(result.plan.normalized_domain, "检索增强生成")
-
-    def test_planner_internal_type_error_is_not_treated_as_signature_fallback(self) -> None:
-        def broken_planner(
-            query: str,
-            profile: object,
-            *,
-            conversation_context: dict[str, object] | None = None,
-        ) -> object:
-            raise TypeError("planner implementation failed")
-
-        with self.assertRaisesRegex(TypeError, "planner implementation failed"):
-            DomainOnboardingPipeline._call_with_optional_delta(
-                broken_planner,
-                "RAG",
-                object(),
-                conversation_context={"summary": "已有会话摘要"},
-                on_delta=None,
-            )
-
     def test_missing_english_domain_anchor_stops_all_survey_recommendation_paths(
         self,
     ) -> None:
@@ -892,7 +863,7 @@ class PipelineTests(unittest.TestCase):
 
 
 class HandlerAndMetricsTests(unittest.TestCase):
-    def test_sync_handler_passes_conversation_context_without_changing_query(self) -> None:
+    def test_sync_handler_does_not_read_conversation_memory(self) -> None:
         class CapturingPipeline:
             request = None
 
@@ -904,21 +875,13 @@ class HandlerAndMetricsTests(unittest.TestCase):
                 )
 
         class MemoryService:
-            def __init__(self) -> None:
-                self.calls = []
-
             def prepare_context(self, session_id, *, exclude_message_id=None):
-                self.calls.append((session_id, exclude_message_id))
-                return SimpleNamespace(
-                    memory_text="当前目标：理解 RAG",
-                    context_messages=[{"role": "user", "content": "先看基础"}],
-                )
+                raise AssertionError("domain onboarding must not read memory")
 
         pipeline = CapturingPipeline()
-        memory_service = MemoryService()
         app_state = SimpleNamespace(
             domain_onboarding_pipeline=pipeline,
-            memory_service=memory_service,
+            memory_service=MemoryService(),
         )
         message = ChannelMessage(
             session_id="session-sync",
@@ -935,17 +898,7 @@ class HandlerAndMetricsTests(unittest.TestCase):
 
         self.assertEqual(response["query"], "RAG 原始查询")
         self.assertEqual(pipeline.request.query, "RAG 原始查询")
-        self.assertEqual(
-            memory_service.calls, [("session-sync", "message-current")]
-        )
-        self.assertEqual(
-            pipeline.request.metadata["conversation_context"],
-            {
-                "long_term_memory": "当前目标：理解 RAG",
-                "recent_messages": [{"role": "user", "content": "先看基础"}],
-            },
-        )
-        self.assertNotIn("conversation_context", message.metadata)
+        self.assertEqual(pipeline.request.metadata, {"source": "direct"})
 
     def test_metrics_aggregate_quality_and_repair_audit_fields(self) -> None:
         metrics = DomainOnboardingMetrics()

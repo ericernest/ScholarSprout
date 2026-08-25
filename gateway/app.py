@@ -648,5 +648,4 @@ def configure_domain_onboarding_runtime(
             os.getenv("DOMAIN_ONBOARDING_JOB_RECOVERY_STALE_SECONDS", "900")
         ),
         result_store=research_storage,
-        memory_service=getattr(app_state, "memory_service", None),
     )

@@ -20,20 +20,13 @@ from .fakes import FakeJSONModel, make_candidates, make_plan, make_profile
 
 
 class PlannerTests(unittest.TestCase):
-    def test_plan_includes_conversation_context_as_separate_payload(self) -> None:
+    def test_plan_prompt_contains_only_the_domain_query(self) -> None:
         model = FakeJSONModel([make_plan().model_dump(mode="json")])
-        context = {
-            "long_term_memory": "当前目标：理解检索增强生成",
-            "recent_messages": [{"role": "user", "content": "先看基础"}],
-        }
 
-        StormLitePlanner(model, DomainOnboardingConfig()).plan(
-            "RAG", make_profile(), conversation_context=context
-        )
+        StormLitePlanner(model, DomainOnboardingConfig()).plan("RAG", make_profile())
 
         user_payload = json.loads(model.calls[0]["messages"][1]["content"])
-        self.assertEqual(user_payload["domain_query"], "检索增强生成")
-        self.assertEqual(user_payload["conversation_context"], context)
+        self.assertEqual(user_payload, {"domain_query": "检索增强生成"})
 
     def test_plan_normalizes_common_role_and_priority_labels_without_fallback(
         self,

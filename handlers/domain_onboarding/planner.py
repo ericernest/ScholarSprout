@@ -31,7 +31,6 @@ class DomainPlanner(Protocol):
         query: str,
         profile: LearnerProfile,
         on_delta: Callable[[str, str], None] | None = None,
-        conversation_context: dict[str, Any] | None = None,
     ) -> PlanningResult: ...
 
 
@@ -81,18 +80,11 @@ class StormLitePlanner:
         query: str,
         profile: LearnerProfile,
         on_delta: Callable[[str, str], None] | None = None,
-        conversation_context: dict[str, Any] | None = None,
     ) -> PlanningResult:
         del profile
         domain_query = self._extract_domain(query)
         system_prompt = planning_system_prompt()
-        user_prompt = json.dumps(
-            {
-                "domain_query": domain_query,
-                "conversation_context": conversation_context or {},
-            },
-            ensure_ascii=False,
-        )
+        user_prompt = json.dumps({"domain_query": domain_query}, ensure_ascii=False)
         try:
             payload, stats = invoke_json(
                 self.model,

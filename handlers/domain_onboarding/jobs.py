@@ -425,14 +425,12 @@ class DomainOnboardingJobManager:
         recovery_stale_seconds: int = 15 * 60,
         token_secret: str | bytes | None = None,
         result_store: Any = None,
-        memory_service: Any = None,
     ):
         self.pipeline = pipeline
         self.store = store
         self.metrics = metrics
         self.audit_sink = audit_sink
         self.result_store = result_store
-        self.memory_service = memory_service
         self.max_workers = max(1, int(max_workers))
         self.max_queue_size = max(0, int(max_queue_size))
         self.per_owner_active_limit = max(1, int(per_owner_active_limit))
@@ -510,9 +508,7 @@ class DomainOnboardingJobManager:
                 self.store.append_event(
                     task_id, "accepted", 0.0, True, [], {"state": "queued"}
                 )
-                current_message_id = self._persist_submission(task_id, request)
-                if current_message_id:
-                    request.metadata["_memory_current_message_id"] = current_message_id
+                self._persist_submission(task_id, request)
                 with self._lock:
                     self._submitted_task_ids.add(task_id)
                 self.executor.submit(self._run, task_id, request)
@@ -576,23 +572,6 @@ class DomainOnboardingJobManager:
         result: PipelineResult | None = None
         progress_callback = self._progress(task_id)
         try:
-            if self.memory_service is not None and request.session_id:
-                try:
-                    conversation_context = self.memory_service.prepare_context(
-                        request.session_id,
-                        exclude_message_id=str(
-                            request.metadata.get("_memory_current_message_id") or ""
-                        )
-                        or None,
-                    )
-                    request.metadata["conversation_context"] = {
-                        "long_term_memory": conversation_context.memory_text,
-                        "recent_messages": conversation_context.context_messages,
-                    }
-                except Exception:
-                    # Memory is optional context; onboarding must continue when
-                    # compression or storage is temporarily unavailable.
-                    request.metadata["conversation_context"] = {}
             result = self.pipeline.run(request, trace, context, progress_callback)
             progress_callback.flush()  # type: ignore[attr-defined]
             trace.status = result.status
@@ -743,18 +722,17 @@ class DomainOnboardingJobManager:
         callback.flush = flush  # type: ignore[attr-defined]
         return callback
 
-    def _persist_submission(self, task_id: str, request: DomainOnboardingRequest) -> str | None:
+    def _persist_submission(self, task_id: str, request: DomainOnboardingRequest) -> None:
         if self.result_store is None:
-            return None
+            return
         try:
-            current_message_id: str | None = None
             if request.session_id:
                 self.result_store.ensure_conversation(
                     request.session_id,
                     title=request.query[:60] or "新会话",
                     user_id=request.user_id,
                 )
-                current_message_id = self.result_store.append_message(
+                self.result_store.append_message(
                     request.session_id,
                     role="user",
                     content=request.query,
@@ -769,10 +747,9 @@ class DomainOnboardingJobManager:
                 current_stage="queued",
                 conversation_id=request.session_id,
             )
-            return current_message_id
         except Exception:
             # Product persistence cannot alter job admission or execution.
-            return None
+            return
 
     def _persist_result(
         self,
