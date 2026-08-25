@@ -41,7 +41,9 @@ const paperFileButton = document.querySelector("#paper-file-button");
 const paperFileLabel = document.querySelector("#paper-file-label");
 const paperUrlInput = document.querySelector("#paper-url-input");
 const discussionBar = document.querySelector("#discussion-context-bar");
-const discussionSelect = document.querySelector("#discussion-context-select");
+const discussionButton = document.querySelector("#discussion-context-button");
+const discussionValue = document.querySelector("#discussion-context-value");
+const discussionMenu = document.querySelector("#discussion-context-menu");
 
 bindChatPage();
 startParticleField();
@@ -79,11 +81,15 @@ function bindChatPage() {
     if (!event.target.closest(".mode-menu-wrap")) {
       closeModeMenu();
     }
+    if (!event.target.closest(".discussion-context-picker")) {
+      setDiscussionMenuOpen(false);
+    }
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeModeMenu();
+      setDiscussionMenuOpen(false);
     }
   });
 
@@ -104,17 +110,15 @@ function bindChatPage() {
     await sendMessage();
   });
 
-  discussionSelect?.addEventListener("change", () => {
-    activeDiscussion = conversationContexts.find((item) => contextKey(item) === discussionSelect.value) || null;
-    const params = new URLSearchParams(window.location.search);
-    if (activeDiscussion) {
-      params.set("context_kind", activeDiscussion.kind);
-      params.set("context_id", activeDiscussion.id);
-    } else {
-      params.delete("context_kind");
-      params.delete("context_id");
-    }
-    window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
+  discussionButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setDiscussionMenuOpen(discussionMenu.hidden);
+  });
+  discussionMenu?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const option = event.target.closest("button[data-context-key]");
+    if (!option) return;
+    selectDiscussion(option.dataset.contextKey || "");
   });
 
   paperFileButton.addEventListener("click", () => paperFileInput.click());
@@ -168,7 +172,7 @@ async function restoreConversationHistory() {
       if (message.role === "assistant" && message.mode === "domain_onboarding") continue;
       if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
     }
-    messages.scrollTop = messages.scrollHeight;
+    scrollRestoredConversation();
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
@@ -201,6 +205,7 @@ function restoreDomainContextCard(context) {
   const item = document.createElement("article");
   item.className = "message assistant domain-card-message";
   item.dataset.taskId = context.id;
+  item.dataset.contextKey = contextKey(context);
   const card = document.createElement("button");
   card.type = "button";
   card.className = "domain-chat-card";
@@ -222,11 +227,10 @@ function contextKey(context) {
 }
 
 function restoreDiscussionSelector() {
-  if (!discussionSelect || !discussionBar) return;
-  discussionSelect.replaceChildren(new Option("不指定", ""));
+  if (!discussionMenu || !discussionButton || !discussionValue || !discussionBar) return;
+  discussionMenu.replaceChildren(createDiscussionOption(null));
   conversationContexts.forEach((context) => {
-    const kind = context.kind === "paper_reading" ? "论文" : "领域";
-    discussionSelect.append(new Option(`${kind}：${context.title || "未命名"}`, contextKey(context)));
+    discussionMenu.append(createDiscussionOption(context));
   });
   const params = new URLSearchParams(window.location.search);
   const requested = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
@@ -234,8 +238,80 @@ function restoreDiscussionSelector() {
     || conversationContexts.find((item) => contextKey(item) === contextKey(activeDiscussion))
     || conversationContexts.at(-1)
     || null;
-  discussionSelect.value = activeDiscussion ? contextKey(activeDiscussion) : "";
+  syncDiscussionPicker();
   discussionBar.hidden = !conversationContexts.length;
+}
+
+function createDiscussionOption(context) {
+  const option = document.createElement("button");
+  const key = context ? contextKey(context) : "";
+  const kind = context?.kind === "paper_reading" ? "论文" : context ? "领域" : "通用";
+  option.type = "button";
+  option.className = "discussion-context-option";
+  option.dataset.contextKey = key;
+  option.setAttribute("role", "option");
+  option.innerHTML = `
+    <span class="discussion-context-option-kind">${kind}</span>
+    <span class="discussion-context-option-title">${escapeHtml(context?.title || "不指定")}</span>
+    <span class="discussion-context-option-check" aria-hidden="true"></span>
+  `;
+  return option;
+}
+
+function selectDiscussion(key) {
+  activeDiscussion = conversationContexts.find((item) => contextKey(item) === key) || null;
+  const params = new URLSearchParams(window.location.search);
+  if (activeDiscussion) {
+    params.set("context_kind", activeDiscussion.kind);
+    params.set("context_id", activeDiscussion.id);
+  } else {
+    params.delete("context_kind");
+    params.delete("context_id");
+  }
+  const query = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  syncDiscussionPicker();
+  setDiscussionMenuOpen(false);
+}
+
+function syncDiscussionPicker() {
+  if (!discussionValue || !discussionMenu) return;
+  const selectedKey = activeDiscussion ? contextKey(activeDiscussion) : "";
+  const kind = activeDiscussion?.kind === "paper_reading" ? "论文" : "领域";
+  discussionValue.textContent = activeDiscussion
+    ? `${kind} · ${activeDiscussion.title || "未命名"}`
+    : "不指定论文或领域";
+  discussionMenu.querySelectorAll(".discussion-context-option").forEach((option) => {
+    const selected = option.dataset.contextKey === selectedKey;
+    option.classList.toggle("is-selected", selected);
+    option.setAttribute("aria-selected", String(selected));
+    const check = option.querySelector(".discussion-context-option-check");
+    if (check) check.textContent = selected ? "✓" : "";
+  });
+}
+
+function setDiscussionMenuOpen(open) {
+  if (!discussionMenu || !discussionButton) return;
+  discussionMenu.hidden = !open;
+  discussionButton.setAttribute("aria-expanded", String(open));
+}
+
+function scrollRestoredConversation() {
+  const params = new URLSearchParams(window.location.search);
+  const requestedKey = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  const requestedCard = requestedKey === ":"
+    ? null
+    : messages.querySelector(`[data-context-key="${CSS.escape(requestedKey)}"]`);
+  requestAnimationFrame(() => {
+    if (!requestedCard) {
+      messages.scrollTop = messages.scrollHeight;
+      return;
+    }
+    const targetTop = requestedCard.getBoundingClientRect().top
+      - messages.getBoundingClientRect().top
+      + messages.scrollTop;
+    messages.scrollTop = Math.max(0, targetTop - 14);
+  });
 }
 
 // Close mode menu and sync accessibility state.
@@ -492,7 +568,6 @@ function appendDomainOnboardingCard(job, query) {
   }
   activeDiscussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`) || activeDiscussion;
   restoreDiscussionSelector();
-  if (activeDiscussion) discussionSelect.value = contextKey(activeDiscussion);
 }
 
 // Keep the chat card useful while the user decides when to open the workspace.
@@ -676,7 +751,6 @@ async function submitPaper() {
     conversationContexts.push(discussion);
     activeDiscussion = discussion;
     restoreDiscussionSelector();
-    discussionSelect.value = contextKey(discussion);
     watchPaperCard(paperCard, paperId, sourceLabel);
     resetPaperComposer();
   } catch (error) {
@@ -723,6 +797,7 @@ async function callPaperReading(body) {
 function appendPaperCard(paper, context) {
   const item = document.createElement("article");
   item.className = "message assistant paper-card-message";
+  if (context.sessionId) item.dataset.contextKey = `paper_reading:${context.sessionId}`;
 
   const card = document.createElement("button");
   card.type = "button";

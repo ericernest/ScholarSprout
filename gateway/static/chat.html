@@ -22,9 +22,29 @@
       </header>
 
       <section id="discussion-context-bar" class="discussion-context-bar" hidden>
-        <label for="discussion-context-select">当前讨论</label>
-        <select id="discussion-context-select" aria-label="选择当前讨论的论文或领域"></select>
-        <span>详细内容仅在需要时由工具读取</span>
+        <div class="discussion-context-copy">
+          <span class="discussion-context-label">当前讨论</span>
+          <span class="discussion-context-hint">内容按需读取，不会自动塞入对话</span>
+        </div>
+        <div class="discussion-context-picker">
+          <button
+            id="discussion-context-button"
+            class="discussion-context-button"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+          >
+            <span id="discussion-context-value" class="discussion-context-value">不指定</span>
+            <span class="discussion-context-chevron" aria-hidden="true"></span>
+          </button>
+          <div
+            id="discussion-context-menu"
+            class="discussion-context-menu"
+            role="listbox"
+            aria-label="选择当前讨论的论文或领域"
+            hidden
+          ></div>
+        </div>
       </section>
 
       <section id="messages" class="messages" aria-live="polite">
