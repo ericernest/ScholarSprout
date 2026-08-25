@@ -162,3 +162,6 @@ class OpenAIClient:
         response = client.embeddings.create(model=model, input=texts)
         ordered = sorted(response.data, key=lambda item: item.index)
         return [list(item.embedding) for item in ordered]
+
+    def close(self) -> None:
+        self.http_client.close()

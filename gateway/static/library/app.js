@@ -1,7 +1,7 @@
 const VIEWS = {
   conversations: { title: "会话", kicker: "CONVERSATIONS", description: "回到最近的科研讨论，保留每一次问题演进。", endpoint: "/api/research/conversations", empty: "开始一次新会话后，它会自动出现在这里。" },
   "domain-onboardings": { title: "领域入门", kicker: "DOMAIN ONBOARDING", description: "保存完整的领域地图、学习路径和推荐论文。", endpoint: "/api/research/domain-onboardings", empty: "选择领域入门模式，完成的研究地图会集中保存在这里。" },
-  "paper-readings": { title: "论文精读", kicker: "PAPER READING", description: "继续阅读、查看进度，并回到已有的 Fork 和分析结果。", endpoint: "/api/research/paper-readings", empty: "导入一篇 PDF 并开始阅读，精读记录会显示在这里。" },
+  "paper-readings": { title: "论文精读", kicker: "PAPER READING", description: "查看每篇论文的阅读进度，并继续章节分析、Fork 探索和标注。", endpoint: "/api/research/paper-readings", empty: "导入一篇 PDF 并开始阅读，精读记录会显示在这里。" },
   papers: { title: "论文管理", kicker: "PAPER LIBRARY", description: "收藏、标记阅读状态，并管理论文上的高亮与注释。", endpoint: "/api/research/papers", empty: "在全部论文中选择需要长期管理的论文。" },
 };
 
@@ -132,7 +132,7 @@ function renderCard(item) {
   card.tabIndex = 0;
   card.setAttribute("role", "link");
   card.dataset.id = item.conversation_id || item.artifact_id || item.reading_session_id || item.paper_id;
-  if (state.view === "conversations") card.dataset.href = conversationWorkspace(item);
+  if (state.view === "conversations") card.dataset.href = conversationUrl(item.conversation_id);
   if (state.view === "paper-readings") card.dataset.href = paperWorkspace(item.paper_id, item.reading_session_id);
   if (state.view === "papers") card.dataset.href = item.has_document || item.reading_count ? paperWorkspace(item.paper_id, "") : (item.source_url || "");
   if (state.view === "domain-onboardings") card.dataset.href = domainWorkspace(item.artifact_id);
@@ -161,7 +161,7 @@ function renderCard(item) {
   }
   const actions = element("div", "item-actions");
   if (state.view === "conversations") {
-    actions.append(link(conversationWorkspace(item), conversationActionLabel(item), true));
+    actions.append(link(conversationUrl(item.conversation_id), "继续会话", true));
   } else if (state.view === "domain-onboardings") {
     actions.append(link(domainWorkspace(item.artifact_id), "进入领域入门  ↗", true));
   } else if (state.view === "paper-readings") {
@@ -740,16 +740,7 @@ function showSkeletons() { document.querySelector("#empty-state").hidden = true;
 function showEmpty(title, copy) { const empty = document.querySelector("#empty-state"); empty.hidden = false; document.querySelector("#empty-title").textContent = title; document.querySelector("#empty-copy").textContent = copy; }
 function domainWorkspace(artifactId) { return `/app/domain-onboarding?task_id=${encodeURIComponent(artifactId)}`; }
 function paperWorkspace(paperId, sessionId) { const params = new URLSearchParams({ paper_id: paperId }); if (sessionId) params.set("session_id", sessionId); return `/app/paper-reading?${params}`; }
-function conversationWorkspace(item) {
-  if (item.workspace_kind === "domain_onboarding" && item.workspace_artifact_id) return domainWorkspace(item.workspace_artifact_id);
-  if (item.workspace_kind === "paper_reading" && item.paper_id && item.reading_session_id) return paperWorkspace(item.paper_id, item.reading_session_id);
-  return `/app?conversation_id=${encodeURIComponent(item.conversation_id)}`;
-}
-function conversationActionLabel(item) {
-  if (item.workspace_kind === "domain_onboarding") return "进入领域入门  ↗";
-  if (item.workspace_kind === "paper_reading") return "进入论文精读  ↗";
-  return "继续会话";
-}
+function conversationUrl(conversationId) { return `/app?conversation_id=${encodeURIComponent(conversationId)}`; }
 function element(tag, className = "", text = "") { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node; }
 function link(href, text, accent = false) { const item = element("a", accent ? "accent" : "", text); item.href = href; return item; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "" : new Intl.DateTimeFormat("zh-CN", { month:"short",day:"numeric",hour:"2-digit",minute:"2-digit" }).format(date); }

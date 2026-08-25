@@ -11,7 +11,7 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/app">
+      <a id="brand-chat-link" class="brand" href="/app">
         <span class="brand-mark">N</span>
         <span><b>NoviceSynapse</b><small>领域学习工作台</small></span>
       </a>
@@ -36,7 +36,6 @@
         <div class="sidebar-heading">
           <p>LEARNING MAP</p>
           <h1 id="sidebar-domain">领域入门</h1>
-          <span id="sidebar-policy">等待生成策略</span>
         </div>
         <nav id="section-nav" aria-label="领域入门目录">
           <button class="nav-item is-active" data-target="overview" type="button"><span>01</span>学习概览</button>
@@ -48,10 +47,11 @@
           <button id="graph-nav" class="nav-item" data-target="knowledge-graph" type="button" hidden><span>07</span>知识图谱</button>
         </nav>
         <div class="sidebar-foot">
-          <span>结构化结果随生成过程增量更新</span>
-          <a href="/app">← 返回聊天</a>
+          <a id="return-chat-link" href="/app">← 返回对话</a>
         </div>
       </aside>
+
+      <div id="sidebar-resizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整学习目录宽度"></div>
 
       <section id="content" class="content-column">
         <section id="overview" class="content-section hero-section reveal">
@@ -112,6 +112,8 @@
         </section>
       </section>
 
+      <div id="inspector-resizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整详情栏宽度"></div>
+
       <aside class="inspector panel">
         <div class="inspector-heading">
           <span>CONTEXT</span>
@@ -135,7 +137,7 @@
         <p id="empty-message">从聊天页选择“领域入门”并提出你的学习目标。</p>
         <div>
           <button id="retry-button" class="ghost-button" type="button" hidden>重试当前任务</button>
-          <a class="primary-button" href="/app?mode=domain_onboarding">返回聊天提问</a>
+          <a class="primary-button" href="/app?mode=domain_onboarding">返回对话提问</a>
         </div>
       </div>
     </section>

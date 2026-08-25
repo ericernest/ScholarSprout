@@ -30,7 +30,7 @@
             </li>
             <li>
               <span>3</span>
-              <div><strong>保存并重启</strong><p>重启后，三个模式会统一使用新配置。</p></div>
+              <div><strong>保存并生效</strong><p>模型、Embedding 和 MinerU 配置会立即用于新请求。</p></div>
             </li>
           </ol>
           <div class="privacy-note">API Key 不会在页面加载时回传；这里只显示是否已经配置。</div>
@@ -47,13 +47,13 @@
 
           <form id="settings-form">
             <label>
-              <span>Base URL</span>
+              <span>基础模型 Base URL</span>
               <input id="base-url" name="base_url" type="url" placeholder="https://你的服务商地址/v1" />
-              <small>填写 OpenAI 兼容接口的完整地址；使用服务商默认地址时也建议明确填写。</small>
+              <small>基础模型服务的 OpenAI 兼容接口完整地址。</small>
             </label>
 
             <label>
-              <span>API Key</span>
+              <span>基础模型 API Key</span>
               <div class="secret-field">
                 <input id="api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空会保留已经保存的密钥" />
                 <button id="toggle-secret" type="button">显示</button>
@@ -64,20 +64,51 @@
             <label>
               <span>模型名称</span>
               <input id="model-name" name="model_name" type="text" required placeholder="填写服务商支持的模型 ID" />
-              <small>必须与服务商接口接受的 model 参数完全一致。</small>
+              <small>基础模型服务接受的 model 参数，必须填写。</small>
             </label>
 
-            <label>
-              <span>Embedding 模型</span>
-              <input id="embedding-model-name" name="embedding_model_name" type="text" required placeholder="例如 qwen3-embedding" />
-              <small>用于领域入门的论文相关性排序与证据匹配；请求失败时会自动降级到本地词法排序。</small>
-            </label>
+            <details class="optional-config">
+              <summary><span>Embedding 配置</span><small>可选 · 点击展开</small></summary>
+              <div class="optional-config-fields">
+                <label>
+                  <span>Embedding URL</span>
+                  <input id="embedding-base-url" name="embedding_base_url" type="url" placeholder="留空复用基础模型 URL" />
+                  <small>可选；留空时复用基础模型 URL。</small>
+                </label>
+                <label>
+                  <span>Embedding API Key</span>
+                  <div class="secret-field">
+                    <input id="embedding-api-key" name="embedding_api_key" type="password" autocomplete="new-password" placeholder="留空复用基础模型 API Key" />
+                    <button class="toggle-secret" data-secret-target="embedding-api-key" type="button">显示</button>
+                  </div>
+                  <small id="embedding-api-key-state">可选；留空时复用基础模型 API Key。</small>
+                </label>
+                <label>
+                  <span>Embedding 模型</span>
+                  <input id="embedding-model-name" name="embedding_model_name" type="text" placeholder="例如 qwen3-embedding" />
+                  <small>可选；用于论文排序与证据匹配，调用失败时自动降级。</small>
+                </label>
+              </div>
+            </details>
 
-            <label>
-              <span>Embedding Base URL</span>
-              <input id="embedding-base-url" name="embedding_base_url" type="url" placeholder="https://你的向量服务地址/v1" />
-              <small>填写 OpenAI-compatible Embeddings 接口地址；留空时复用上面的 Base URL。</small>
-            </label>
+            <details class="optional-config">
+              <summary><span>MinerU 配置</span><small>可选 · 点击展开</small></summary>
+              <div class="optional-config-fields">
+                <label>
+                  <span>MinerU URL</span>
+                  <input id="mineru-base-url" name="mineru_base_url" type="url" placeholder="https://api.llm.ustc.edu.cn/mineru/file_parse" />
+                  <small>可选；与本地 PDF 解析并行，留空时不启用。</small>
+                </label>
+                <label>
+                  <span>MinerU API Key</span>
+                  <div class="secret-field">
+                    <input id="mineru-api-key" name="mineru_api_key" type="password" autocomplete="new-password" placeholder="留空时不启用 MinerU" />
+                    <button class="toggle-secret" data-secret-target="mineru-api-key" type="button">显示</button>
+                  </div>
+                  <small id="mineru-api-key-state">可选；仅用于 MinerU 文件解析请求。</small>
+                </label>
+              </div>
+            </details>
 
             <label>
               <span>数据目录</span>
@@ -88,7 +119,6 @@
             <div id="message" class="message" hidden></div>
             <button id="save-button" class="save-button" type="submit">保存配置</button>
           </form>
-          <p id="config-location" class="config-location"></p>
         </section>
       </section>
     </main>

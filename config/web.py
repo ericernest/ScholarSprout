@@ -12,7 +12,6 @@ from pydantic import BaseModel, field_validator
 
 from .manager import (
     DEFAULT_DATA_DIR,
-    get_config_file,
     is_setup_complete,
     load_config,
     resolve_data_dir,
@@ -30,10 +29,15 @@ class ConfigUpdate(BaseModel):
     clear_api_key: bool = False
     model_name: str | None = None
     embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    clear_embedding_api_key: bool = False
     embedding_model_name: str | None = None
+    mineru_base_url: str | None = None
+    mineru_api_key: str | None = None
+    clear_mineru_api_key: bool = False
     data_dir: str | None = None
 
-    @field_validator("base_url", "embedding_base_url")
+    @field_validator("base_url", "embedding_base_url", "mineru_base_url")
     @classmethod
     def validate_base_url(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -96,6 +100,13 @@ def _public_config(config: object) -> dict[str, object]:
             "base_url": config.embedding.base_url or "",
             "model_name": config.embedding.model_name,
             "uses_client_base_url": not bool(config.embedding.base_url),
+            "api_key_configured": bool(config.embedding.api_key.strip()),
+            "uses_client_api_key": not bool(config.embedding.api_key.strip()),
+        },
+        "mineru": {
+            "base_url": config.mineru.base_url or "",
+            "api_key_configured": bool(config.mineru.api_key.strip()),
+            "enabled": bool(config.mineru.base_url and config.mineru.api_key.strip()),
         },
         "storage": {
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
@@ -103,7 +114,6 @@ def _public_config(config: object) -> dict[str, object]:
             "environment_override": bool(os.getenv("NOVICESYNAPSE_DATA_DIR")),
         },
         "setup_complete": is_setup_complete(config),
-        "config_file": str(get_config_file()),
     }
 
 
@@ -129,10 +139,21 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.base_url = payload.embedding_base_url
         if "embedding_model_name" in payload.model_fields_set:
             config.embedding.model_name = payload.embedding_model_name or ""
+        if "mineru_base_url" in payload.model_fields_set:
+            config.mineru.base_url = payload.mineru_base_url
         if payload.clear_api_key:
             config.client.api_key = ""
         elif payload.api_key is not None and payload.api_key.strip():
             config.client.api_key = payload.api_key.strip()
+        if payload.clear_embedding_api_key:
+            config.embedding.api_key = ""
+        elif payload.embedding_api_key is not None and payload.embedding_api_key.strip():
+            config.embedding.api_key = payload.embedding_api_key.strip()
+        if payload.clear_mineru_api_key:
+            config.mineru.api_key = ""
+        elif payload.mineru_api_key is not None and payload.mineru_api_key.strip():
+            config.mineru.api_key = payload.mineru_api_key.strip()
+        old_data_dir = resolve_data_dir(config)
         if payload.data_dir is not None:
             target = Path(payload.data_dir).expanduser()
             if target.exists() and not target.is_dir():
@@ -147,8 +168,17 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
     except OSError as error:
         raise HTTPException(status_code=422, detail=f"无法创建数据目录：{error}") from error
 
+    data_dir_changed = resolve_data_dir(config) != old_data_dir
+    reload_result: dict[str, object] = {}
+    reloader = getattr(request.app.state, "reload_runtime_config", None)
+    if callable(reloader):
+        try:
+            reload_result = dict(reloader(config) or {})
+        except Exception as error:
+            reload_result = {"runtime_reloaded": False, "reload_error": str(error)}
     return {
         **_public_config(config),
         "saved": True,
-        "restart_required": True,
+        **reload_result,
+        "restart_required": data_dir_changed or not bool(reload_result.get("runtime_reloaded")),
     }

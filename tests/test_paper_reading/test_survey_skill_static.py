@@ -77,6 +77,8 @@ class SurveySkillStaticTests(unittest.TestCase):
         self.assertIn("core_mechanism", text)
         self.assertIn("specific_solution", text)
         self.assertIn("used_by_methods", text)
+        self.assertIn("paper_examples", text)
+        self.assertIn("dataset_type", text)
 
     def test_frontend_supports_partial_card_progress(self):
         text = read(APP_JS)
@@ -102,6 +104,9 @@ class SurveySkillStaticTests(unittest.TestCase):
         self.assertIn("challenge_card", text)
         self.assertIn("function readingMapFailureText", text)
         self.assertIn("state.readingMapError", text)
+        self.assertIn("function readingMapCardFields", text)
+        self.assertIn("论文中的具体例子", text)
+        self.assertIn("edgeandtopologyevolution", text)
 
 
 if __name__ == "__main__":

@@ -476,6 +476,13 @@ class RankingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.ranker = WeightedPaperRanker(DomainOnboardingConfig())
 
+    def test_embedding_topic_score_is_calibrated_without_changing_raw_gate(self) -> None:
+        calibrated = self.ranker._calibrate_topic_relevance(0.3, "embedding:qwen3")
+
+        self.assertGreater(calibrated, 0.3)
+        self.assertLess(calibrated, 1.0)
+        self.assertEqual(self.ranker._calibrate_topic_relevance(0.3, "tfidf"), 0.3)
+
     def test_deduplicates_by_id_and_title(self) -> None:
         papers = make_candidates(3)
         duplicate = papers[0].model_copy(update={"paper_id": "different-id", "matched_queries": ["second"]})

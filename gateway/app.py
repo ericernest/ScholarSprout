@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -48,6 +49,7 @@ from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
 from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.pipeline.sources import PaperPipeline
+from handlers.paper_reading.pipeline.mineru import MinerUClient
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
 from tools.registry import create_builtin_tool_registry
@@ -232,7 +234,7 @@ def paper_reading_figure(
 
     return FileResponse(
         figure_path,
-        media_type="image/png",
+        media_type=mimetypes.guess_type(asset_name)[0] or "application/octet-stream",
         filename=asset_name,
         content_disposition_type="inline",
     )
@@ -451,6 +453,11 @@ def close_domain_onboarding_resources() -> None:
     pipeline = getattr(app.state, "domain_onboarding_pipeline", None)
     if pipeline is not None:
         pipeline.close()
+    for retired in getattr(app.state, "retired_runtime_resources", []):
+        resource = retired
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
     audit_sink = getattr(app.state, "domain_onboarding_audit_sink", None)
     if audit_sink is not None:
         audit_sink.close()
@@ -459,22 +466,7 @@ def close_domain_onboarding_resources() -> None:
 # 启动 gateway 服务。
 def start_gateway_server(host: str, port: int) -> None:
     config = load_config()
-    setup_complete = is_setup_complete(config)
-    model = OpenAIClient(config.client) if setup_complete else SetupRequiredModel(config.client)
-    embedding_base_url = (
-        os.getenv("DOMAIN_ONBOARDING_EMBEDDING_BASE_URL")
-        or config.embedding.base_url
-        or config.client.base_url
-    )
-    embedding_model = model
-    if setup_complete and embedding_base_url != config.client.base_url:
-        embedding_model = OpenAIClient(
-            replace(
-                config.client,
-                base_url=embedding_base_url,
-                model_name=config.embedding.model_name,
-            )
-        )
+    model, embedding_model, setup_complete = create_runtime_models(config)
     chat_agent = create_agent(model, "chat")
     domain_onboarding_agent = create_agent(model, "domain_onboarding")
     paper_reading_agent = create_agent(model, "paper_reading")
@@ -530,10 +522,75 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.session_manager = session_manager
     app.state.fork_manager = fork_manager
     app.state.paper_pipeline = paper_pipeline
+    app.state.mineru_client = MinerUClient(config.mineru)
+    app.state.retired_runtime_resources = []
+    app.state.reload_runtime_config = lambda updated: reload_runtime_config(
+        app.state, updated
+    )
     if setup_complete:
         resume_pending_reading_map_generations(app.state)
 
     uvicorn.run(app, host=host, port=port)
+
+
+def create_runtime_models(config: object) -> tuple[object, object, bool]:
+    setup_complete = is_setup_complete(config)
+    model = OpenAIClient(config.client) if setup_complete else SetupRequiredModel(config.client)
+    embedding_base_url = (
+        os.getenv("DOMAIN_ONBOARDING_EMBEDDING_BASE_URL")
+        or config.embedding.base_url
+        or config.client.base_url
+    )
+    embedding_api_key = config.embedding.api_key or config.client.api_key
+    embedding_model = model
+    if setup_complete and (
+        embedding_base_url != config.client.base_url
+        or embedding_api_key != config.client.api_key
+    ):
+        embedding_model = OpenAIClient(
+            replace(
+                config.client,
+                api_key=embedding_api_key,
+                base_url=embedding_base_url,
+                model_name=config.embedding.model_name,
+            )
+        )
+    return model, embedding_model, setup_complete
+
+
+def reload_runtime_config(app_state: object, config: object) -> dict[str, object]:
+    """Apply connection changes to new requests without restarting storage."""
+    model, embedding_model, setup_complete = create_runtime_models(config)
+    old_model = getattr(app_state, "model", None)
+    old_embedding = getattr(app_state, "embedding_model", None)
+    old_pipeline = getattr(app_state, "domain_onboarding_pipeline", None)
+    new_pipeline = create_default_pipeline(
+        model,
+        embedding_model=embedding_model,
+        embedding_model_name=config.embedding.model_name,
+    )
+    app_state.model = model
+    app_state.embedding_model = embedding_model
+    app_state.setup_complete = setup_complete
+    app_state.chat_agent = create_agent(model, "chat")
+    app_state.domain_onboarding_agent = create_agent(model, "domain_onboarding")
+    app_state.paper_reading_agent = create_agent(model, "paper_reading")
+    app_state.domain_onboarding_pipeline = new_pipeline
+    manager = getattr(app_state, "domain_onboarding_job_manager", None)
+    if manager is not None:
+        manager.pipeline = new_pipeline
+    query_engine = getattr(app_state, "kg_query_engine", None)
+    if query_engine is not None:
+        query_engine.model = model
+    app_state.mineru_client = MinerUClient(config.mineru)
+    retired = getattr(app_state, "retired_runtime_resources", None)
+    if retired is None:
+        retired = []
+        app_state.retired_runtime_resources = retired
+    for resource in (old_pipeline, old_embedding, old_model):
+        if resource is not None and resource not in (model, embedding_model) and resource not in retired:
+            retired.append(resource)
+    return {"runtime_reloaded": True}
 
 
 def configure_domain_onboarding_runtime(
@@ -550,6 +607,7 @@ def configure_domain_onboarding_runtime(
         embedding_model=embedding_model,
         embedding_model_name=embedding_model_name,
     )
+    app_state.embedding_model = embedding_model
     app_state.domain_onboarding_metrics = DomainOnboardingMetrics(
         input_cost_per_million_tokens=getattr(
             client_config, "input_cost_per_million_tokens", None

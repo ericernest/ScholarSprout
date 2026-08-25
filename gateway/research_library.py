@@ -143,7 +143,10 @@ def domain_onboarding_workspace(artifact_id: str, request: Request) -> dict:
         "state": item.get("state") or "completed",
         "current_stage": item.get("current_stage") or "completed",
         "progress": 1.0 if item.get("state") == "completed" else 0.0,
-        "request": {"query": item.get("query") or ""},
+        "request": {
+            "query": item.get("query") or "",
+            "session_id": item.get("conversation_id") or "",
+        },
         "result": result,
         "error": item.get("error_summary") or None,
         "retryable": False,

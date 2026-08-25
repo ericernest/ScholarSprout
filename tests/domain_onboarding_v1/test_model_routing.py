@@ -110,7 +110,17 @@ class ModelRoutingTests(unittest.TestCase):
 
             config = Config()
 
-        with patch.dict("os.environ", {}, clear=True):
+        # Keep Windows system variables required by OpenSSL; blank only routing overrides.
+        without_routing_overrides = {
+            "DOMAIN_ONBOARDING_GENERATION_MODELS": "",
+            "DOMAIN_ONBOARDING_PLANNING_MODELS": "",
+            "DOMAIN_ONBOARDING_REPAIR_MODELS": "",
+            "DOMAIN_ONBOARDING_DEVELOPMENT_MODELS": "",
+            "DOMAIN_ONBOARDING_LANDSCAPE_MODELS": "",
+            "DOMAIN_ONBOARDING_LEARNING_PATH_MODELS": "",
+            "DOMAIN_ONBOARDING_STAGE_PLANNING_MODELS": "",
+        }
+        with patch.dict("os.environ", without_routing_overrides, clear=False):
             delegate = ConfiguredModel([{"ok": True}])
             pipeline = create_default_pipeline(delegate)
         try:

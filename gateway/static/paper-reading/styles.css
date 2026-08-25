@@ -154,7 +154,7 @@ select option { color: #07120f; }
 .paper-ribbon h1 { max-width: 1100px; margin: 0; font: 700 clamp(1.25rem,2.1vw,2rem) Georgia,serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ribbon-actions { display: flex; align-items: center; gap: .5rem; }
 .icon-text-button { padding: .55rem .7rem; }
-.workbench-grid { --copilot-width: 400px; display: grid; grid-template-columns: 270px minmax(460px,1fr) 6px var(--copilot-width); gap: .8rem; height: calc(100vh - 146px); min-height: 680px; }
+.workbench-grid { --navigator-width: 270px; --copilot-width: 400px; display: grid; grid-template-columns: var(--navigator-width) 6px minmax(460px,1fr) 6px var(--copilot-width); gap: .8rem; height: calc(100vh - 146px); min-height: 680px; }
 .workspace-panel { border-radius: 22px; overflow: hidden; min-width: 0; }
 .resize-handle { position: relative; width: 6px; cursor: col-resize; border-radius: 4px; background: transparent; transition: background .15s; }
 .resize-handle::after { position: absolute; inset: 0 -4px; content: ""; }
@@ -407,15 +407,10 @@ select option { color: #07120f; }
 .pdf-mark-note {
   outline: 1px solid rgba(5,112,91,.48); pointer-events: auto; cursor: pointer;
 }
-.pdf-mode-hint {
-  padding: .28rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
-  color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .66rem;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .reader-panel .empty-state { color: #68736f; }
 .empty-state, .reading-map-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
 .selection-toolbar {
-  position: fixed; z-index: 80; display: flex; align-items: center; gap: .25rem; max-width: calc(100vw - 16px); padding: .35rem; border: 1px solid var(--line-strong);
+  position: fixed; z-index: 120; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; max-width: calc(100vw - 16px); padding: .35rem; border: 1px solid var(--line-strong);
   border-radius: 12px; background: rgba(4,16,14,.96); box-shadow: var(--shadow);
 }
 .selection-toolbar button { padding: .45rem .55rem; border: 0; border-radius: 8px; color: var(--ink); background: transparent; font-size: .7rem; }
@@ -460,7 +455,7 @@ select option { color: #07120f; }
 .thinking-card strong { color: #d8fff6; font-size: .8rem; }
 .thinking-card p { margin: .15rem 0 0; color: var(--muted); font-size: .72rem; }
 .welcome-card { grid-template-columns: auto 1fr; }
-.welcome-card p, .analysis-card p { margin: .3rem 0 0; color: var(--muted); font-size: .78rem; line-height: 1.58; }
+.welcome-card p, .analysis-card p, .fork-summary p { margin: .3rem 0 0; color: var(--muted); font-size: .78rem; line-height: 1.58; }
 .analysis-card header, .skill-output-card header { display: flex; justify-content: space-between; gap: .5rem; color: var(--accent); font-size: .7rem; }
 .user-question-card { justify-self: end; width: min(88%, 520px); border-color: rgba(135,167,255,.28); background: rgba(135,167,255,.09); }
 .user-question-card header { display:flex;justify-content:space-between;gap:.5rem;color:#dbe2ff;font-size:.7rem; }
@@ -583,18 +578,56 @@ select option { color: #07120f; }
 .reading-map-header-actions { display: flex; flex: none; align-items: center; gap: .45rem; }
 .reading-map-layout {
   display: grid; grid-template-columns: minmax(0,1fr) 300px;
-  height: min(52vh,620px); min-height: 360px; overflow: hidden;
+  height: clamp(620px,72vh,900px); min-height: 620px; overflow: hidden;
 }
 .reading-map-shell { position: relative; min-height: 0; border-right: 1px solid var(--line); overflow: hidden; }
 .reading-map-detail { display: grid; align-content: start; gap: .65rem; padding: 1rem; overflow-y: auto; }
 .reading-map-detail h3 { margin: .2rem 0; }
 .reading-map-grid {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(280px,360px); gap: .85rem;
+  display: grid; grid-auto-flow: row; grid-template-columns: minmax(0,1fr); gap: 1rem;
   height: 100%; padding: 1rem; overflow: auto; align-items: start;
-  scroll-snap-type: x proximity;
+  align-content: start; scroll-snap-type: y proximity;
 }
+.ai-reflow-content {
+  margin-top: 0;
+}
+.ai-reflow-label {
+  margin-bottom: .8rem; color: #0b725d; font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+}
+.ai-reflow-content .markdown-content { color: #34413d; }
+.ai-reflow-content .markdown-content p,
+.ai-reflow-content .markdown-content li {
+  font: 400 clamp(.96rem,1.1vw,1.04rem)/1.82 Georgia,"Noto Serif CJK SC",serif;
+}
+.ai-reflow-content .markdown-content table { width: 100%; overflow-wrap: anywhere; }
+.reflow-reader { background: #fbfaf6; }
+.reflow-reader .ai-reflow-section { max-width: 860px; }
+.reflow-document-header { width: min(100%,860px); margin: .4rem auto 1.2rem; padding: 1rem 1.1rem 1.15rem; border-bottom: 1px solid rgba(35,75,64,.16); }
+.reflow-document-header h1 { margin: .25rem 0 0; color: #172f29; font: 700 clamp(1.45rem,2.5vw,2.25rem)/1.25 Georgia,"Noto Serif CJK SC",serif; }
+.mineru-markdown { display: grid; gap: .9rem; }
+.mineru-markdown > .markdown-content { display: grid; gap: .85rem; }
+.mineru-markdown .markdown-content p { margin: 0; }
+.mineru-markdown blockquote {
+  margin: .4rem 0; padding: .7rem .9rem; border-left: 3px solid rgba(32,185,151,.5);
+  color: #596762; background: rgba(32,185,151,.05);
+}
+.mineru-figure { margin: 1rem auto; display: grid; justify-items: center; gap: .45rem; }
+.mineru-figure img { display: block; max-width: 100%; height: auto; border-radius: 10px; }
+.mineru-figure figcaption { max-width: 72ch; color: #65716d; font-size: .78rem; line-height: 1.55; text-align: center; }
+.mineru-table-wrap { margin: 1rem 0; overflow: auto; border: 1px solid rgba(35,75,64,.14); border-radius: 12px; background: #fff; }
+.mineru-table { width: 100%; border-collapse: collapse; font-size: .76rem; line-height: 1.45; }
+.mineru-table th, .mineru-table td { min-width: 6rem; padding: .48rem .58rem; border: 1px solid rgba(35,75,64,.12); vertical-align: top; text-align: left; }
+.mineru-table th { color: #18352e; background: rgba(32,185,151,.07); }
+.reading-map-grid.is-survey-vertical {
+  grid-auto-flow: row;
+  grid-auto-columns: auto;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  scroll-snap-type: y proximity;
+}
+.reading-map-grid.is-survey-vertical .reading-map-column { width: 100%; }
 .reading-map-column {
-  display: grid; align-content: start; gap: .75rem; min-width: 0; padding-right: .1rem; scroll-snap-align: start;
+  display: grid; align-content: start; gap: .75rem; min-width: 0; padding: .1rem 0 1rem; scroll-snap-align: start;
 }
 .reading-map-column h3 {
   position: sticky; top: 0; z-index: 1; margin: 0; padding: .1rem 0 .35rem;
@@ -607,6 +640,9 @@ select option { color: #07120f; }
 .reading-map-card strong { color: #f1fffb; line-height: 1.32; overflow-wrap: anywhere; }
 .reading-map-card p { margin: 0; color: #b7d7ce; font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
 .reading-map-card small { color: #82aaa0; font-size: .7rem; line-height: 1.5; overflow-wrap: anywhere; }
+.reading-map-fields { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: .36rem .65rem; margin: 0; }
+.reading-map-fields dt { color: #7faaa0; font-size: .7rem; line-height: 1.55; }
+.reading-map-fields dd { margin: 0; color: #c4e1da; font-size: .78rem; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line; }
 .reading-map-why { color: #d5eee7 !important; }
 .reading-map-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .reading-map-panel.is-collapsed .reading-map-header { border-bottom: 0; }
@@ -750,7 +786,7 @@ select option { color: #07120f; }
 @keyframes workspace-in { from { opacity: 0; transform: translateY(24px) scale(.99); } }
 @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 @media (max-width: 1280px) {
-  .workbench-grid { --copilot-width: 360px; grid-template-columns: 240px minmax(420px,1fr) 6px var(--copilot-width); }
+  .workbench-grid { --navigator-width: 240px; --copilot-width: 360px; grid-template-columns: var(--navigator-width) 6px minmax(420px,1fr) 6px var(--copilot-width); }
   .reading-map-layout { grid-template-columns: minmax(0,1fr) 290px; }
 }
 @media (max-width: 1040px) {

@@ -129,6 +129,26 @@ def synthetic_outline_pdf() -> bytes:
 
 
 class PDFParserTests(unittest.TestCase):
+    def test_title_skips_ieee_running_header(self) -> None:
+        text = """IEEE TRANSACTIONS ON KNOWLEDGE AND DATA ENGINEERING, VOL. XX, NO. X, 2026
+1
+Self-Evolving Agents as Dynamic Graph
+Transformation: A Survey and New Perspective
+Alice Example, Bob Example
+Abstract
+This survey studies self-evolving agents.
+"""
+
+        self.assertEqual(
+            PDFParser().extract_title(text),
+            "Self-Evolving Agents as Dynamic Graph Transformation: A Survey and New Perspective",
+        )
+
+    def test_title_strips_inline_publication_banner(self) -> None:
+        text = "Published in Transactions on Machine Learning Research (01/2026) A Survey of Self-Evolving Agents\nAbstract\nBody"
+
+        self.assertEqual(PDFParser().extract_title(text), "A Survey of Self-Evolving Agents")
+
     def setUp(self) -> None:
         self.parser = PDFParser()
 
@@ -302,6 +322,33 @@ More results.
         )
         self.assertEqual(repaired["sections"][1]["title"], "1. Introduction")
         self.assertEqual(stored["title"], "G-Memory: Tracing Hierarchical Memory for")
+
+    def test_loading_mineru_paper_restores_markdown_sections(self) -> None:
+        markdown = (
+            "# RCR-Router\n\n## Abstract\n\nA role-aware routing system.\n\n"
+            "## 1 Introduction\n\nThe research problem.\n\n"
+            "## 2 Method\n\nThe routing method."
+        )
+        stored = {
+            "paper_id": "rcr-router",
+            "title": "RCR-Router",
+            "sections": [{"section_id": "sec:full", "title": "Full Text", "content": markdown[:100]}],
+            "full_text": markdown,
+            "parse_status": "done",
+            "section_extraction_source": "mineru_markdown",
+            "section_extraction_status": "mineru_used",
+        }
+
+        class Storage:
+            @staticmethod
+            def load_paper(paper_id: str) -> dict:
+                return stored
+
+        repaired = _load_paper_data(Storage(), "rcr-router")
+
+        self.assertEqual([section["title"] for section in repaired["sections"]], ["Abstract", "1 Introduction", "2 Method"])
+        self.assertEqual(repaired["outline_entries_count"], 3)
+        self.assertEqual(stored["sections"][0]["title"], "Full Text")
 
     def test_parse_bytes_extracts_complete_caption_anchored_figure(self) -> None:
         metadata = self.parser.parse_bytes(synthetic_figure_pdf())

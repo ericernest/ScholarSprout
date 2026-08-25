@@ -14,10 +14,17 @@ from handlers.paper_reading.handler import (
     SURVEY_MAP_TASK_LIMIT,
     SURVEY_PLAN_MAX_TOKENS,
     SURVEY_SECTION_GUIDE_TASK_LIMIT,
+    SURVEY_MAP_GROUP_KEYS,
     _build_llm_reading_map,
     _build_survey_plan_card_reading_map,
+    _ensure_required_survey_map_tasks,
     _ensure_survey_prerequisite_task,
+    _normalize_survey_card_result,
     _normalize_survey_card_plan,
+    _contains_unnecessary_english_explanation,
+    _generate_research_overview,
+    _reading_map_json_chat,
+    _reading_map_has_visible_content,
     _reading_map_response_json,
     _research_reading_sections,
     resume_pending_reading_map_generations,
@@ -106,6 +113,19 @@ class _ConcurrentJsonModel:
 
 
 class ReadingMapRuntimeTests(unittest.TestCase):
+    def test_survey_map_with_an_empty_optional_group_is_still_displayable(self) -> None:
+        reading_map = {
+            "map_variant": "survey",
+            "survey_map": {
+                "field_overview": {"field": "智能体研究"},
+                "technical_routes": [{"route_name": "记忆增强"}],
+                "datasets": [],
+            },
+            "section_guides": [{"section_id": "sec:intro", "cards": [{"title": "导读"}]}],
+        }
+
+        self.assertTrue(_reading_map_has_visible_content(reading_map))
+
     def test_research_section_guides_cover_more_than_old_28_section_limit(self) -> None:
         sections = [{
             "section_id": f"sec:{index}",
@@ -282,11 +302,29 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         }
 
         normalized = _normalize_survey_card_plan(plan, manifest)
-        bounded = _ensure_survey_prerequisite_task(normalized, manifest)
+        required = _ensure_required_survey_map_tasks(normalized, manifest)
+        bounded = _ensure_survey_prerequisite_task(required, manifest)
 
         self.assertLessEqual(normalized["map_tasks_count"], SURVEY_MAP_TASK_LIMIT)
+        self.assertEqual(
+            {task["group_key"] for task in required["tasks"] if task["target"] == "survey_map"},
+            set(SURVEY_MAP_GROUP_KEYS),
+        )
+        self.assertLessEqual(required["map_tasks_count"], SURVEY_MAP_TASK_LIMIT)
         self.assertLessEqual(normalized["section_guide_tasks_count"], SURVEY_SECTION_GUIDE_TASK_LIMIT)
         self.assertLessEqual(len(bounded["tasks"]), 1 + SURVEY_MAP_TASK_LIMIT + SURVEY_SECTION_GUIDE_TASK_LIMIT)
+
+    def test_schema_echo_is_rejected_instead_of_becoming_an_empty_card(self) -> None:
+        task = {"target": "survey_map", "group_key": "development_timeline", "task_id": "timeline"}
+        sections = [{"section_id": "sec:1", "title": "Introduction", "content": "history"}]
+        schema_echo = {
+            "type": "json_object",
+            "properties": {"items": {"type": "array"}},
+            "required": ["items"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "No survey map items"):
+            _normalize_survey_card_result(schema_echo, task, sections)
 
     def test_restart_requeues_persisted_running_map_with_heartbeat(self) -> None:
         paper = {
@@ -320,6 +358,61 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         self.assertTrue(storage.saved[1]["reading_map_resumed_at"])
         self.assertEqual(storage.saved[1]["reading_map_phase"], "queued")
         schedule.assert_called_once_with(state, "paper-1", generation_id="generation-1")
+
+    def test_reading_map_requests_require_chinese_explanations(self) -> None:
+        class CaptureModel:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def chat(self, **kwargs):
+                self.kwargs = kwargs
+                return SimpleNamespace(choices=[])
+
+        model = CaptureModel()
+        _reading_map_json_chat(
+            model,
+            [{"role": "system", "content": "Return JSON."}, {"role": "user", "content": "Generate map."}],
+            timeout=5,
+        )
+
+        system_prompt = model.kwargs["messages"][0]["content"]
+        self.assertIn("Simplified Chinese", system_prompt)
+        self.assertIn("Do not write full English explanatory sentences", system_prompt)
+
+    def test_english_explanation_is_rejected_but_official_name_is_allowed(self) -> None:
+        self.assertTrue(_contains_unnecessary_english_explanation({
+            "summary": "This is a full English explanatory sentence.",
+        }))
+        self.assertFalse(_contains_unnecessary_english_explanation({
+            "name": "Retrieval-Augmented Generation",
+            "summary": "采用检索增强生成来补充外部知识。",
+        }))
+
+    def test_research_overview_retries_untranslated_explanation(self) -> None:
+        class RetryModel:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                summary = (
+                    "This is a full English explanatory sentence."
+                    if len(self.calls) == 1
+                    else "这是面向科研新手的中文问题说明。"
+                )
+                content = json.dumps({"research_problem": {"summary": summary}}, ensure_ascii=False)
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason="stop",
+                )])
+
+        model = RetryModel()
+        with patch("handlers.paper_reading.handler._build_reading_map_prompt", return_value="prompt"):
+            result = _generate_research_overview(model, {}, {}, None)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("中文问题说明", result["research_problem"]["summary"])
+        self.assertIn("上一次结果包含", model.calls[1]["messages"][-1]["content"])
 
 
 if __name__ == "__main__":

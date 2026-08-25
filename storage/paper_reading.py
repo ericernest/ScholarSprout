@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from storage.local_store import LocalResearchStore
+from storage.catalog import _paper_display_fields
 
 
 class PaperReadingStorage:
@@ -25,7 +26,7 @@ class PaperReadingStorage:
             self.base_dir.parent / "research.sqlite3"
         )
         self.research_store.initialize()
-        for subdir in ("uploads", "figures"):
+        for subdir in ("uploads", "figures", "mineru"):
             (self.base_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     def save_session(self, session_id: str, data: dict[str, Any]) -> None:
@@ -46,7 +47,15 @@ class PaperReadingStorage:
         self.research_store.save_paper_document(paper_id, payload)
 
     def load_paper(self, paper_id: str) -> dict[str, Any] | None:
-        return self.research_store.load_paper_document(paper_id)
+        paper = self.research_store.load_paper_document(paper_id)
+        if paper is None:
+            return None
+        title, abstract = _paper_display_fields(
+            paper.get("title"), paper.get("abstract"), paper
+        )
+        paper["title"] = title
+        paper["abstract"] = abstract
+        return paper
 
     def delete_paper(self, paper_id: str) -> bool:
         deleted = self.research_store.delete_paper(paper_id)
@@ -131,19 +140,40 @@ class PaperReadingStorage:
         path = self.base_dir / "figures" / safe_paper_id / safe_name
         return path if path.is_file() else None
 
+    def save_mineru_artifact(self, paper_id: str, artifact_name: str, data: bytes) -> Path:
+        """Persist raw MinerU diagnostics separately from the normalized paper document."""
+        safe_paper_id = self._safe_component(paper_id)
+        safe_name = self._safe_component(artifact_name)
+        directory = self.base_dir / "mineru" / safe_paper_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / safe_name
+        path.write_bytes(data)
+        return path
+
+    def get_mineru_artifact_path(self, paper_id: str, artifact_name: str) -> Path | None:
+        try:
+            safe_paper_id = self._safe_component(paper_id)
+            safe_name = self._safe_component(artifact_name)
+        except ValueError:
+            return None
+        path = self.base_dir / "mineru" / safe_paper_id / safe_name
+        return path if path.is_file() else None
+
     def get_storage_stats(self) -> dict[str, Any]:
         sessions = self.research_store.list_reading_session_snapshots()
         papers = self.research_store.list_paper_documents()
         uploads = list((self.base_dir / "uploads").glob("*.pdf"))
         figures = list((self.base_dir / "figures").glob("*/*"))
+        mineru_artifacts = list((self.base_dir / "mineru").glob("*/*"))
         total_size = sum(
-            path.stat().st_size for path in [*uploads, *figures] if path.is_file()
+            path.stat().st_size for path in [*uploads, *figures, *mineru_artifacts] if path.is_file()
         )
         return {
             "sessions": len(sessions),
             "papers": len(papers),
             "uploads": len(uploads),
             "figures": len(figures),
+            "mineru_artifacts": len(mineru_artifacts),
             "total_size_bytes": total_size,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "base_dir": str(self.base_dir),

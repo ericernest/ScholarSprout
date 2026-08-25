@@ -20,6 +20,7 @@ class PaperReadingRequest(BaseModel):
     action: Literal[
         "search_paper",        # 搜索论文
         "upload_paper",        # 上传 PDF（base64 编码或 URL）
+        "create_session",      # 为论文创建/绑定阅读会话（不调用模型）
         "start_reading",       # 开始/继续阅读
         "pause_reading",       # 暂停阅读（自动保存 checkpoint）
         "resume_reading",      # 恢复阅读（还原最后 checkpoint）
@@ -31,6 +32,7 @@ class PaperReadingRequest(BaseModel):
         "get_progress",        # 获取阅读进度
         "get_paper_detail",    # 获取论文完整元数据和章节正文
         "regenerate_reading_map",  # 重新生成导读地图与智能索引
+        "reparse_paper",       # 重新执行本地解析和可选 MinerU 解析
     ] = "start_reading"
 
     # ── 通用字段 ──

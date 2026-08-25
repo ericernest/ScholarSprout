@@ -1,6 +1,7 @@
 const STORAGE_KEY = "domain_onboarding_workspace_v1_9";
 const LEGACY_STORAGE_KEYS = ["domain_onboarding_workspace_v1_5"];
 const PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
+const PANEL_WIDTHS_KEY = "domain_onboarding_panel_widths_v1";
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const EVENT_NAMES = [
   "accepted",
@@ -83,6 +84,7 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 bindInteractions();
+bindPanelResizers();
 initialize();
 
 async function initialize() {
@@ -173,6 +175,11 @@ function bindInteractions() {
   });
 
   $("content").addEventListener("click", async (event) => {
+    const retry = event.target.closest("[data-retry-task]");
+    if (retry) {
+      await retryTask();
+      return;
+    }
     const filter = event.target.closest("[data-paper-filter]");
     if (filter) {
       state.paperFilter = filter.dataset.paperFilter;
@@ -295,6 +302,7 @@ function consumeSnapshot(snapshot, persist = true) {
   if (Object.prototype.hasOwnProperty.call(snapshot, "result")) {
     state.result = snapshot.result && typeof snapshot.result === "object" ? snapshot.result : null;
   }
+  syncReturnChatLink();
   render();
   if (persist) saveWorkspace();
 
@@ -444,12 +452,8 @@ function renderStatus() {
 }
 
 function renderOverview(data) {
-  const tags = [
-    data.schema_version ? `<span class="tag">${escapeHtml(data.schema_version)}</span>` : "",
-  ].join("");
   $("overview-content").classList.remove("loading-section");
   $("overview-content").innerHTML = `
-    <div class="hero-kicker">${tags}</div>
     <h2 class="hero-title">${escapeHtml(data.domain || data.query || state.snapshot?.request?.query || "正在理解你的学习目标")}</h2>
     <p class="hero-copy">${escapeHtml(data.text || "正在检索论文并构建领域发展脉络，已完成的内容会自动出现在下方。")}</p>
     <div class="profile-strip">
@@ -460,7 +464,7 @@ function renderOverview(data) {
     </div>
   `;
   $("sidebar-domain").textContent = data.domain || "领域入门";
-  $("sidebar-policy").textContent = data.policy_version || "生成策略执行中";
+  syncReturnChatLink();
 }
 
 function renderPrerequisites(data) {
@@ -632,10 +636,13 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  if (!Array.isArray(data.papers) || !data.papers.length) {
+  const sourcePapers = Array.isArray(data.papers) && data.papers.length
+    ? data.papers
+    : (Array.isArray(data.evidence_papers) ? data.evidence_papers : []);
+  if (!sourcePapers.length) {
     const container = $("papers-content");
     container.classList.remove("loading-grid");
-    container.innerHTML = sectionStatusCopy("论文清单", data);
+    container.innerHTML = paperListStatusCopy();
     return;
   }
   const priorities = ["all", "core", "recommended", "optional", "extended"];
@@ -644,9 +651,9 @@ function renderPapers(data) {
       ${priority === "all" ? "全部" : PRIORITY_LABELS[priority]}
     </button>
   `).join("");
-  const papers = data.papers
+  const papers = sourcePapers
     .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
-    .sort((left, right) => Number(right.final_score || 0) - Number(left.final_score || 0));
+    .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length
@@ -661,7 +668,6 @@ function renderPapers(data) {
           <h3>${escapeHtml(paper.title)}</h3>
           <small>${escapeHtml((paper.authors || []).slice(0, 4).join("、") || "作者未知")} · ${escapeHtml(paper.year || "年份未知")}</small>
         </span>
-        <span class="paper-score"><b>${formatPercentScore(paper.final_score)}<small>/100</small></b><span>综合推荐度</span></span>
       </button>
     `).join("")
     : emptyCopy("当前筛选下没有论文。");
@@ -828,27 +834,6 @@ function showDetail(kind, id) {
 }
 
 function renderPaperDetail(paper) {
-  const guidance = paperGuidance(paper);
-  const contribution = paper.contribution || guidance.contribution;
-  const readingFocus = (paper.reading_focus || []).length
-    ? paper.reading_focus
-    : guidance.reading_focus;
-  const scoreBreakdown = paper.score_breakdown;
-  const explainableScore = paper.score_version === "paper-score-v2"
-    && scoreBreakdown
-    && typeof scoreBreakdown === "object";
-  const scoreRows = explainableScore
-    ? [
-        ["综合推荐度", paper.final_score],
-        ["主题相关 · 65%", scoreBreakdown.topic_relevance],
-        ["检索覆盖 · 15%", scoreBreakdown.query_coverage],
-        ["时效性 · 10%", scoreBreakdown.recency],
-        ["信息完整度 · 10%", scoreBreakdown.metadata_completeness],
-      ]
-    : [["旧版综合推荐度", paper.final_score]];
-  const scoreNote = explainableScore
-    ? "总分由下列四项严格加权计算；引用数仅作元数据展示，不参与推荐度"
-    : "历史任务使用旧版评分口径；重新生成后可查看完整分项";
   const citationKnown = paper.citation_count != null
     && Number.isFinite(Number(paper.citation_count));
   const metadata = [
@@ -876,23 +861,6 @@ function renderPaperDetail(paper) {
         <p class="detail-summary">${escapeHtml((paper.authors || []).join("、") || "作者信息暂无")}</p>
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
-      <div class="detail-block">
-        <h3>推荐依据 <span class="score-note">${escapeHtml(scoreNote)}</span></h3>
-        <div class="paper-score-grid">
-          ${scoreRows.map(([label, value]) => `
-            <div class="paper-score-row">
-              <span>${escapeHtml(label)}</span>
-              <span class="mini-track"><span style="width:${formatPercentScore(value)}%"></span></span>
-              <b>${formatPercentScore(value)}</b>
-            </div>
-          `).join("")}
-        </div>
-      </div>
-      <div class="detail-block">
-        <h3>主要贡献</h3>
-        <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
-      </div>
-      ${readingFocus.length ? detailList("阅读重点", readingFocus) : `<div class="detail-block"><h3>阅读重点</h3><p class="detail-summary">${escapeHtml(fieldStatusCopy("阅读重点"))}</p></div>`}
       ${pdfUrl ? `<a class="source-link" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">查看 PDF 原文 ↗</a>` : ""}
       <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}" ${pdfUrl ? "" : "disabled"}>
@@ -1069,21 +1037,19 @@ function sectionStatusCopy(label, data) {
   </div>`;
 }
 
-function fieldStatusCopy(label) {
-  return `${label}${isTerminalTask() ? "待完善" : "待生成"}`;
+function paperListStatusCopy() {
+  if (!isTerminalTask()) return emptyCopy("论文清单待生成");
+  if (state.snapshot?.retryable) {
+    return `<div class="empty-copy">
+      论文清单生成不完整
+      <button class="ghost-button inline-retry-button" type="button" data-retry-task>重试生成论文清单</button>
+    </div>`;
+  }
+  return emptyCopy("当前任务没有检索到可展示的论文。");
 }
 
-function paperGuidance(paper) {
-  const data = currentData() || {};
-  const references = [
-    ...(data.development_stages || []).flatMap((stage) => stage.representative_papers || []),
-    ...(data.learning_path || []).flatMap((step) => step.papers || []),
-  ];
-  const matches = references.filter((item) => String(item.paper_id) === String(paper.paper_id));
-  return {
-    contribution: matches.find((item) => item.contribution)?.contribution || "",
-    reading_focus: [...new Set(matches.flatMap((item) => item.reading_focus || []))],
-  };
+function fieldStatusCopy(label) {
+  return `${label}${isTerminalTask() ? "待完善" : "待生成"}`;
 }
 
 function saveWorkspace() {
@@ -1240,6 +1206,64 @@ function formatPercentScore(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
+}
+
+function syncReturnChatLink() {
+  const conversationId = String(state.snapshot?.request?.session_id || "").trim();
+  const href = conversationId
+    ? `/app?conversation_id=${encodeURIComponent(conversationId)}`
+    : "/app";
+  ["return-chat-link", "brand-chat-link"].forEach((id) => {
+    const link = $(id);
+    if (link) link.href = href;
+  });
+}
+
+function bindPanelResizers() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || "{}"); } catch { saved = {}; }
+  if (Number(saved.sidebar) >= 180) workspace.style.setProperty("--sidebar-width", `${saved.sidebar}px`);
+  if (Number(saved.inspector) >= 260) workspace.style.setProperty("--inspector-width", `${saved.inspector}px`);
+
+  const bind = (id, side) => {
+    const handle = $(id);
+    if (!handle) return;
+    handle.addEventListener("pointerdown", (event) => {
+      if (window.innerWidth <= 820) return;
+      const startX = event.clientX;
+      const panel = side === "sidebar" ? document.querySelector(".sidebar") : document.querySelector(".inspector");
+      const startWidth = panel?.getBoundingClientRect().width || 0;
+      handle.setPointerCapture(event.pointerId);
+      handle.classList.add("is-active");
+      document.body.style.userSelect = "none";
+      const move = (moveEvent) => {
+        const direction = side === "sidebar" ? 1 : -1;
+        const min = side === "sidebar" ? 180 : 260;
+        const max = side === "sidebar" ? 420 : 620;
+        const width = Math.round(Math.min(max, Math.max(min, startWidth + direction * (moveEvent.clientX - startX))));
+        workspace.style.setProperty(`--${side}-width`, `${width}px`);
+      };
+      const finish = () => {
+        handle.classList.remove("is-active");
+        document.body.style.userSelect = "";
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", finish);
+        handle.removeEventListener("pointercancel", finish);
+        const widths = {
+          sidebar: Math.round(document.querySelector(".sidebar")?.getBoundingClientRect().width || 230),
+          inspector: Math.round(document.querySelector(".inspector")?.getBoundingClientRect().width || 330),
+        };
+        localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify(widths));
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", finish);
+      handle.addEventListener("pointercancel", finish);
+    });
+  };
+  bind("sidebar-resizer", "sidebar");
+  bind("inspector-resizer", "inspector");
 }
 
 function escapeHtml(value) {

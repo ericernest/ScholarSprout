@@ -53,12 +53,14 @@ class PaperReadingFrontendTests(unittest.TestCase):
         actions = {
             "search_paper",
             "upload_paper",
+            "create_session",
             "get_paper_detail",
             "start_reading",
             "fork",
             "merge",
             "get_session_state",
             "regenerate_reading_map",
+            "reparse_paper",
         }
 
         for action in actions:
@@ -82,8 +84,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
             "reading-map-kicker",
             "reading-map-title",
             "reading-map-status-copy",
-            "research-overview-button",
             "regenerate-reading-map-button",
+            "reparse-paper-button",
             "fork-panel",
             "pdf-fit-select",
             "paper-boot",
@@ -102,11 +104,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('class="paper-reading-body is-booting"', html)
         self.assertNotIn('id="new-paper-button"', html)
 
-    def test_research_overview_is_named_and_reachable_from_workbench_header(self) -> None:
+    def test_research_overview_is_named_without_workbench_expand_button(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('id="research-overview-button"', html)
+        self.assertNotIn('id="research-overview-button"', html)
         self.assertIn('id="reading-map-title">研究总览</h2>', html)
         self.assertIn('$("reading-map-panel")?.scrollIntoView', javascript)
         self.assertIn('$("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览"', javascript)
@@ -114,17 +116,54 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('`正在并行生成${taskLabel}，请稍候。`', javascript)
         self.assertIn('title: "研究问题"', javascript)
         self.assertIn('title: "核心方法"', javascript)
+        self.assertNotIn("function missingRequiredSurveyMapGroups", javascript)
+        self.assertNotIn("旧版生成结果缺少固定分区", javascript)
+        self.assertNotIn("该固定分区生成失败", javascript)
+        self.assertIn("const visibleGroups = groups.filter((group) => group.items.length)", javascript)
+        self.assertIn('const mapReady = (status === "llm_done" && hasContent) || partialWithContent', javascript)
+
+    def test_selection_toolbar_is_portaled_and_positioned_next_to_pointer(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("document.body.append(selectionToolbar)", javascript)
+        self.assertIn("function positionSelectionToolbar", javascript)
+        self.assertIn("const rightX = pointer.x + gap", javascript)
+        self.assertIn("const leftX = pointer.x - toolbarWidth - gap", javascript)
+        self.assertIn('toolbar.dataset.side = useRight ? "right" : "left"', javascript)
+        self.assertIn('textLayer.style.setProperty("--scale-factor", String(viewport.scale))', javascript)
+
+    def test_mineru_result_opens_in_a_separate_ai_reflow_page(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-reader-mode="structured"', html)
+        self.assertIn('data-reader-mode="reflow"', html)
+        self.assertIn('id="reflow-reader"', html)
+        self.assertIn('indexTab.textContent = "智能索引"', javascript)
+        self.assertIn('reflowTab.textContent = "AI 论文重排"', javascript)
+        self.assertIn('state.readerMode = usesMineruReflow() ? "reflow" : "pdf"', javascript)
+        self.assertIn("function renderReflowSections", javascript)
+        self.assertIn("function cleanMineruMarkdown", javascript)
+        self.assertIn("function renderMineruImage", javascript)
+        self.assertIn('create("header", "reflow-document-header")', javascript)
+        self.assertIn('create("h1", "", paperTitle)', javascript)
+        self.assertNotIn('id="pdf-mode-hint"', html)
+        self.assertNotIn(".pdf-mode-hint", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
+        self.assertIn('/paper_reading/figures/', javascript)
+        self.assertIn(".mineru-figure img", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
+        self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("function isReferenceSection", javascript)
-        self.assertIn("参考文献章节按设计不生成智能索引卡片", javascript)
+        self.assertIn("参考文献属于检索型补充内容，因此不单独生成导读", javascript)
+        self.assertNotIn("解析质量：", javascript)
         self.assertIn(".filter((section) => !isReferenceSection(section))", javascript)
         self.assertIn("if (isReferenceSection(section)) jumpToPdfPage", javascript)
         self.assertIn("if (renderedGuide) body.append(renderedGuide)", javascript)
         self.assertIn("if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null", javascript)
-        self.assertIn("该条目只有目录标题，没有提取到独立正文", javascript)
+        self.assertIn("该条目主要承担章节组织作用，因此未单独生成导读", javascript)
         self.assertNotIn("智能索引正在生成中，完成前不会展示启发式 fallback 或检索片段。", javascript)
 
     def test_paper_note_drawer_loads_and_saves_markdown(self) -> None:
@@ -191,9 +230,30 @@ class PaperReadingFrontendTests(unittest.TestCase):
                 self.assertIn(f'id="{element_id}"', html)
         self.assertIn('action: "upload_paper"', javascript)
         self.assertIn('action: "get_paper_detail"', javascript)
-        self.assertIn('window.location.href = "/app/paper-reading"', javascript)
+        self.assertIn('window.location.href = `/app/paper-reading${query}`', javascript)
         self.assertNotIn('window.location.href = "/paper-reading"', javascript)
         self.assertIn('paperModeInput.addEventListener("drop"', javascript)
+
+    def test_history_selection_toolbar_and_vertical_maps_restore_expected_ui(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        shared = (STATIC / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("restoreReadingConversationHistory", javascript)
+        self.assertIn("function ensureReadingSession", javascript)
+        self.assertIn('action: "create_session"', shared)
+        self.assertIn("sessionId: readingSessionId", shared)
+        self.assertIn("appendReadingWelcome(feed)", javascript)
+        self.assertIn("restorePaperReadingCard(conversation)", shared)
+        self.assertIn('placement: "prepend"', shared)
+        self.assertIn("if (!history.length && !conversation.reading_session_id) return", shared)
+        self.assertNotIn("if (!Array.isArray(conversation.messages) || !conversation.messages.length) return", shared)
+        self.assertIn("event?.clientX", javascript)
+        self.assertIn('closest(".reader-panel")', javascript)
+        self.assertIn("grid-auto-flow: row", styles)
+        self.assertIn("height: clamp(620px,72vh,900px)", styles)
+        self.assertIn("cleanRepeatedMarkdown", javascript)
+        self.assertNotIn("原文页码：", javascript)
 
     def test_uploaded_pdf_is_served_inline_for_embedded_reader(self) -> None:
         with TemporaryDirectory() as directory:
@@ -220,6 +280,16 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertEqual(response.media_type, "image/png")
         self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+
+    def test_mineru_jpeg_is_served_with_its_actual_media_type(self) -> None:
+        with TemporaryDirectory() as directory:
+            storage = PaperReadingStorage(Path(directory))
+            storage.save_figure("paper-1", "mineru-image.jpg", b"jpeg")
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper_storage=storage)))
+
+            response = paper_reading_figure("paper-1", "mineru-image.jpg", request)
+
+        self.assertEqual(response.media_type, "image/jpeg")
 
     def test_agent_answers_use_markdown_renderer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -257,8 +327,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function typesetResponseMath", javascript)
         self.assertIn("window.katex.render", javascript)
         self.assertIn('closest("code,pre,script,style,textarea,.katex")', javascript)
-        self.assertIn('id="copilot-narrow-button"', html)
-        self.assertIn('id="copilot-wide-button"', html)
+        self.assertNotIn('id="copilot-narrow-button"', html)
+        self.assertNotIn('id="copilot-wide-button"', html)
+        self.assertIn('id="copilot-resize-handle"', html)
+        self.assertIn('id="navigator-resize-handle"', html)
         self.assertIn("function setCopilotWidth", javascript)
         self.assertIn(".response-math-block", styles)
 

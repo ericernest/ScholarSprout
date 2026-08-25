@@ -7,6 +7,7 @@ const STORAGE = {
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
   copilotWidth: "paper_reading_copilot_width",
+  navigatorWidth: "paper_reading_navigator_width",
   noteHeight: "paper_reading_note_height_ratio",
   pdfMarks: "paper_reading_pdf_marks",
 };
@@ -37,12 +38,13 @@ const state = {
   sessionState: "", restored: false, busy: false,
   readingMapExpanded: false,
   forks: [], activeFeedId: "main",
-  readerMode: "pdf", pdfDoc: null, pdfDocUrl: "", pdfRenderedKey: "", pdfjsLoading: null,
+  readerMode: "pdf", readerModeChosen: false, pdfDoc: null, pdfDocUrl: "", pdfRenderedKey: "", pdfjsLoading: null,
   pdfZoom: null, pdfMarks: [], pdfMarkColor: "yellow", pdfMarkHistory: [],
   pendingPdfPage: null, pdfRenderGeneration: 0, pdfRenderingKey: "",
   pendingPdfNoteMark: null, editingPdfNoteId: "",
   activeResponseController: null,
   paperNoteLoadedFor: "", paperNoteDirty: false, paperNoteSaveTimer: null, paperNoteMode: "normal", paperNoteEditor: null,
+  historyLoadedFor: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -56,6 +58,7 @@ const create = (tag, className = "", text = "") => {
 boot();
 
 function boot() {
+  syncReturnChatLink();
   setupPdfFirstReaderDom();
   if (isDedicatedWorkspace) {
     $("paper-intake").hidden = true;
@@ -109,7 +112,7 @@ function bindIntake() {
 function bindWorkbench() {
   $("regenerate-button").addEventListener("click", analyzeCurrentSection);
   $("regenerate-reading-map-button")?.addEventListener("click", regenerateReadingMap);
-  $("research-overview-button")?.addEventListener("click", () => toggleReadingMapPanel());
+  $("reparse-paper-button")?.addEventListener("click", reparsePaper);
   $("reading-map-toggle-button")?.addEventListener("click", () => toggleReadingMapPanel());
   syncReadingMapPanelState();
   $("fullscreen-button").addEventListener("click", toggleFullscreen);
@@ -141,7 +144,7 @@ function bindWorkbench() {
 
 function bindReader() {
   document.querySelectorAll("[data-reader-mode]").forEach((button) => {
-    button.addEventListener("click", () => setReaderMode(button.dataset.readerMode));
+    button.addEventListener("click", () => setReaderMode(button.dataset.readerMode, { userInitiated: true }));
   });
   $("analyze-section-button").addEventListener("click", analyzeCurrentSection);
   $("fork-explore-button").addEventListener("click", () => openFork(""));
@@ -154,6 +157,7 @@ function bindReader() {
     renderPdf(true, { preserveViewport: true });
   });
   $("structured-reader").addEventListener("mouseup", captureSelection);
+  $("reflow-reader").addEventListener("mouseup", captureSelection);
   $("pdf-reader").addEventListener("mouseup", captureSelection);
   bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
@@ -161,7 +165,7 @@ function bindReader() {
   $("note-close-button").addEventListener("click", closePdfNoteModal);
   document.querySelectorAll("[data-note-close]").forEach((element) => element.addEventListener("click", closePdfNoteModal));
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#pdf-reader")) {
+    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#reflow-reader") && !event.target.closest("#pdf-reader")) {
       $("selection-toolbar").hidden = true;
     }
   });
@@ -170,18 +174,16 @@ function bindReader() {
 function setupPdfFirstReaderDom() {
   const pdfTab = document.querySelector('[data-reader-mode="pdf"]');
   const indexTab = document.querySelector('[data-reader-mode="structured"]');
+  const reflowTab = document.querySelector('[data-reader-mode="reflow"]');
   if (pdfTab) {
     pdfTab.textContent = "PDF 原文";
-    pdfTab.classList.add("is-active");
   }
   if (indexTab) {
     indexTab.textContent = "智能索引";
-    indexTab.classList.remove("is-active");
   }
-  const hint = $("pdf-mode-hint");
-  if (hint) {
-    hint.textContent = "PDF 原文支持直接划选并让右侧 Agent 分析；智能索引只提供章节锚点和摘要，不再作为版面还原视图。";
-    hint.hidden = false;
+  if (reflowTab) {
+    reflowTab.textContent = "AI 论文重排";
+    reflowTab.hidden = !usesMineruReflow();
   }
   const reader = $("pdf-reader");
   if (reader && !$("pdf-document")) {
@@ -198,17 +200,26 @@ function setupPdfFirstReaderDom() {
     if (empty) reader.append(empty);
   }
   ensureSelectionPdfActions();
-  $("structured-reader").hidden = true;
-  $("pdf-reader").hidden = false;
+  const selectionToolbar = $("selection-toolbar");
+  if (selectionToolbar && selectionToolbar.parentElement !== document.body) document.body.append(selectionToolbar);
+  const isPdf = state.readerMode === "pdf";
+  const isReflow = state.readerMode === "reflow" && usesMineruReflow();
+  $("structured-reader").hidden = isPdf || isReflow;
+  $("reflow-reader").hidden = !isReflow;
+  $("pdf-reader").hidden = !isPdf;
+  document.querySelectorAll("[data-reader-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.readerMode === state.readerMode);
+  });
+}
+
+function usesMineruReflow() {
+  return state.sectionExtractionSource === "mineru_markdown"
+    || state.paper?.section_extraction_source === "mineru_markdown";
 }
 
 function createPdfToolbar() {
   const toolbar = create("div", "pdf-toolbar");
   toolbar.id = "pdf-toolbar";
-  const zoomOut = create("button", "pdf-tool-button", "−");
-  zoomOut.type = "button";
-  zoomOut.title = "缩小";
-  zoomOut.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) - 10));
   const zoomInput = create("input", "pdf-zoom-input");
   zoomInput.id = "pdf-zoom-input";
   zoomInput.type = "number";
@@ -219,10 +230,6 @@ function createPdfToolbar() {
   zoomInput.title = "自由缩放百分比";
   zoomInput.addEventListener("change", () => setPdfZoom(Number(zoomInput.value || 100)));
   const zoomUnit = create("span", "pdf-tool-label", "%");
-  const zoomIn = create("button", "pdf-tool-button", "+");
-  zoomIn.type = "button";
-  zoomIn.title = "放大";
-  zoomIn.addEventListener("click", () => setPdfZoom((state.pdfZoom || currentZoomValue()) + 10));
   const fitWidth = create("button", "pdf-tool-button", "适宽");
   fitWidth.type = "button";
   fitWidth.title = "适应宽度";
@@ -242,7 +249,7 @@ function createPdfToolbar() {
   undo.type = "button";
   undo.title = "撤销最近一次高亮或注释";
   undo.addEventListener("click", undoLastPdfMark);
-  toolbar.append(zoomOut, zoomInput, zoomUnit, zoomIn, fitWidth, fitPage, save, divider, colorLabel, colors, undo);
+  toolbar.append(zoomInput, zoomUnit, fitWidth, fitPage, save, divider, colorLabel, colors, undo);
   return toolbar;
 }
 
@@ -291,8 +298,8 @@ function bindResizeHandle() {
   const grid = $("workbench-grid");
   const saved = Number(localStorage.getItem(STORAGE.copilotWidth));
   if (saved >= 300) setCopilotWidth(saved, false);
-  $("copilot-narrow-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width - 80));
-  $("copilot-wide-button").addEventListener("click", () => setCopilotWidth($("copilot-panel").getBoundingClientRect().width + 80));
+  const savedNavigator = Number(localStorage.getItem(STORAGE.navigatorWidth));
+  if (savedNavigator >= 190) setNavigatorWidth(savedNavigator, false);
 
   let dragging = false;
   let startX = 0;
@@ -321,6 +328,32 @@ function bindResizeHandle() {
     document.body.style.userSelect = "";
     const width = $("copilot-panel").getBoundingClientRect().width;
     localStorage.setItem(STORAGE.copilotWidth, String(Math.round(width)));
+  });
+
+  const navigatorHandle = $("navigator-resize-handle");
+  let navigatorDragging = false;
+  let navigatorStartX = 0;
+  let navigatorStartWidth = 0;
+  navigatorHandle.addEventListener("mousedown", (event) => {
+    navigatorDragging = true;
+    navigatorStartX = event.clientX;
+    navigatorStartWidth = document.querySelector(".navigator-panel").getBoundingClientRect().width;
+    navigatorHandle.classList.add("is-active");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  });
+  document.addEventListener("mousemove", (event) => {
+    if (navigatorDragging) setNavigatorWidth(navigatorStartWidth + event.clientX - navigatorStartX, false);
+  });
+  document.addEventListener("mouseup", () => {
+    if (!navigatorDragging) return;
+    navigatorDragging = false;
+    navigatorHandle.classList.remove("is-active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    const width = document.querySelector(".navigator-panel").getBoundingClientRect().width;
+    localStorage.setItem(STORAGE.navigatorWidth, String(Math.round(width)));
   });
 }
 
@@ -459,6 +492,8 @@ async function acceptUploadedPaper(payload, sourceLabel) {
   localStorage.removeItem(STORAGE.scroll);
   state.paperId = data.paper_id || "";
   state.sessionId = "";
+  state.readerMode = "pdf";
+  state.readerModeChosen = false;
   state.currentSection = data.sections?.[0]?.section_id || "";
   state.parseStatus = data.parse_status || "";
   state.sectionExtractionSource = data.section_extraction_source || "";
@@ -509,6 +544,10 @@ async function loadPaperDetail() {
   state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
+  if (!state.readerModeChosen) {
+    state.readerMode = usesMineruReflow() ? "reflow" : "pdf";
+  }
+  setupPdfFirstReaderDom();
   await loadPdfMarks();
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
   persistState();
@@ -575,6 +614,7 @@ function startParsePolling() {
         renderPaperMetadata();
         renderOutline();
         renderSections();
+        renderReflowSections();
         renderProgress();
         renderReadingMap();
         if (!state.currentSection) {
@@ -613,6 +653,7 @@ function renderReadyCard(sourceLabel = "已保存论文") {
 
 async function enterWorkbench() {
   if (!state.paper) return;
+  if (!await ensureReadingSession()) return;
   if (!$("paper-intake").hidden) {
     $("paper-ready-card").classList.add("is-entering");
     await delay(320);
@@ -629,6 +670,54 @@ async function enterWorkbench() {
   $("paper-boot").hidden = true;
   document.body.classList.remove("is-booting");
   window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+async function reparsePaper() {
+  if (!state.paperId) {
+    toast("请先上传或打开一篇论文。", true);
+    return;
+  }
+  const button = $("reparse-paper-button");
+  if (button) button.disabled = true;
+  try {
+    const { payload } = await callPaperReading({
+      action: "reparse_paper",
+      paper_id: state.paperId,
+      session_id: state.sessionId || "",
+    });
+    const data = payload.data || {};
+    state.parseStatus = data.parse_status || "parsing";
+    if (state.paper) state.paper.parse_status = state.parseStatus;
+    toast(data.message || "已重新提交论文解析。");
+    renderPaperMetadata();
+    renderOutlineSourceWarning();
+    startParsePolling();
+  } catch (error) {
+    toast(error.message || "重新解析论文失败。", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function ensureReadingSession() {
+  if (state.sessionId) return true;
+  if (!state.paperId) return false;
+  try {
+    const { payload } = await callPaperReading({
+      action: "create_session",
+      session_id: "",
+      paper_id: state.paperId,
+    });
+    state.sessionId = payload.data?.session_id || payload.session?.session_id || "";
+    state.sessionState = payload.session?.state || state.sessionState;
+    state.progress = payload.progress || state.progress;
+    if (!state.sessionId) throw new Error("创建阅读会话后未返回 session_id。");
+    persistState();
+    return true;
+  } catch (error) {
+    toast(`无法创建阅读会话：${error.message}`, true);
+    return false;
+  }
 }
 
 function bindPaperNote() {
@@ -863,6 +952,7 @@ function renderPaperWorkspace() {
   [...(paper.categories || []).slice(0, 3), paper.venue].filter(Boolean).forEach((tag) => tags.append(create("span", "", tag)));
   renderOutline();
   renderSections();
+  renderReflowSections();
   renderProgress();
   syncSkillControls();
   setReaderMode(state.readerMode || "pdf");
@@ -879,7 +969,12 @@ function renderPaperMetadata() {
   if (parsing) meta.push("正在解析论文信息");
   else {
     if (paper.year) meta.push(String(paper.year));
-    if (sections.length) meta.push(`${sections.length} sections`);
+    if (sections.length) meta.push(`${sections.length} 个章节`);
+  }
+  const reparseButton = $("reparse-paper-button");
+  if (reparseButton) {
+    reparseButton.disabled = parsing || !state.paperId;
+    reparseButton.textContent = parsing ? "正在解析…" : "重新解析论文";
   }
   $("paper-ribbon-title").textContent = paper.title || "论文已上传";
   $("paper-ribbon-meta").textContent = meta.join(" · ");
@@ -909,7 +1004,7 @@ function renderOutline() {
     button.type = "button";
     button.style.paddingLeft = `${Math.min(Math.max(section.level || 1, 1), 4) * 0.45}rem`;
     const icon = create("span", "outline-state", label);
-    button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "Untitled section"));
+    button.append(icon, create("span", "outline-title", outlineTitle(section, label) || section.title || "未命名章节"));
     button.addEventListener("click", () => {
       if (isReferenceSection(section)) jumpToPdfPage(section.start_page || 1, section.section_id);
       else selectSection(section.section_id, false);
@@ -994,11 +1089,6 @@ function syncReadingMapPanelState() {
   const expanded = Boolean(state.readingMapExpanded);
   const label = isSurvey ? "综述地图" : "研究总览";
   panel.classList.toggle("is-collapsed", !expanded);
-  const ribbonButton = $("research-overview-button");
-  if (ribbonButton) {
-    ribbonButton.textContent = expanded ? `收起${label}` : `展开${label}`;
-    ribbonButton.setAttribute("aria-expanded", String(expanded));
-  }
   const panelButton = $("reading-map-toggle-button");
   if (panelButton) {
     panelButton.textContent = expanded ? "收起" : "展开";
@@ -1007,11 +1097,15 @@ function syncReadingMapPanelState() {
 }
 
 function isReadingMapReady() {
-  return readingMapGenerationStatus() === "llm_done";
+  const map = state.readingMap || state.paper?.reading_map || {};
+  const status = readingMapGenerationStatus();
+  return status === "llm_done" || (status === "failed_partial" && hasPartialReadingMapContent(map));
 }
 
 function isReadingMapFailed() {
-  return ["failed", "failed_partial"].includes(readingMapGenerationStatus());
+  const status = readingMapGenerationStatus();
+  const map = state.readingMap || state.paper?.reading_map || {};
+  return status === "failed" || (status === "failed_partial" && !hasPartialReadingMapContent(map));
 }
 
 function hasPartialReadingMapContent(map = state.readingMap || state.paper?.reading_map || {}) {
@@ -1085,8 +1179,7 @@ function renderSections() {
     article.id = domSectionId(section.section_id);
     article.dataset.sectionId = section.section_id;
     const meta = create("div", "section-meta");
-    meta.append(create("span", "", `Section ${String(index + 1).padStart(2, "0")}`));
-    if (section.start_page) meta.append(create("span", "", `Page ${section.start_page}`));
+    meta.append(create("span", "", `章节 ${String(index + 1).padStart(2, "0")}`));
     article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
 
     const body = create("div", "paper-section-body");
@@ -1095,7 +1188,7 @@ function renderSections() {
     const renderedGuide = renderSectionGuide(guide, indexed);
     if (renderedGuide) body.append(renderedGuide);
     const actions = create("div", "index-section-actions");
-    const jump = create("button", "figure-source-button", `跳转 PDF 第 ${section.start_page || 1} 页`);
+    const jump = create("button", "figure-source-button", section.start_page ? `跳转 PDF 第 ${section.start_page} 页` : "查看 PDF 原文");
     jump.type = "button";
     jump.addEventListener("click", () => jumpToPdfPage(section.start_page || 1, section.section_id));
     const analyze = create("button", "figure-source-button", "分析本节");
@@ -1113,61 +1206,140 @@ function renderSections() {
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
 
-function sectionSummaryTextLegacy(section, indexed = {}, guide = null) {
-  const pages = section.start_page
-    ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
-    : "";
-  const chunks = indexed.text_chunks || [];
-  const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
-  if (guide) return `${pages}${quality}下方是面向科研新手的章节导读。`;
-  if (!chunks.length) return `${pages}${quality}此处是 Agent 索引锚点，请以 PDF 原文为准。`;
-  return `${pages}${quality}下方仅展示供 Agent 检索的章节摘要片段，不作为论文版面还原。`;
-}
-
-function sectionGuideLegacy(sectionId) {
-  const guides = state.readingMap?.section_guides || state.paper?.reading_map?.section_guides || [];
-  return guides.find((item) => item.section_id === sectionId) || null;
-}
-
-function renderSectionGuideLegacy(guide, indexed = {}) {
-  const wrap = create("div", "section-guide");
-  if (guide) {
-    const cards = Array.isArray(guide.cards) && guide.cards.length ? guide.cards : legacyGuideCards(guide);
-    cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
-    return wrap;
+function renderReflowSections() {
+  const reader = $("reflow-reader");
+  reader.replaceChildren();
+  if (!usesMineruReflow()) {
+    reader.append(create("div", "empty-state", "当前论文没有可用的 MinerU AI 重排结果。"));
+    return;
   }
-
-  const chunks = (indexed.text_chunks || []).slice(0, 3);
-  if (!chunks.length) {
-    wrap.append(create("p", "index-chunk", "章节导读正在生成中。你可以先在 PDF 原文中阅读、划选并提问。"));
-    return wrap;
+  const sections = (state.paper?.sections || []).filter((section) => !isReferenceSection(section));
+  const contentSections = sections.filter((section) => strHasContent(section.content));
+  if (!contentSections.length) {
+    reader.append(create("div", "empty-state", "MinerU 已返回章节索引，但没有可展示的重排正文。"));
+    return;
   }
-  chunks.forEach((chunk) => {
-    wrap.append(create("p", "index-chunk", truncate(chunk.text || "", 260)));
+  const paperTitle = String(state.paper?.title || "").trim();
+  if (paperTitle) {
+    const header = create("header", "reflow-document-header");
+    header.append(create("p", "panel-label", "AI 论文重排"), create("h1", "", paperTitle));
+    reader.append(header);
+  }
+  contentSections.forEach((section, index) => {
+    const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
+    const article = create("section", `paper-section ai-reflow-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
+    article.dataset.sectionId = section.section_id;
+    const meta = create("div", "section-meta");
+    meta.append(create("span", "", `AI 重排 ${String(index + 1).padStart(2, "0")}`));
+    article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
+    const body = create("div", "paper-section-body ai-reflow-content");
+    body.append(renderMineruMarkdown(section.content));
+    article.append(body);
+    reader.append(article);
   });
-  return wrap;
+  restoreReaderPosition(reader);
+}
+
+function renderMineruMarkdown(source) {
+  const root = create("div", "mineru-markdown");
+  const cleaned = cleanMineruMarkdown(source);
+  const segments = cleaned
+    .split(/(<table\b[\s\S]*?<\/table>|!\[[^\]]*\]\([^)]+\))/giu)
+    .filter(Boolean);
+  segments.forEach((segment) => {
+    const trimmed = segment.trim();
+    if (/^<table\b/iu.test(trimmed)) {
+      const table = renderSafeHtmlTable(segment);
+      if (table) root.append(table);
+      return;
+    }
+    if (/^!\[[^\]]*\]\([^)]+\)$/u.test(trimmed)) {
+      const image = renderMineruImage(trimmed);
+      if (image) root.append(image);
+      return;
+    }
+    const rendered = renderMarkdown(segment);
+    if (rendered.textContent?.trim() || rendered.querySelector("img,table")) root.append(rendered);
+  });
+  return root;
+}
+
+function renderMineruImage(source) {
+  const match = source.match(/^!\[([^\]]*)\]\(([^)]+)\)$/u);
+  if (!match) return null;
+  let url;
+  try {
+    url = new URL(match[2], window.location.origin);
+  } catch (_) {
+    return null;
+  }
+  if (url.origin !== window.location.origin || !url.pathname.startsWith("/paper_reading/figures/")) {
+    return null;
+  }
+  const figure = create("figure", "mineru-figure");
+  const image = create("img");
+  image.src = `${url.pathname}${url.search}`;
+  image.alt = match[1].trim() || "论文图表";
+  image.loading = "lazy";
+  image.decoding = "async";
+  figure.append(image);
+  if (match[1].trim()) figure.append(create("figcaption", "", match[1].trim()));
+  return figure;
+}
+
+function cleanMineruMarkdown(source) {
+  return String(source || "")
+    .replace(/<details>\s*<summary>line<\/summary>[\s\S]*?<\/details>/giu, "")
+    .replace(/!\[[^\]]*\]\(images\/[^)]+\)/giu, "\n\n> 该图的图片资源未随 MinerU Markdown 返回，请切换到 PDF 原文查看。\n\n")
+    .replace(/^Received\s+month\s+dd,\s*yyyy;.*$/gimu, "")
+    .replace(/^E-?mail\s*:.*$/gimu, "")
+    .replace(/^\\?\*?Both authors contribute equally to this paper\.?$/gimu, "")
+    .replace(/\b([A-Za-z]{2,4})-[ \t]*\n+[ \t]*([a-z]{2,})(?![-A-Za-z])/gu, "$1$2")
+    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(?=[a-z])/gu, "$1-")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
+function renderSafeHtmlTable(source) {
+  const parsed = new DOMParser().parseFromString(source, "text/html");
+  const original = parsed.querySelector("table");
+  if (!original) return null;
+  const wrapper = create("div", "markdown-table-wrap mineru-table-wrap");
+  const table = create("table", "mineru-table");
+  original.querySelectorAll("tr").forEach((row) => {
+    const safeRow = document.createElement("tr");
+    row.querySelectorAll(":scope > th, :scope > td").forEach((cell) => {
+      const safeCell = document.createElement(cell.tagName.toLowerCase() === "th" ? "th" : "td");
+      safeCell.textContent = cell.textContent?.trim() || "";
+      ["rowspan", "colspan"].forEach((attribute) => {
+        const value = Number(cell.getAttribute(attribute) || 0);
+        if (value > 1 && value <= 50) safeCell.setAttribute(attribute, String(value));
+      });
+      safeRow.append(safeCell);
+    });
+    if (safeRow.childElementCount) table.append(safeRow);
+  });
+  if (!table.childElementCount) return null;
+  wrapper.append(table);
+  return wrapper;
 }
 
 function sectionSummaryText(section, indexed = {}, guide = null) {
-  const pages = section.start_page
-    ? `原文页码：${section.start_page}${section.end_page && section.end_page !== section.start_page ? `-${section.end_page}` : ""}。`
-    : "";
-  const quality = state.parseQuality ? `解析质量：${state.parseQuality}。` : "";
   if (isReferenceSection(section)) {
-    return `${pages}${quality}参考文献章节按设计不生成智能索引卡片，请直接查看 PDF 原文。`;
+    return "参考文献属于检索型补充内容，因此不单独生成导读，请直接查看 PDF 原文。";
   }
   if (!isReadingMapDisplayable()) {
     return isReadingMapFailed()
-      ? `${pages}${quality}智能索引生成失败，请点击“重新生成”。`
+      ? "智能索引生成失败，请点击“重新生成”。"
       : isReadingMapTimedOut()
-        ? `${pages}${quality}智能索引生成已超时，可以点击“重新生成”。`
-      : `${pages}${quality}智能索引正在生成中，完成前不展示临时 fallback 内容。`;
+        ? "智能索引生成已超时，可以点击“重新生成”。"
+      : "智能索引正在生成中，完成前不展示临时 fallback 内容。";
   }
   return guide
-    ? `${pages}${quality}下方是面向科研新手的章节导读。`
+    ? "下方是面向科研新手的章节导读。"
     : strHasContent(section.content)
-      ? `${pages}${quality}该小节暂无独立导读，可查看 PDF 原文或直接分析本节。`
-      : `${pages}${quality}该条目暂无独立正文，可查看子章节、PDF 原文或直接分析本节。`;
+      ? "系统根据该小节与论文主线的关联度，将其归为补充阅读，因此未单独生成导读，可查看 PDF 原文或直接分析本节。"
+      : "该条目主要承担章节组织作用，因此未单独生成导读，可查看子章节、PDF 原文或直接分析本节。";
 }
 
 function sectionGuide(sectionId) {
@@ -1495,7 +1667,7 @@ function escapeRegExp(value) {
 function restoreReaderPosition(reader) {
   requestAnimationFrame(() => {
     if (!state.restored) return;
-    if (state.currentSection && document.getElementById(domSectionId(state.currentSection))) {
+    if (state.currentSection && reader.querySelector(`[data-section-id="${cssEscape(state.currentSection)}"]`)) {
       scrollReaderToSection(state.currentSection, false);
     } else {
       const savedScroll = Number(localStorage.getItem(STORAGE.scroll) || 0);
@@ -1750,14 +1922,18 @@ function syncPdfToSection(sectionId) {
   }
 }
 
-function setReaderMode(mode) {
-  const isPdf = mode === "pdf";
-  state.readerMode = isPdf ? "pdf" : "structured";
-  $("structured-reader").hidden = isPdf;
+function setReaderMode(mode, options = {}) {
+  const requestedMode = mode === "reflow" ? (usesMineruReflow() ? "reflow" : "structured") : mode;
+  const normalizedMode = ["pdf", "structured", "reflow"].includes(requestedMode) ? requestedMode : "structured";
+  const isPdf = normalizedMode === "pdf";
+  const isReflow = normalizedMode === "reflow";
+  if (options.userInitiated) state.readerModeChosen = true;
+  state.readerMode = normalizedMode;
+  $("structured-reader").hidden = isPdf || isReflow;
+  $("reflow-reader").hidden = !isReflow;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
-  $("pdf-mode-hint").hidden = false;
-  document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === mode));
+  document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === normalizedMode));
   if (isPdf) {
     renderPdf();
     syncPdfToSection(state.currentSection);
@@ -1817,6 +1993,7 @@ async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, app
   const textLayer = create("div", "textLayer");
   textLayer.style.width = `${viewport.width}px`;
   textLayer.style.height = `${viewport.height}px`;
+  textLayer.style.setProperty("--scale-factor", String(viewport.scale));
   const markLayer = create("div", "pdf-mark-layer");
   pageShell.append(canvas, textLayer, markLayer);
   await page.render({
@@ -1885,7 +2062,7 @@ async function selectSection(sectionId, analyze) {
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
-  if (state.readerMode === "pdf" || $("structured-reader").hidden) syncPdfToSection(sectionId);
+  if (state.readerMode === "pdf") syncPdfToSection(sectionId);
   else scrollReaderToSection(sectionId);
   syncComposerContext();
   if (analyze) await startReading(
@@ -2079,6 +2256,38 @@ function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   card.append(header, renderAgentResponse(text));
   target.append(card);
   target.scrollTop = target.scrollHeight;
+}
+
+function appendReadingWelcome(target = $("analysis-feed")) {
+  const card = create("article", "welcome-card");
+  card.append(create("span", "assistant-avatar", "N"));
+  const body = create("div");
+  body.append(create("strong", "", "继续当前论文精读"));
+  body.append(create("p", "", "下面已恢复本次精读的提问与分析记录；你可以继续针对当前章节提问。"));
+  card.append(body);
+  target.append(card);
+}
+
+async function restoreReadingConversationHistory() {
+  if (!state.sessionId || state.historyLoadedFor === state.sessionId) return;
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(state.sessionId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const conversation = await response.json();
+    const history = (conversation.messages || []).filter((message) => ["user", "assistant"].includes(message.role));
+    const feed = $("analysis-feed");
+    if (!feed) return;
+    feed.replaceChildren();
+    appendReadingWelcome(feed);
+    history.forEach((message) => {
+      if (message.role === "user") appendUserQuestion(message.content, feed);
+      else appendAnalysis(message.content, { restored: true }, feed);
+    });
+    feed.scrollTop = 0;
+    state.historyLoadedFor = state.sessionId;
+  } catch {
+    // Keep the built-in welcome card when persisted history is temporarily unavailable.
+  }
 }
 
 function renderSkillOutputs(outputs, target) {
@@ -2327,6 +2536,7 @@ function structuredValueText(value) {
 }
 
 function renderMarkdown(source) {
+  source = cleanRepeatedMarkdown(source);
   let content;
   if (typeof window.renderSafeMarkdown === "function") {
     content = window.renderSafeMarkdown(source, "markdown-content");
@@ -2335,6 +2545,22 @@ function renderMarkdown(source) {
   }
   typesetResponseMath(content);
   return content;
+}
+
+function cleanRepeatedMarkdown(source) {
+  const output = [];
+  let previousText = "";
+  String(source || "").split("\n").forEach((rawLine) => {
+    let line = rawLine;
+    const dotted = line.split(/\s*·\s*/u).filter(Boolean);
+    const wasFragmented = dotted.length > 3 && dotted.every((item) => [...item.trim()].length <= 2);
+    if (wasFragmented) line = dotted.join("");
+    const comparable = comparableMapText(line);
+    if (comparable && (comparable === previousText || (wasFragmented && previousText.includes(comparable)))) return;
+    output.push(line);
+    if (comparable) previousText = comparable;
+  });
+  return output.join("\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 function typesetResponseMath(root) {
@@ -2589,7 +2815,7 @@ function updateSessionBadge() {
   $("session-state-badge").textContent = labels[state.sessionState] || (state.sessionId ? "已创建" : "未开始");
 }
 
-function captureSelection() {
+function captureSelection(event) {
   const selection = window.getSelection();
   const text = selection?.toString().trim();
   if (!text || text.length < 2) {
@@ -2612,12 +2838,33 @@ function captureSelection() {
   else if (state.selectedPage) state.currentSection = sectionForPage(state.selectedPage)?.section_id || state.currentSection;
   renderOutline();
   syncComposerContext();
-  const rect = selection.getRangeAt(0).getBoundingClientRect();
   const toolbar = $("selection-toolbar");
   toolbar.hidden = false;
-  const toolbarWidth = toolbar.offsetWidth || 430;
-  toolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, rect.left))}px`;
-  toolbar.style.top = `${Math.max(72, rect.top - toolbar.offsetHeight - 10)}px`;
+  const readerBounds = (pdfPage || structured)?.closest(".reader-panel")?.getBoundingClientRect();
+  const rangeRect = selection.getRangeAt(0).getBoundingClientRect();
+  const pointer = {
+    x: Number.isFinite(event?.clientX) && event.clientX > 0 ? event.clientX : rangeRect.right,
+    y: Number.isFinite(event?.clientY) && event.clientY > 0 ? event.clientY : rangeRect.bottom,
+  };
+  requestAnimationFrame(() => positionSelectionToolbar(toolbar, pointer, readerBounds));
+}
+
+function positionSelectionToolbar(toolbar, pointer, readerBounds) {
+  const gap = 6;
+  const minX = Math.max(8, (readerBounds?.left ?? 0) + 6);
+  const maxX = Math.min(window.innerWidth - 8, (readerBounds?.right ?? window.innerWidth) - 6);
+  const availableWidth = Math.max(0, maxX - minX);
+  toolbar.style.maxWidth = `${availableWidth}px`;
+  const toolbarRect = toolbar.getBoundingClientRect();
+  const toolbarWidth = Math.min(toolbarRect.width || toolbar.offsetWidth || 1, availableWidth);
+  const toolbarHeight = toolbarRect.height || toolbar.offsetHeight || 1;
+  const rightX = pointer.x + gap;
+  const leftX = pointer.x - toolbarWidth - gap;
+  const useRight = rightX + toolbarWidth <= maxX;
+  const preferredX = useRight ? rightX : leftX;
+  toolbar.style.left = `${Math.max(minX, Math.min(maxX - toolbarWidth, preferredX))}px`;
+  toolbar.style.top = `${Math.max(8, Math.min(window.innerHeight - toolbarHeight - 8, pointer.y - toolbarHeight / 2))}px`;
+  toolbar.dataset.side = useRight ? "right" : "left";
 }
 
 async function handleSelectionAction(event) {
@@ -3135,9 +3382,9 @@ function renderReadingMapLegacy() {
   grid.replaceChildren();
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", "Reading Map"),
+      create("p", "panel-label", "导读地图"),
       create("h3", "", "论文阅读地图"),
-      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧 Agent 解释这一段。")
+      create("p", "muted-copy", map.map_variant === "survey" ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "点击卡片可以跳转原文，或让右侧智能体解释这一段。")
     );
   }
 
@@ -3158,7 +3405,7 @@ function renderReadingMapLegacy() {
   const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent || !mapReady;
   if (!hasContent) {
-    grid.append(create("div", "reading-map-pending", status === "failed" ? "解析失败，暂时无法生成阅读地图。" : "正在解析 PDF。你可以先阅读原文、划选内容并让 Agent 分析。"));
+    grid.append(create("div", "reading-map-pending", status === "failed" ? "解析失败，暂时无法生成阅读地图。" : "正在解析 PDF。你可以先阅读原文、划选内容并让智能体分析。"));
     return;
   }
 
@@ -3184,21 +3431,30 @@ function renderReadingMap() {
   const isSurvey = map.map_variant === "survey";
   const taskLabel = isSurvey ? "综述导读地图与智能索引" : "研究总览与智能索引";
   if (!grid) return;
+  grid.classList.toggle("is-survey-vertical", isSurvey);
   grid.replaceChildren();
-  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "Survey reading map" : "Research overview";
+  if ($("reading-map-kicker")) $("reading-map-kicker").textContent = isSurvey ? "综述导读" : "研究总览";
   if ($("reading-map-title")) $("reading-map-title").textContent = isSurvey ? "综述导读地图" : "研究总览";
   syncReadingMapPanelState();
   if (detail) {
     detail.replaceChildren(
-      create("p", "panel-label", isSurvey ? "Survey guide" : "Research overview"),
+      create("p", "panel-label", isSurvey ? "综述导读" : "研究总览"),
       create("h3", "", isSurvey ? "综述导读地图" : "研究总览"),
-      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧 Agent 解释。")
+      create("p", "muted-copy", isSurvey ? "综述论文会按发展脉络、技术路线、数据集和开放问题展开。" : "这里汇总研究问题、核心方法、方法步骤、实验支撑与局限追问；点击卡片可跳转原文或让右侧智能体解释。")
     );
   }
 
   const status = state.readingMapStatus === "llm_running" ? "llm_running" : (map.status || state.parseStatus || "pending");
-  const mapReady = status === "llm_done";
-  const mapFailed = ["failed", "failed_partial"].includes(status);
+  const groups = (isSurvey ? surveyReadingMapGroups(map) : researchReadingMapGroups(map))
+    .map((group) => ({
+      ...group,
+      items: (group.items || []).filter((item) => isRenderableReadingMapItem(item, group.key)),
+    }));
+  const visibleGroups = groups.filter((group) => group.items.length);
+  const hasContent = visibleGroups.length > 0;
+  const partialWithContent = status === "failed_partial" && hasPartialReadingMapContent(map) && hasContent;
+  const mapReady = (status === "llm_done" && hasContent) || partialWithContent;
+  const mapFailed = status === "failed" || (["llm_done", "failed_partial"].includes(status) && !mapReady);
   const mapDisplayable = mapReady || hasPartialReadingMapContent(map);
   const regenerating = status === "llm_running" || ["queued", "pending", "parsing"].includes(status);
   const timedOut = isReadingMapTimedOut();
@@ -3206,7 +3462,7 @@ function renderReadingMap() {
   if (regenerateButton) regenerateButton.disabled = (regenerating && !timedOut) || !state.paperId;
   const failureText = readingMapFailureText(map);
   $("reading-map-status-copy").textContent = mapReady
-    ? (map.partial && map.generation_warning ? `${taskLabel}已生成；${map.generation_warning}` : `${taskLabel}已生成`)
+    ? `${taskLabel}已生成`
     : mapFailed
       ? `${taskLabel}生成失败：${failureText}`
       : timedOut
@@ -3231,8 +3487,6 @@ function renderReadingMap() {
     return;
   }
 
-  const groups = isSurvey ? surveyReadingMapGroups(map) : researchReadingMapGroups(map);
-  const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent;
   if (!mapReady) {
     grid.append(create(
@@ -3248,14 +3502,10 @@ function renderReadingMap() {
     return;
   }
 
-  groups.forEach((group, groupIndex) => {
+  visibleGroups.forEach((group, groupIndex) => {
     const column = create("section", "reading-map-column");
     column.append(create("h3", "", group.title));
-    const items = group.items.filter((item) => item && Object.keys(item).length);
-    if (!items.length) {
-      column.append(create("p", "muted-copy", "暂无明确内容"));
-    }
-    items.slice(0, 5).forEach((item, index) => {
+    group.items.slice(0, 5).forEach((item, index) => {
       column.append(renderReadingMapCard(item, group.key, groupIndex, index));
     });
     grid.append(column);
@@ -3294,22 +3544,36 @@ function surveyReadingMapGroups(map) {
     { key: "evaluation_protocols", title: "评测方式", items: survey.evaluation_protocols || [] },
     { key: "applications", title: "应用场景", items: survey.applications || [] },
     { key: "open_challenges", title: "开放问题", items: survey.open_challenges || [] },
-  ];
+  ].map((group) => ({ ...group, items: prepareSurveyMapItems(group.key, group.items) }));
 }
 
 function renderReadingMapCard(item, groupKey, groupIndex, index) {
-  const title = readingMapCardTitle(item, groupKey);
-  const summary = readingMapCardSummary(item, groupKey);
-  const why = readingMapCardWhy(item, groupKey, summary);
+  const title = truncate(readingMapCardTitle(item, groupKey), 96);
+  const summaryCandidate = readingMapCardSummary(item, groupKey);
+  const summary = sameMapText(summaryCandidate, title) ? "" : summaryCandidate;
+  const whyCandidate = readingMapCardWhy(item, groupKey, summary);
+  const why = sameMapText(whyCandidate, title) || sameMapText(whyCandidate, summary) ? "" : whyCandidate;
   const sources = Array.isArray(item.source_sections) ? item.source_sections : [];
   const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
   const card = create("article", `reading-map-card reading-map-${groupKey}`);
   card.append(create("strong", "", title));
-  if (summary) card.append(create("p", "", summary));
-  if (why && why !== summary) card.append(create("p", "reading-map-why", why));
+  const fields = readingMapCardFields(item, groupKey, title);
+  if (fields.length) {
+    const list = create("dl", "reading-map-fields");
+    fields.forEach(([label, value]) => {
+      list.append(create("dt", "", label), create("dd", "", value));
+    });
+    card.append(list);
+  } else {
+    if (summary) card.append(create("p", "", summary));
+    if (why && why !== summary) card.append(create("p", "reading-map-why", why));
+  }
 
-  if (["experimental_support", "datasets", "technical_routes", "representative_methods"].includes(groupKey)) {
-    const meta = [...(item.datasets || []), ...(item.metrics || []), ...(item.figures_or_tables || []), ...(item.strengths || []), ...(item.mentioned_terms || []), item.year, item.url].filter(Boolean);
+  if (["experimental_support"].includes(groupKey)) {
+    const meta = [
+      ...mapArray(item.datasets), ...mapArray(item.metrics), ...mapArray(item.figures_or_tables),
+      ...mapArray(item.strengths), ...mapArray(item.mentioned_terms), item.year, item.url,
+    ].map(readableInlineText).filter(Boolean);
     if (meta.length) card.append(create("small", "", meta.slice(0, 8).join(" · ")));
   }
 
@@ -3321,7 +3585,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
     const section = state.paper?.sections?.find((item) => item.section_id === source.section_id);
     jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "");
   });
-  const ask = create("button", "mini-button is-accent", "让 Agent 解释");
+  const ask = create("button", "mini-button is-accent", "让智能体解释");
   ask.type = "button";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;
@@ -3330,10 +3594,66 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   actions.append(jump, ask);
   card.append(actions);
   if (sources.length) {
-    const sourceText = sources.map((entry) => entry.title || entry.section_id || (entry.page ? `Page ${entry.page}` : "")).filter(Boolean).slice(0, 3).join(" · ");
+    const hiddenRouteLabels = new Set(["edgeandtopologyevolution", "nodeandfeatureevolution"]);
+    const sourceText = sources
+      .map((entry) => entry.title || entry.section_id || (entry.page ? `Page ${entry.page}` : ""))
+      .filter((value) => value && !(groupKey === "representative_methods" && hiddenRouteLabels.has(comparableMapText(value).toLowerCase())))
+      .slice(0, 3).join(" · ");
     if (sourceText) card.append(create("small", "reading-map-source", sourceText));
   }
   return card;
+}
+
+function prepareSurveyMapItems(groupKey, rawItems) {
+  const blockedMethods = new Set(["edgeandtopologyevolution", "nodeandfeatureevolution"]);
+  const items = (Array.isArray(rawItems) ? rawItems : []).filter((item) => item && Object.keys(item).length);
+  const seenTitles = new Set();
+  const seenMechanisms = new Set();
+  return items.filter((item) => {
+    if (!isRenderableReadingMapItem(item, groupKey)) return false;
+    const title = comparableMapText(readingMapCardTitle(item, groupKey));
+    if (groupKey === "representative_methods" && blockedMethods.has(title.toLowerCase())) return false;
+    const mechanism = groupKey === "technical_routes"
+      ? comparableMapText(firstUsefulField(item, ["core_mechanism", "typical_pipeline", "typical_flow", "core_idea"]))
+      : "";
+    if ((title && seenTitles.has(title)) || (mechanism.length >= 12 && seenMechanisms.has(mechanism))) return false;
+    if (title) seenTitles.add(title);
+    if (mechanism.length >= 12) seenMechanisms.add(mechanism);
+    return true;
+  });
+}
+
+function isRenderableReadingMapItem(item, groupKey) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  if (["object", "json_object", "array"].includes(String(item.type || "").toLowerCase()) && item.properties && typeof item.properties === "object") return false;
+  if (item.$schema || item.definitions || item.$defs) return false;
+  const title = readingMapCardTitle(item, groupKey);
+  const summary = readingMapCardSummary(item, groupKey);
+  const why = readingMapCardWhy(item, groupKey, summary);
+  return Boolean(readingMapCardFields(item, groupKey, title).length || summary || why);
+}
+
+function readingMapCardFields(item, groupKey, title) {
+  const specs = {
+    field_overview: [["领域范围", ["field_scope", "field"]], ["核心任务", ["core_tasks", "core_task"]], ["当前价值", ["why_now"]], ["新手结论", ["novice_takeaway"]], ["常见误解", ["common_misunderstanding"]]],
+    development_timeline: [["时间范围", ["time_range"]], ["关键变化", ["key_change"]], ["代表工作", ["representative_work", "representative_works"]], ["阶段意义", ["why_important", "why_it_matters"]]],
+    pain_points: [["为什么难", ["why_hard"]], ["实际影响", ["impact"]], ["已有尝试", ["existing_attempts"]], ["未解决部分", ["unresolved_part"]]],
+    taxonomy: [["分类依据", ["basis"]], ["典型方法", ["typical_methods"]], ["适合问题", ["problem_fit", "solved_problems"]], ["局限", ["limitations"]]],
+    technical_routes: [["核心机制", ["core_mechanism", "core_idea"]], ["典型流程", ["typical_flow", "typical_pipeline"]], ["优势", ["strengths"]], ["局限", ["limitations", "weaknesses"]], ["代表方法", ["representative_methods", "representative_method_ids"]]],
+    representative_methods: [["论文", ["paper_title"]], ["年份", ["year"]], ["解决问题", ["problem_addressed"]], ["方法简介", ["method_summary", "core_mechanism"]], ["具体方案", ["specific_solution"]], ["改进对象", ["improves_on"]], ["剩余局限", ["remaining_limits", "limitations"]]],
+    datasets: [["数据集类型", ["dataset_type", "task"]], ["一句话介绍", ["one_sentence_intro", "content", "description"]], ["数据结构", ["structure"]], ["规模", ["scale"]], ["评测指标", ["metrics"]], ["论文中的具体例子", ["paper_examples", "examples_in_paper"]], ["使用方法", ["used_by_methods"]]],
+    evaluation_protocols: [["评测任务", ["task"]], ["评测指标", ["metrics", "metric"]], ["实验设置", ["setting"]], ["验证内容", ["what_it_tests"]]],
+    applications: [["应用场景", ["scenario"]], ["适用原因", ["why_suitable"]], ["典型方法", ["typical_methods"]], ["落地限制", ["constraints"]]],
+    open_challenges: [["为什么重要", ["why_it_matters"]], ["当前瓶颈", ["current_bottleneck", "why_hard"]], ["已有尝试", ["existing_attempts"]], ["可能方向", ["future_direction", "possible_directions"]]],
+  };
+  const seen = new Set([comparableMapText(title)]);
+  return (specs[groupKey] || []).flatMap(([label, keys]) => {
+    const value = firstUsefulField(item, keys);
+    const key = comparableMapText(value);
+    if (!value || !key || seen.has(key)) return [];
+    seen.add(key);
+    return [[label, value]];
+  });
 }
 
 function readingMapCardTitle(item, groupKey) {
@@ -3342,7 +3662,7 @@ function readingMapCardTitle(item, groupKey) {
     development_timeline: ["stage", "time_range", "key_change", "title"],
     pain_points: ["problem", "challenge", "title"],
     taxonomy: ["category", "name", "basis", "title"],
-    technical_routes: ["name", "route", "route_id", "core_mechanism", "title"],
+    technical_routes: ["route_name", "name", "route", "route_id", "core_mechanism", "title"],
     representative_methods: ["paper_title", "method_name", "name", "title"],
     datasets: ["name", "dataset", "task", "title"],
     evaluation_protocols: ["protocol", "task", "metric", "title"],
@@ -3363,7 +3683,7 @@ function readingMapCardSummary(item, groupKey) {
     development_timeline: ["key_change", "why_it_matters", "evidence", "summary"],
     pain_points: ["why_hard", "impact", "unresolved_part", "evidence", "summary"],
     taxonomy: ["basis", "solved_problems", "summary", "evidence"],
-    technical_routes: ["core_mechanism", "typical_pipeline", "summary", "evidence"],
+    technical_routes: ["core_mechanism", "typical_flow", "typical_pipeline", "summary", "evidence"],
     representative_methods: ["method_summary", "specific_solution", "improves_on", "evidence"],
     datasets: ["task", "content", "structure", "scale", "evidence"],
     evaluation_protocols: ["what_it_tests", "setting", "metrics", "evidence"],
@@ -3400,12 +3720,50 @@ function firstUsefulField(item, keys) {
 function readableInlineText(value) {
   if (value == null || value === "") return "";
   if (Array.isArray(value)) {
-    return value.map(readableInlineText).filter(Boolean).slice(0, 4).join(" · ");
+    const items = value.map(readableInlineText).filter(Boolean);
+    if (items.length > 3 && items.every((item) => [...item].length <= 2)) return cleanMapText(items.join(""));
+    return cleanMapText([...new Set(items)].slice(0, 4).join(" · "));
   }
   if (typeof value === "object") {
-    return Object.values(value).map(readableInlineText).filter(Boolean).slice(0, 3).join(" · ");
+    return cleanMapText([...new Set(Object.values(value).map(readableInlineText).filter(Boolean))].slice(0, 3).join(" · "));
   }
-  return String(value).trim();
+  return cleanMapText(value);
+}
+
+function mapArray(value) {
+  if (value == null || value === "") return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function cleanMapText(value) {
+  let text = String(value || "").trim();
+  text = text.replace(/^\*{1,2}([\s\S]*?)\*{1,2}$/u, "$1").trim();
+  const dotted = text.split(/\s*·\s*/u).filter(Boolean);
+  if (dotted.length > 3 && dotted.every((item) => [...item].length <= 2)) text = dotted.join("");
+  const lines = text.split(/\n+/u).map((line) => line.trim()).filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  lines.forEach((line) => {
+    const key = comparableMapText(line);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      unique.push(line);
+    }
+  });
+  return unique.join("\n");
+}
+
+function comparableMapText(value) {
+  return String(value || "")
+    .replace(/\*{1,2}/gu, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .toLowerCase();
+}
+
+function sameMapText(left, right) {
+  const a = comparableMapText(left);
+  const b = comparableMapText(right);
+  return Boolean(a && b && (a === b || (a.length > 24 && b.length > 24 && (a.includes(b) || b.includes(a)))));
 }
 
 function isLowValueMapText(text) {
@@ -3438,24 +3796,25 @@ function readingMapGroupLabel(groupKey) {
 }
 
 function scrollReaderToSection(sectionId, smooth = true) {
-  const reader = $("structured-reader");
-  const target = document.getElementById(domSectionId(sectionId));
+  const reader = activeTextReader();
+  const target = reader?.querySelector(`[data-section-id="${cssEscape(sectionId)}"]`);
   if (!reader || !target) return;
   const top = target.getBoundingClientRect().top - reader.getBoundingClientRect().top + reader.scrollTop - 12;
   reader.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
 }
 
 function bindScrollSpy() {
-  const reader = $("structured-reader");
-  let ticking = false;
-  reader.addEventListener("scroll", () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => {
-      ticking = false;
-      updateCurrentSectionFromScroll();
-    });
-  }, { passive: true });
+  [$("structured-reader"), $("reflow-reader")].forEach((reader) => {
+    let ticking = false;
+    reader.addEventListener("scroll", () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        updateCurrentSectionFromScroll(reader);
+      });
+    }, { passive: true });
+  });
 
   const pdfHost = $("pdf-document");
   let pdfTicking = false;
@@ -3469,9 +3828,12 @@ function bindScrollSpy() {
   }, { passive: true });
 }
 
-function updateCurrentSectionFromScroll() {
-  if ($("structured-reader").hidden) return;
-  const reader = $("structured-reader");
+function activeTextReader() {
+  return state.readerMode === "reflow" ? $("reflow-reader") : $("structured-reader");
+}
+
+function updateCurrentSectionFromScroll(reader = activeTextReader()) {
+  if (!reader || reader.hidden || state.readerMode === "pdf") return;
   const sections = Array.from(reader.querySelectorAll(".paper-section"));
   if (!sections.length) return;
   const readerTop = reader.getBoundingClientRect().top;
@@ -3535,8 +3897,9 @@ async function restoreLocalState() {
       renderReadyCard("继续阅读");
       $("paper-ready-section").hidden = false;
       startParsePolling();
-      toast("已找到上次的阅读记录。");
+      syncReturnChatLink();
     }
+    if (state.sessionId) await restoreReadingConversationHistory();
   } catch {
     localStorage.removeItem(STORAGE.session);
     if (!state.paperId) localStorage.removeItem(STORAGE.paper);
@@ -3551,12 +3914,27 @@ async function restoreLocalState() {
 }
 
 function persistState() {
+  syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);
   if (state.paperId) localStorage.setItem(STORAGE.paper, state.paperId);
   else localStorage.removeItem(STORAGE.paper);
   if (state.currentSection) localStorage.setItem(STORAGE.section, state.currentSection);
   else localStorage.removeItem(STORAGE.section);
+}
+
+function setNavigatorWidth(width, persist = true) {
+  const next = Math.min(460, Math.max(190, Number(width) || 270));
+  $("workbench-grid").style.setProperty("--navigator-width", `${Math.round(next)}px`);
+  if (persist) localStorage.setItem(STORAGE.navigatorWidth, String(Math.round(next)));
+}
+
+function syncReturnChatLink() {
+  const link = $("return-chat-link");
+  if (!link) return;
+  link.href = state.sessionId
+    ? `/app?conversation_id=${encodeURIComponent(state.sessionId)}`
+    : "/app?mode=paper_reading";
 }
 
 function saveBeforeUnload() {
@@ -3628,6 +4006,7 @@ function sectionForPage(page) {
   }) || null;
 }
 function domSectionId(id) { return `paper-section-${String(id || "").replace(/[^a-zA-Z0-9_-]/g, "-")}`; }
+function cssEscape(value) { return window.CSS?.escape ? window.CSS.escape(String(value || "")) : String(value || "").replace(/["\\]/g, "\\$&"); }
 function sectionTitle(id) { return state.paper?.sections?.find((item) => item.section_id === id)?.title || id || ""; }
 function skillLabel(id) { return SKILLS.find((item) => item.id === id)?.label || id || "Skill"; }
 function humanizeKey(key) { return String(key).replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()); }

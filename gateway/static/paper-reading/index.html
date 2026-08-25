@@ -20,7 +20,7 @@
         <button id="paper-note-button" class="ghost-button" type="button" hidden>论文笔记</button>
         <button id="fullscreen-button" class="ghost-button" type="button">全屏阅读</button>
         <a class="ghost-button" href="/library?view=paper-readings">精读列表</a>
-        <a class="ghost-button" href="/app">返回对话</a>
+        <a id="return-chat-link" class="ghost-button" href="/app">返回对话</a>
       </nav>
     </header>
 
@@ -95,12 +95,12 @@
       <section id="paper-workbench" class="workbench" hidden>
         <header class="paper-ribbon">
           <div><p id="paper-ribbon-meta">正在阅读</p><h1 id="paper-ribbon-title">未命名论文</h1></div>
-          <div class="ribbon-actions"><span id="session-state-badge" class="state-badge">未开始</span></div>
+          <div class="ribbon-actions"><button id="reparse-paper-button" class="mini-button" type="button">重新解析论文</button><span id="session-state-badge" class="state-badge">未开始</span></div>
         </header>
 
         <section id="reading-map-panel" class="workspace-panel reading-map-panel is-collapsed">
           <header class="reading-map-header">
-            <div><p id="reading-map-kicker" class="panel-label">Research overview</p><h2 id="reading-map-title">研究总览</h2><p id="reading-map-status-copy" class="muted-copy">研究问题、核心方法、方法步骤、实验支撑与局限追问会汇总在这里。</p></div>
+            <div><p id="reading-map-kicker" class="panel-label">研究总览</p><h2 id="reading-map-title">研究总览</h2><p id="reading-map-status-copy" class="muted-copy">研究问题、核心方法、方法步骤、实验支撑与局限追问会汇总在这里。</p></div>
             <div class="reading-map-header-actions">
               <button id="regenerate-reading-map-button" class="mini-button is-accent" type="button">重新生成</button>
               <button id="reading-map-toggle-button" class="mini-button" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开</button>
@@ -109,17 +109,17 @@
           <div class="reading-map-layout">
             <div class="reading-map-shell">
               <div id="reading-map-grid" class="reading-map-grid"></div>
-              <div id="reading-map-empty" class="reading-map-empty">阅读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧 Agent 分析。</div>
+              <div id="reading-map-empty" class="reading-map-empty">导读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧智能体分析。</div>
             </div>
             <aside class="reading-map-detail">
-              <div id="reading-map-detail"><p class="panel-label">Guide</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧 Agent 解释这一段。</p></div>
+              <div id="reading-map-detail"><p class="panel-label">导读</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧智能体解释这一段。</p></div>
             </aside>
           </div>
         </section>
 
         <div id="workbench-grid" class="workbench-grid">
           <aside class="workspace-panel navigator-panel">
-            <section class="side-section paper-summary"><p class="panel-label">Paper</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
+            <section class="side-section paper-summary"><p class="panel-label">论文</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
             <section class="side-section">
               <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
               <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
@@ -127,9 +127,11 @@
             <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><p id="outline-source-warning" class="outline-source-warning" hidden></p><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
           </aside>
 
+          <div id="navigator-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整论文索引宽度"></div>
+
           <article class="workspace-panel reader-panel">
             <header class="reader-toolbar">
-              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
+              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">智能索引</button><button class="reader-tab" data-reader-mode="reflow" type="button" hidden>AI 论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
               <div class="reader-actions">
                 <label id="pdf-fit-control" class="pdf-fit-control" hidden>缩放
                   <select id="pdf-fit-select">
@@ -144,15 +146,15 @@
             <div id="selection-toolbar" class="selection-toolbar" hidden>
               <button data-selection-action="explain" type="button">解释</button><button data-selection-action="fork" type="button">Fork 深入</button>
             </div>
-            <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>PDF 原文支持划选解释、Fork 深入、高亮和注释；智能索引用于快速浏览章节导读。</div>
             <div id="structured-reader" class="structured-reader"></div>
+            <div id="reflow-reader" class="structured-reader reflow-reader" hidden></div>
             <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
           </article>
 
           <div id="copilot-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整协作区宽度"></div>
 
           <aside id="copilot-panel" class="workspace-panel copilot-panel">
-            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="copilot-narrow-button" class="mini-button" type="button" title="缩窄回复区" aria-label="缩窄回复区">−</button><button id="copilot-wide-button" class="mini-button" type="button" title="加宽回复区" aria-label="加宽回复区">＋</button><button id="research-overview-button" class="mini-button is-accent" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开总览</button><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
+            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
             <div id="copilot-tabs" class="copilot-tabs" role="tablist" aria-label="分析选项卡"></div>
             <div id="copilot-feeds" class="copilot-feeds">
               <div id="analysis-feed" class="analysis-feed copilot-feed is-active" data-feed-id="main" aria-live="polite">

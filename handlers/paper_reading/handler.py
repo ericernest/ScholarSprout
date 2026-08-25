@@ -24,6 +24,7 @@ from skills.models import CapabilitySelection
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
+from handlers.paper_reading.pipeline.mineru import image_url_map, reflow_document
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
@@ -55,7 +56,8 @@ SURVEY_MAP_TASK_LIMIT = 12
 SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
 SURVEY_FACT_REQUEST_TIMEOUT_SECONDS = 75.0
 SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS = 90.0
-SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
+SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v2"
+SURVEY_CARD_PROMPT_VERSION = "survey-card-prompt-v3-zh"
 SURVEY_MAP_GROUP_KEYS = (
     "field_overview",
     "development_timeline",
@@ -68,6 +70,27 @@ SURVEY_MAP_GROUP_KEYS = (
     "applications",
     "open_challenges",
 )
+CHINESE_READING_MAP_RULE = (
+    "All explanatory output values must use Simplified Chinese. "
+    "Keep original-language text only for paper titles, author names, official method/model/dataset/metric names, "
+    "standard abbreviations, formulas, code, URLs, and short source quotations. "
+    "Do not write full English explanatory sentences when Chinese can express the same meaning."
+)
+CHINESE_EXPLANATORY_FIELDS = {
+    "application", "common_misunderstanding", "connections", "constraints", "content",
+    "core_idea", "core_message", "core_mechanism", "core_task", "core_tasks",
+    "current_bottleneck", "dataset_format", "dataset_type", "difference", "experiment_setting",
+    "field_scope", "future_direction", "goal", "impact", "implementation_plan", "intro_evidence",
+    "key_change", "key_points", "learn_first", "limitation", "limitations", "main_content",
+    "main_idea", "method_summary", "next_reading", "novice_focus", "novice_question",
+    "novice_summary", "novice_takeaway", "one_sentence", "one_sentence_intro", "operation",
+    "possible_directions", "problem_addressed", "problem_fit", "protocol", "read", "relationship",
+    "remaining_limits", "scenario", "setting", "solved_problems", "specific_points",
+    "specific_solution", "stage", "strengths", "summary", "task", "technical_route",
+    "typical_flow", "typical_pipeline", "unresolved_part", "usage", "weaknesses",
+    "what_it_tests", "why", "why_confusing", "why_hard", "why_important", "why_it_matters",
+    "why_needed", "why_now", "why_read", "why_suitable",
+}
 
 
 class _NoOptionalSkillSelector:
@@ -90,8 +113,14 @@ def _reading_map_json_chat(
     max_tokens: int | None = None,
 ) -> Any:
     """Run one JSON request with optional caller-owned output budget."""
+    localized_messages = []
+    for message in messages:
+        localized = dict(message)
+        if localized.get("role") == "system":
+            localized["content"] = f"{localized.get('content', '')}\n{CHINESE_READING_MAP_RULE}"
+        localized_messages.append(localized)
     kwargs = {
-        "messages": messages,
+        "messages": localized_messages,
         "response_format": {"type": "json_object"},
         "disable_thinking": True,
         "timeout": timeout,
@@ -179,6 +208,7 @@ def handle_paper_reading_message(
     handler_map = {
         "search_paper": _handle_search_paper,
         "upload_paper": _handle_upload_paper,
+        "create_session": _handle_create_session,
         "start_reading": _handle_start_reading,
         "pause_reading": _handle_pause_reading,
         "resume_reading": _handle_resume_reading,
@@ -190,6 +220,7 @@ def handle_paper_reading_message(
         "get_progress": _handle_get_progress,
         "get_paper_detail": _handle_get_paper_detail,
         "regenerate_reading_map": _handle_regenerate_reading_map,
+        "reparse_paper": _handle_reparse_paper,
     }
 
     handler_fn = handler_map.get(request.action)
@@ -410,11 +441,7 @@ def _build_quick_paper_payload(
             if doc.page_count:
                 first_text = doc[0].get_text("text")[:2500]
                 if not doc_title and not metadata_title:
-                    for line in first_text.splitlines():
-                        cleaned = line.strip()
-                        if len(cleaned) >= 8:
-                            title = cleaned[:180]
-                            break
+                    title = PDFParser().extract_title(first_text)
             year = year or PDFParser.extract_year(
                 first_text,
                 document_metadata=doc.metadata,
@@ -506,11 +533,62 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
     paper["parse_status"] = "parsing"
     storage.save_paper(paper_id, paper)
     try:
-        metadata = pipeline.parse_pdf_bytes(pdf_bytes)
+        mineru_client = getattr(app_state, "mineru_client", None)
+        mineru_future = None
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="paper-parser") as executor:
+            local_future = executor.submit(pipeline.parse_pdf_bytes, pdf_bytes)
+            if mineru_client is not None and getattr(mineru_client, "configured", False):
+                mineru_future = executor.submit(mineru_client.parse_pdf, pdf_bytes)
+            metadata = local_future.result()
+            mineru_result = None
+            mineru_error = ""
+            if mineru_future is not None:
+                try:
+                    mineru_result = mineru_future.result()
+                except Exception as error:
+                    mineru_error = str(error)
+                    logger.warning("MinerU parse unavailable for %s: %s", paper_id, error)
         metadata.paper_id = paper_id
         payload = _preserve_imported_paper_metadata(
             metadata.model_dump(mode="json"), paper
         )
+        if mineru_result is not None:
+            _persist_mineru_images(storage, paper_id, mineru_result.images)
+            reflow = reflow_document(
+                mineru_result.markdown,
+                content_list=mineru_result.content_list,
+                image_urls=image_url_map(paper_id, mineru_result.images),
+            )
+            if reflow.get("sections"):
+                for field in (
+                    "sections", "full_text", "section_extraction_source",
+                    "section_extraction_status", "section_extraction_message",
+                    "outline_entries_count",
+                ):
+                    payload[field] = reflow[field]
+                if reflow.get("title"):
+                    payload["title"] = reflow["title"]
+                if reflow.get("abstract"):
+                    payload["abstract"] = reflow["abstract"]
+                payload["parse_backend"] = "mineru"
+                payload["mineru_status"] = "done"
+                payload["mineru_response_format"] = mineru_result.response_format
+                payload["mineru_images_count"] = len(mineru_result.images)
+                payload["mineru_content_list_available"] = bool(mineru_result.content_list)
+                payload["mineru_middle_json_available"] = mineru_result.middle_json is not None
+                payload["mineru_artifacts"] = _persist_mineru_artifacts(
+                    storage,
+                    paper_id,
+                    mineru_result,
+                    normalized_markdown=str(reflow.get("full_text") or ""),
+                )
+        elif mineru_future is not None:
+            payload["parse_backend"] = "local"
+            payload["mineru_status"] = "unavailable"
+            payload["mineru_error"] = mineru_error[:500]
+        else:
+            payload["parse_backend"] = "local"
+            payload["mineru_status"] = "disabled"
         payload["paper_id"] = paper_id
         payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
         payload["page_count"] = paper.get("page_count", 0)
@@ -718,6 +796,58 @@ def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id:
             f"导读地图与智能索引生成失败：{error}",
             generation_id=generation_id,
         )
+
+
+def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict:
+    """Create the conversation carrier for a paper workspace without an LLM turn."""
+    session_mgr = getattr(app_state, "session_manager", None)
+    storage = getattr(app_state, "paper_storage", None)
+    if session_mgr is None:
+        return _error("Session manager 未初始化", action="create_session")
+    if not request.paper_id:
+        return _error("缺少 paper_id", action="create_session")
+
+    session = session_mgr.get_session(request.session_id) if request.session_id else None
+    if session is not None and session.paper_id and session.paper_id != request.paper_id:
+        return _error(
+            "当前会话已经关联另一篇论文，请从资料库新建会话后再打开。",
+            action="create_session",
+            session_id=session.session_id,
+        )
+
+    paper_data = _load_paper_data(storage, request.paper_id) or {}
+    if session is None:
+        session = session_mgr.create_session(
+            session_id=request.session_id or None,
+            paper_id=request.paper_id,
+            paper_title=str(paper_data.get("title") or ""),
+            user_id=request.session_id or "default",
+        )
+    else:
+        if not session.paper_id:
+            session.paper_id = request.paper_id
+        if not session.paper_title:
+            session.paper_title = str(paper_data.get("title") or "")
+
+    sections = paper_data.get("sections", []) or []
+    session_mgr.set_total_sections(session.session_id, len(sections))
+    research_store = getattr(storage, "research_store", None)
+    if research_store is not None:
+        research_store.ensure_library_item(request.paper_id, reading_status="reading")
+
+    return _ok(
+        "create_session",
+        {"session_id": session.session_id, "paper_id": request.paper_id},
+        session={
+            "session_id": session.session_id,
+            "paper_id": session.paper_id,
+            "paper_title": session.paper_title,
+            "state": session.state,
+            "current_section": session.progress.get("current_position", {}).get("section_id", ""),
+            "active_skills": session.active_skills,
+        },
+        progress=session.progress,
+    )
 
 
 def _handle_start_reading(
@@ -1119,6 +1249,51 @@ def _handle_regenerate_reading_map(request: PaperReadingRequest, app_state: Any)
     })
 
 
+def _handle_reparse_paper(request: PaperReadingRequest, app_state: Any) -> dict:
+    storage = getattr(app_state, "paper_storage", None)
+    if storage is None:
+        return _error("Paper storage 未初始化", action="reparse_paper")
+    paper_id = request.paper_id or ""
+    if not paper_id and request.session_id:
+        session_mgr = getattr(app_state, "session_manager", None)
+        session = session_mgr.get_session(request.session_id) if session_mgr else None
+        paper_id = session.paper_id if session else ""
+    if not paper_id:
+        return _error("请提供 paper_id", action="reparse_paper")
+    paper = _load_paper_data(storage, paper_id)
+    if paper is None:
+        return _error("论文不存在", action="reparse_paper")
+    upload_path = storage.get_upload_path(paper_id)
+    if upload_path is None or not upload_path.is_file():
+        return _error("没有找到该论文的原始 PDF，无法重新解析。", action="reparse_paper")
+
+    running = getattr(app_state, "_paper_parse_threads", set())
+    if paper_id in running:
+        return _ok("reparse_paper", {
+            "paper_id": paper_id,
+            "parse_status": "parsing",
+            "message": "论文正在重新解析，无需重复提交。",
+        })
+    mineru_client = getattr(app_state, "mineru_client", None)
+    mineru_enabled = bool(mineru_client is not None and getattr(mineru_client, "configured", False))
+    paper["parse_status"] = "parsing"
+    paper["parse_error"] = ""
+    paper["mineru_status"] = "parsing" if mineru_enabled else "disabled"
+    paper["mineru_error"] = ""
+    storage.save_paper(paper_id, paper)
+    _schedule_background_parse(app_state, paper_id, upload_path.read_bytes())
+    return _ok("reparse_paper", {
+        "paper_id": paper_id,
+        "parse_status": "parsing",
+        "mineru_enabled": mineru_enabled,
+        "message": (
+            "已重新提交本地解析与 MinerU 完整产物解析。"
+            if mineru_enabled
+            else "已重新提交本地解析；当前未配置 MinerU。"
+        ),
+    })
+
+
 def _handle_get_paper_detail(request: PaperReadingRequest, app_state: Any) -> dict:
     """获取论文完整 metadata、sections 正文和 PDF 恢复 URL。"""
     storage = getattr(app_state, "paper_storage", None)
@@ -1208,7 +1383,13 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
             and PDFParser.sections_need_repair(paper.get("sections"))
         ):
             parser = PDFParser()
-            repaired = parser.extract_sections(full_text)
+            if paper.get("section_extraction_source") == "mineru_markdown":
+                mineru_reflow = reflow_document(full_text)
+                repaired_sections = mineru_reflow.get("sections") or []
+                repaired = None
+            else:
+                repaired_sections = []
+                repaired = parser.extract_sections(full_text)
             if repaired:
                 paper = dict(paper)
                 paper["sections"] = [section.model_dump(mode="json") for section in repaired]
@@ -1221,6 +1402,10 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
                         author.model_dump(mode="json")
                         for author in repaired_authors
                     ]
+            elif repaired_sections:
+                paper = dict(paper)
+                paper["sections"] = repaired_sections
+                paper["outline_entries_count"] = len(repaired_sections)
         return paper
     except Exception as error:
         logger.warning("Failed to load paper %s: %s", paper_id, error)
@@ -1764,24 +1949,33 @@ def _generate_research_overview(
     fallback: dict[str, Any],
     skill_registry: Any | None,
 ) -> dict[str, Any]:
-    response = _reading_map_json_chat(
-        model,
-        [
-            {
-                "role": "system",
-                "content": (
-                    "You are a paper-reading map builder for novice researchers. "
-                    "Return only a valid JSON object that follows the requested schema."
-                ),
-            },
-            {"role": "user", "content": _build_reading_map_prompt(paper, fallback, skill_registry)},
-        ],
-        timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
-    )
-    return _reading_map_response_json(
-        response,
-        label="研究总览",
-    )
+    prompt = _build_reading_map_prompt(paper, fallback, skill_registry)
+    last_error = ""
+    for attempt in range(2):
+        correction = (
+            "\n\n上一次结果包含可用中文表达的英文说明。请将说明字段改为简体中文，"
+            "只保留论文、方法、模型、数据集和指标的正式名称。"
+            if attempt else ""
+        )
+        response = _reading_map_json_chat(
+            model,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a paper-reading map builder for novice researchers. "
+                        "Return only a valid JSON object that follows the requested schema."
+                    ),
+                },
+                {"role": "user", "content": prompt + correction},
+            ],
+            timeout=RESEARCH_OVERVIEW_REQUEST_TIMEOUT_SECONDS,
+        )
+        parsed = _reading_map_response_json(response, label="研究总览")
+        if not _contains_unnecessary_english_explanation(parsed):
+            return parsed
+        last_error = "结果包含未翻译的英文说明"
+    raise ValueError(f"研究总览未返回中文说明：{last_error}")
 
 
 def _research_reading_sections(
@@ -1874,6 +2068,8 @@ def _generate_research_section_guide_group(
     normalized = _normalize_section_guides(normalized)
     if not normalized:
         raise ValueError("章节导读 JSON 中没有匹配输入章节的内容")
+    if _contains_unnecessary_english_explanation(normalized):
+        raise ValueError("章节导读包含未翻译的英文说明")
     return normalized
 
 
@@ -1946,6 +2142,7 @@ def _build_survey_plan_card_reading_map(
     try:
         raw_plan = _plan_survey_cards(model, paper, manifest, skill_instructions)
         plan = _normalize_survey_card_plan(raw_plan, manifest)
+        plan = _ensure_required_survey_map_tasks(plan, manifest)
         plan = _ensure_survey_prerequisite_task(plan, manifest)
     except Exception as error:
         return _failed_reading_map(f"综述卡片规划失败：{error}")
@@ -2070,7 +2267,7 @@ def _build_survey_plan_card_reading_map(
         status="llm_done",
         partial=False,
     )
-    if _survey_partial_has_core_content(final_map):
+    if _reading_map_has_visible_content(final_map):
         phase = "llm_done"
         progress = 100
         error = ""
@@ -2079,7 +2276,9 @@ def _build_survey_plan_card_reading_map(
     else:
         phase = "failed_partial"
         progress = _survey_card_generation_progress(completed + failed, len(tasks))
-        error = "综述导读地图核心卡片不足，请重新生成。"
+        missing_groups = _missing_required_survey_groups(final_map)
+        missing_text = "、".join(reading_map_group_title(key) for key in missing_groups)
+        error = f"综述导读地图固定分区生成不完整：{missing_text or '章节导读'}。请重新生成。"
         final_map["status"] = "failed_partial"
         final_map["partial"] = True
         final_map["error"] = error
@@ -2097,6 +2296,7 @@ def _build_survey_plan_card_reading_map(
             and cached_results.get(task["task_id"], {}).get("status") == "ok"
         ),
         "survey_skill_hash": skill_hash,
+        "survey_card_prompt_version": SURVEY_CARD_PROMPT_VERSION,
     }
     _save_survey_partial_reading_map(
         storage,
@@ -2112,6 +2312,7 @@ def _build_survey_plan_card_reading_map(
             "survey_card_results": card_results,
             "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, ""),
             "survey_skill_hash": skill_hash,
+            "survey_card_prompt_version": SURVEY_CARD_PROMPT_VERSION,
         },
     )
     return final_map
@@ -2307,20 +2508,20 @@ def _plan_survey_cards(
         "Use the section manifest to decide which sections should be read to generate each card. "
         "Do not ask for every section by default; choose the most relevant sections for each card. "
         "Return JSON only. Use section_id for binding; section_index is only a helper.\n"
-        "Actively search for every core group instead of treating them as optional. "
-        "field_overview is required. taxonomy and technical_routes should each have 1-3 tasks when evidence exists. "
+        "All ten map groups are fixed and required: field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges. "
+        "Plan at least one evidence-bound task for every group; never omit a group. taxonomy and technical_routes may each have 1-3 tasks. "
         "If the manifest exposes citation_count_hint, years, et al., Table/Figure, benchmark, baseline, comparison, framework, algorithm, or named_entities_hint, "
         "you must plan representative_methods: either 3-8 specific method tasks or one aggregate method task that can return items[]. "
-        "Plan datasets, evaluation_protocols, and open_challenges whenever the manifest has evidence; if a core group is omitted, include a concise omission reason.\n"
+        "Plan datasets, evaluation_protocols, and open_challenges from the closest relevant sections even when evidence is distributed across the paper.\n"
         "Schema:\n"
         "{\n"
         '  "map_tasks": [{"task_id": "", "group_key": "field_overview|development_timeline|pain_points|taxonomy|technical_routes|representative_methods|datasets|evaluation_protocols|applications|open_challenges", "title": "", "goal": "", "priority": "high|medium|low", "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": [], "output_hint": ""}],\n'
         '  "section_guide_tasks": [{"task_id": "", "section_id": "", "section_index": null, "title": "", "goal": "", "priority": "high|medium|low", "card_types": [], "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": []}],\n'
         '  "omissions": [{"group_key": "", "reason": ""}]\n'
         "}\n"
-        "Planning requirements: include high-value map tasks for field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges when evidence exists. "
+        "Planning requirements: include at least one high-value map task for each of field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges. "
         "For representative_methods, prioritize sections with citation/year/method/table/benchmark/comparison signals and set expected_output_fields to paper_title, year, method_name, route, problem_addressed, core_mechanism, specific_solution, improves_on, limitations, evidence, source_sections. "
-        "For datasets, set expected_output_fields to name, task, content, structure, scale, metrics, used_by_methods, evidence, source_sections. "
+        "For datasets, set expected_output_fields to name, dataset_type, task, one_sentence_intro, structure, scale, metrics, paper_examples, used_by_methods, evidence, source_sections. "
         "Create section_guide_tasks for important non-reference sections; each should target 2-4 cards. "
         f"Keep map_tasks <= {SURVEY_MAP_TASK_LIMIT} and section_guide_tasks <= {SURVEY_SECTION_GUIDE_TASK_LIMIT}. "
         "Prefer high-value coverage over many small tasks. Write Chinese titles/goals.\n\n"
@@ -2439,6 +2640,96 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
     }
 
 
+def _ensure_required_survey_map_tasks(
+    plan: dict[str, Any],
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Guarantee one evidence-bound task for every fixed overview section."""
+    tasks = [task for task in plan.get("tasks", []) if isinstance(task, dict)]
+    map_tasks = [task for task in tasks if task.get("target") == "survey_map"]
+    guide_tasks = [task for task in tasks if task.get("target") != "survey_map"]
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+
+    for group_key in SURVEY_MAP_GROUP_KEYS:
+        existing = next((task for task in map_tasks if task.get("group_key") == group_key), None)
+        task = existing or _fallback_survey_map_task(group_key, manifest)
+        if not task:
+            continue
+        selected.append(task)
+        selected_ids.add(str(task.get("task_id") or ""))
+
+    extras = [
+        task for task in map_tasks
+        if str(task.get("task_id") or "") not in selected_ids
+    ]
+    selected.extend(extras[: max(0, SURVEY_MAP_TASK_LIMIT - len(selected))])
+    return {
+        **plan,
+        "version": SURVEY_CARD_PLAN_VERSION,
+        "map_tasks_count": len(selected),
+        "section_guide_tasks_count": len(guide_tasks),
+        "tasks": [*selected, *guide_tasks],
+    }
+
+
+def _fallback_survey_map_task(
+    group_key: str,
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    keywords = {
+        "field_overview": ("abstract", "introduction", "overview"),
+        "development_timeline": ("introduction", "related survey", "history", "background"),
+        "pain_points": ("challenge", "introduction", "limitation"),
+        "taxonomy": ("construction", "architecture", "application", "capability"),
+        "technical_routes": ("construction", "architecture", "memory", "planning", "action", "capability"),
+        "representative_methods": ("memory", "planning", "action", "capability", "engineering"),
+        "datasets": ("evaluation", "application", "engineering", "science"),
+        "evaluation_protocols": ("evaluation", "subjective", "objective"),
+        "applications": ("application", "social science", "natural science", "engineering"),
+        "open_challenges": ("challenge", "alignment", "robustness", "hallucination", "efficiency"),
+    }.get(group_key, ())
+    non_reference = [
+        item for item in manifest
+        if "reference" not in str(item.get("title") or "").lower()
+    ]
+    matched = [
+        item for item in non_reference
+        if any(keyword in str(item.get("title") or "").lower() for keyword in keywords)
+    ]
+    chosen = (matched or non_reference)[:6]
+    section_ids = [str(item.get("section_id") or "") for item in chosen if item.get("section_id")]
+    if not section_ids:
+        return None
+    expected_fields = {
+        "field_overview": ["title", "field_scope", "core_tasks", "why_now", "novice_takeaway", "evidence", "source_sections"],
+        "development_timeline": ["stage", "time_range", "key_change", "representative_work", "why_important", "evidence", "source_sections"],
+        "pain_points": ["problem", "why_hard", "impact", "existing_attempts", "unresolved_part", "evidence", "source_sections"],
+        "taxonomy": ["category", "basis", "typical_methods", "problem_fit", "limitations", "evidence", "source_sections"],
+        "technical_routes": ["route_name", "core_mechanism", "typical_flow", "strengths", "limitations", "representative_methods", "evidence", "source_sections"],
+        "representative_methods": ["paper_title", "year", "method_name", "problem_addressed", "core_mechanism", "specific_solution", "limitations", "evidence", "source_sections"],
+        "datasets": ["name", "dataset_type", "task", "one_sentence_intro", "structure", "scale", "metrics", "paper_examples", "evidence", "source_sections"],
+        "evaluation_protocols": ["title", "task", "metrics", "setting", "what_it_tests", "evidence", "source_sections"],
+        "applications": ["application", "scenario", "why_suitable", "typical_methods", "constraints", "evidence", "source_sections"],
+        "open_challenges": ["challenge", "why_hard", "impact", "existing_attempts", "possible_directions", "evidence", "source_sections"],
+    }.get(group_key, [])
+    task = {
+        "task_id": f"required:{group_key}",
+        "target": "survey_map",
+        "group_key": group_key,
+        "title": reading_map_group_title(group_key),
+        "goal": f"基于选定章节生成完整的{reading_map_group_title(group_key)}卡片，不得返回空对象或 JSON Schema。",
+        "priority": "high",
+        "section_ids": section_ids,
+        "section_indices": [item.get("section_index") for item in chosen],
+        "evidence_reason": "该分区属于研究总览固定结构，必须从论文正文提取有来源的内容。",
+        "expected_output_fields": expected_fields,
+        "output_hint": "返回实际论文事实，不要复述输出结构。",
+    }
+    task["task_hash"] = _survey_task_hash(task)
+    return task
+
+
 def _ensure_survey_prerequisite_task(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
     tasks = list(plan.get("tasks") if isinstance(plan.get("tasks"), list) else [])
     if any(task.get("target") == "prerequisite_card" for task in tasks if isinstance(task, dict)):
@@ -2505,6 +2796,7 @@ def _survey_task_hash(task: dict[str, Any]) -> str:
             "expected_output_fields",
         )
     }
+    payload["prompt_version"] = SURVEY_CARD_PROMPT_VERSION
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -2637,13 +2929,19 @@ def _survey_card_output_schema(task: dict[str, Any]) -> str:
     elif group_key == "representative_methods":
         schema = {"items": [{"paper_title": "", "year": "", "method_name": "", "route": "", "problem_addressed": "", "core_mechanism": "", "specific_solution": "", "improves_on": "", "limitations": "", "evidence": "", "source_sections": []}]}
     elif group_key == "datasets":
-        schema = {"items": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": "", "used_by_methods": [], "evidence": "", "source_sections": []}]}
+        schema = {"items": [{"name": "", "dataset_type": "", "task": "", "one_sentence_intro": "", "content": "", "structure": "", "scale": "", "metrics": "", "paper_examples": [{"name": "", "usage": ""}], "used_by_methods": [], "evidence": "", "source_sections": []}]}
     elif group_key == "technical_routes":
         schema = {"items": [{"route_name": "", "core_mechanism": "", "typical_flow": "", "strengths": "", "limitations": "", "representative_methods": [], "evidence": "", "source_sections": []}]}
     elif group_key == "taxonomy":
         schema = {"items": [{"category": "", "basis": "", "typical_methods": [], "problem_fit": "", "limitations": "", "evidence": "", "source_sections": []}]}
     elif group_key == "open_challenges":
         schema = {"items": [{"challenge": "", "why_hard": "", "impact": "", "existing_attempts": "", "possible_directions": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "pain_points":
+        schema = {"items": [{"problem": "", "why_hard": "", "impact": "", "existing_attempts": "", "unresolved_part": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "evaluation_protocols":
+        schema = {"items": [{"title": "", "task": "", "metrics": [], "setting": "", "what_it_tests": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "applications":
+        schema = {"items": [{"application": "", "scenario": "", "why_suitable": "", "typical_methods": [], "constraints": "", "evidence": "", "source_sections": []}]}
     elif group_key == "development_timeline":
         schema = {"items": [{"stage": "", "time_range": "", "key_change": "", "representative_work": "", "why_important": "", "evidence": "", "source_sections": []}]}
     elif group_key == "field_overview":
@@ -2677,6 +2975,8 @@ def _generate_survey_card(
         "Every card/item must include source_sections and concise evidence. Each formal item should contain at least 4-6 useful fields; "
         "if evidence is insufficient, return insufficient_evidence: true with a short reason. "
         "Avoid Item 1, Point 1, Front., Comput., only one-sentence summaries, or section-title-only content. "
+        "For representative_methods, output only concrete named papers or methods, never taxonomy labels or section headings. "
+        "For datasets, label the dataset type and one-sentence introduction, and include concrete paper_examples only when those dataset names occur in the selected paper text. "
         "Write Chinese content for novice researchers.\n\n"
         f"Task:\n{json.dumps(task, ensure_ascii=False)}\n"
         f"Target group: {group_key}\n"
@@ -2686,20 +2986,31 @@ def _generate_survey_card(
         f"Intro context:\n{intro_context}\n\n"
         f"Selected section text:\n{selected_context}"
     )
-    response = _reading_map_json_chat(
-        model,
-        [
-            {"role": "system", "content": "Return only valid JSON for one survey card task."},
-            {"role": "user", "content": prompt},
-        ],
-        timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
-        max_tokens=SURVEY_CARD_MAX_TOKENS,
-    )
-    parsed = _reading_map_response_json(
-        response,
-        label=f"综述卡片 {task.get('task_id')}",
-    )
-    return _normalize_survey_card_result(parsed, task, sections)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        correction = (
+            "\n\nThe previous response repeated a JSON Schema or contained no usable facts. "
+            "Return populated data values from the supplied paper text. Do not output keys such as type, properties, required, $schema, or definitions."
+            if attempt else ""
+        )
+        response = _reading_map_json_chat(
+            model,
+            [
+                {"role": "system", "content": "Return populated JSON data for one survey card task, never a JSON Schema."},
+                {"role": "user", "content": prompt + correction},
+            ],
+            timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
+            max_tokens=SURVEY_CARD_MAX_TOKENS,
+        )
+        try:
+            parsed = _reading_map_response_json(
+                response,
+                label=f"综述卡片 {task.get('task_id')}",
+            )
+            return _normalize_survey_card_result(parsed, task, sections)
+        except (ValueError, TypeError) as error:
+            last_error = error
+    raise ValueError(f"综述卡片未返回可展示内容：{last_error}")
 
 
 def _survey_task_context(sections: list[dict[str, Any]], limit: int, task: dict[str, Any] | None = None) -> str:
@@ -2778,6 +3089,8 @@ def _normalize_survey_card_result(
         for key in ("concepts", "field_questions", "reading_order", "anchor_works", "common_confusions"):
             if key not in card or not isinstance(card.get(key), list):
                 card[key] = []
+        if _contains_unnecessary_english_explanation(card):
+            raise ValueError(f"Survey prerequisite card contains untranslated explanatory text for {task.get('task_id')}")
         return {"target": "prerequisite_card", "prerequisite_card": card, "source_sections": source_sections}
 
     if target == "survey_map":
@@ -2791,13 +3104,15 @@ def _normalize_survey_card_result(
         normalized_items = []
         for raw_item in raw_items[:12]:
             item = dict(raw_item) if isinstance(raw_item, dict) else {}
-            if not item:
+            if not item or _is_json_schema_echo(item) or _contains_unnecessary_english_explanation(item):
                 continue
             if not item.get("source_sections"):
                 item["source_sections"] = source_sections
             if not item.get("evidence"):
                 item["evidence"] = item.get("summary") or item.get("why_it_matters") or item.get("core_mechanism") or ""
             _ensure_fact_sources(item, source_sections[0] if source_sections else {})
+            if _is_low_quality_survey_item(str(task.get("group_key") or ""), item):
+                continue
             normalized_items.append(item)
         if not normalized_items:
             raise ValueError(f"No survey map items for {task.get('task_id')}")
@@ -2813,6 +3128,8 @@ def _normalize_survey_card_result(
             card["source_sections"] = source_sections
         if not card.get("card_type"):
             card["card_type"] = (task.get("card_types") or ["reading_route"])[0]
+        if _contains_unnecessary_english_explanation(card):
+            continue
         normalized_cards.append(card)
     if not normalized_cards:
         raise ValueError(f"No cards for {task.get('task_id')}")
@@ -2827,6 +3144,30 @@ def _normalize_survey_card_result(
         "cards": normalized_cards,
         "source_sections": source_sections,
     }
+
+
+def _is_json_schema_echo(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "$schema" in value or "definitions" in value or "$defs" in value:
+        return True
+    return value.get("type") in {"object", "json_object", "array"} and isinstance(value.get("properties"), dict)
+
+
+def _contains_unnecessary_english_explanation(value: Any, field_name: str = "") -> bool:
+    if isinstance(value, dict):
+        return any(
+            _contains_unnecessary_english_explanation(nested, str(key))
+            for key, nested in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_unnecessary_english_explanation(item, field_name) for item in value)
+    if field_name not in CHINESE_EXPLANATORY_FIELDS or not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or re.search(r"[\u4e00-\u9fff]", text):
+        return False
+    return len(re.findall(r"\b[A-Za-z][A-Za-z'-]*\b", text)) >= 4
 
 
 def _build_survey_reading_map_from_card_results(
@@ -2919,11 +3260,36 @@ def _insert_survey_map_item(survey_map: dict[str, Any], group_key: str, item: An
         return
     if _is_low_quality_survey_item(group_key, item):
         return
+    if group_key == "representative_methods" and _is_taxonomy_label_as_method(item):
+        return
     if group_key == "field_overview":
         survey_map["field_overview"] = _dict_with_fallback(item, survey_map.get("field_overview", {}))
         return
     survey_map.setdefault(group_key, [])
+    identity = _survey_item_identity(group_key, item)
+    if identity and any(_survey_item_identity(group_key, existing) == identity for existing in survey_map[group_key]):
+        return
     survey_map[group_key].append(item)
+
+
+def _survey_item_identity(group_key: str, item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    keys = {
+        "technical_routes": ("route_name", "name", "route", "title"),
+        "representative_methods": ("paper_title", "method_name", "name", "title"),
+        "datasets": ("name", "dataset", "title"),
+    }.get(group_key, ("title", "name"))
+    for key in keys:
+        value = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(item.get(key) or "").lower())
+        if value:
+            return value
+    return ""
+
+
+def _is_taxonomy_label_as_method(item: dict[str, Any]) -> bool:
+    title = _survey_item_identity("representative_methods", item)
+    return title in {"edgeandtopologyevolution", "nodeandfeatureevolution"}
 
 
 def _is_low_quality_survey_item(group_key: str, item: dict[str, Any]) -> bool:
@@ -2995,17 +3361,9 @@ def _survey_card_generation_progress(done: int, total: int) -> int:
     return min(94, max(10, int(10 + done / total * 84)))
 
 
-def _survey_partial_has_core_content(reading_map: dict[str, Any]) -> bool:
+def _missing_required_survey_groups(reading_map: dict[str, Any]) -> list[str]:
     survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
-    if not survey:
-        return False
-    has_overview = bool(survey.get("field_overview"))
-    core_groups = sum(
-        1
-        for key in ("taxonomy", "technical_routes", "representative_methods", "datasets", "open_challenges")
-        if survey.get(key)
-    )
-    return has_overview and core_groups >= 2 and bool(reading_map.get("section_guides"))
+    return [key for key in SURVEY_MAP_GROUP_KEYS if not survey.get(key)]
 
 
 def _build_survey_fulltext_reading_map(
@@ -3297,7 +3655,7 @@ def _extract_survey_chunk_facts(
         '  "taxonomy": [{"category": "", "basis": "", "typical_methods": [], "solved_problems": "", "limitations": "", "evidence": "", "source_sections": []}],\n'
         '  "technical_routes": [{"name": "", "core_mechanism": "", "typical_pipeline": [], "strengths": [], "weaknesses": [], "representative_method_ids": [], "evidence": "", "source_sections": []}],\n'
         '  "representative_methods": [{"paper_title": "", "year": "", "method_name": "", "route": "", "method_summary": "", "specific_solution": "", "improves_on": "", "remaining_limits": "", "url": "", "evidence": "", "source_sections": []}],\n'
-        '  "datasets": [{"name": "", "task": "", "content": "", "structure": "", "scale": "", "metrics": [], "url": "", "evidence": "", "source_sections": []}],\n'
+        '  "datasets": [{"name": "", "dataset_type": "", "task": "", "one_sentence_intro": "", "content": "", "structure": "", "scale": "", "metrics": [], "paper_examples": [{"name": "", "usage": ""}], "url": "", "evidence": "", "source_sections": []}],\n'
         '  "evaluation_protocols": [{"protocol": "", "task": "", "metrics": [], "setting": "", "what_it_tests": "", "evidence": "", "source_sections": []}],\n'
         '  "applications": [{"application": "", "scenario": "", "why_suitable": "", "typical_methods": [], "constraints": "", "evidence": "", "source_sections": []}],\n'
         '  "open_challenges": [{"challenge": "", "why_it_matters": "", "current_bottleneck": "", "future_direction": "", "evidence": "", "source_sections": []}],\n'
@@ -3306,7 +3664,8 @@ def _extract_survey_chunk_facts(
         "Every non-empty item must include source_sections with section_id,title,page and an evidence string copied or tightly paraphrased from the chunk. "
         "Limit each list field to at most 5 high-value items, section_guide_candidates to at most 4 items, and each evidence string to at most 160 Chinese characters. "
         "Do not output generic titles such as Item 1 or Point 1. Do not output fragment-only values such as Front. or Comput. "
-        "Do not treat a section title as a representative method. Omit weak facts instead of padding lists. "
+        "Do not treat a section title or taxonomy category such as Edge and Topology Evolution or Node and Feature Evolution as a representative method. "
+        "For dataset-type entries, include concrete paper_examples only when the chunk explicitly names those datasets. Omit weak facts instead of padding lists. "
         "Write Chinese content.\n\n"
         f"Paper title: {paper.get('title', '')}\n"
         f"Abstract: {str(paper.get('abstract') or '')[:1200]}\n"
@@ -3355,10 +3714,10 @@ def _merge_survey_facts(
         "- taxonomy: category, basis, typical_methods, solved_problems, limitations, source_sections, evidence.\n"
         "- technical_routes: name, core_mechanism, typical_pipeline, strengths, weaknesses, representative_method_ids, source_sections, evidence.\n"
         "- representative_methods: paper_title, year, method_name, route, method_summary, specific_solution, improves_on, remaining_limits, url, source_sections, evidence.\n"
-        "- datasets: name, task, content, structure, scale, metrics, url, source_sections, evidence.\n"
+        "- datasets: name, dataset_type, task, one_sentence_intro, content, structure, scale, metrics, paper_examples (concrete names and usage explicitly present in the paper), url, source_sections, evidence.\n"
         "- section_guides_seed: one item per important section with 2-4 cards. Each card content should include core_message, why_it_matters, key_points, connections, next_reading.\n"
-        "For representative_methods, keep concrete paper title/year/method when available; otherwise omit that item. "
-        "For datasets, keep concrete dataset or benchmark names when available; otherwise omit that item. "
+        "For representative_methods, keep concrete paper title/year/method when available; otherwise omit that item. Never turn taxonomy labels such as Edge and Topology Evolution or Node and Feature Evolution into representative methods. "
+        "For datasets, label type and one-sentence introduction, keep concrete dataset or benchmark names when available, and populate paper_examples only from explicit names in the extracted evidence; otherwise omit that example. "
         "Do not output Item 1, Point 1, Front., Comput., or isolated sentence fragments. Do not replace specific facts with generic summaries. "
         "Keep no more than 12 items per list except representative_methods up to 24 and section_guides_seed up to 80 compact items. "
         "Keep evidence concise, at most 160 Chinese characters. Write Chinese.\n\n"
@@ -4621,6 +4980,14 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "outline_entries_count": section_info["outline_entries_count"],
         "parse_status": paper.get("parse_status", ""),
         "parse_error": paper.get("parse_error", ""),
+        "parse_backend": paper.get("parse_backend", ""),
+        "mineru_status": paper.get("mineru_status", ""),
+        "mineru_error": paper.get("mineru_error", ""),
+        "mineru_response_format": paper.get("mineru_response_format", ""),
+        "mineru_images_count": paper.get("mineru_images_count", 0),
+        "mineru_content_list_available": bool(paper.get("mineru_content_list_available")),
+        "mineru_middle_json_available": bool(paper.get("mineru_middle_json_available")),
+        "mineru_artifacts": paper.get("mineru_artifacts", {}),
         "page_count": paper.get("page_count", 0),
         "reading_map": paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending")),
         "reading_map_status": paper.get("reading_map_status", ""),
@@ -4646,6 +5013,47 @@ def _persist_figure_assets(
         asset_name = getattr(figure, "asset_name", "")
         if image_data and asset_name:
             storage.save_figure(paper_id, asset_name, image_data)
+
+
+def _persist_mineru_images(storage: Any, paper_id: str, images: list[Any]) -> None:
+    for image in images:
+        data = getattr(image, "data", b"")
+        asset_name = getattr(image, "asset_name", "")
+        if data and asset_name:
+            storage.save_figure(paper_id, asset_name, data)
+
+
+def _persist_mineru_artifacts(
+    storage: Any,
+    paper_id: str,
+    result: Any,
+    *,
+    normalized_markdown: str,
+) -> dict[str, Any]:
+    artifacts: list[str] = []
+
+    def save(name: str, data: bytes) -> None:
+        if not data:
+            return
+        try:
+            storage.save_mineru_artifact(paper_id, name, data)
+            artifacts.append(name)
+        except Exception as error:
+            logger.warning("Unable to persist MinerU artifact %s for %s: %s", name, paper_id, error)
+
+    save("raw.md", str(getattr(result, "raw_markdown", "") or "").encode("utf-8"))
+    save("normalized.md", normalized_markdown.encode("utf-8"))
+    content_list = getattr(result, "content_list", None)
+    if content_list:
+        save("content_list.json", json.dumps(content_list, ensure_ascii=False).encode("utf-8"))
+    middle_json = getattr(result, "middle_json", None)
+    if middle_json is not None:
+        save("middle.json", json.dumps(middle_json, ensure_ascii=False).encode("utf-8"))
+    return {
+        "files": artifacts,
+        "raw_preserved": "raw.md" in artifacts,
+        "normalized_preserved": "normalized.md" in artifacts,
+    }
 
 
 def _persist_table_assets(

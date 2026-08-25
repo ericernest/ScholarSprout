@@ -850,10 +850,14 @@ class PDFParser:
             "accepted at",
             "camera ready",
             "anonymous authors",
+            "ieee transactions on",
+            "acm transactions on",
         )
         if any(phrase in value for phrase in header_phrases):
             return True
         if re.fullmatch(r"(?:iclr|neurips|nips|icml|acl|emnlp|cvpr|iccv|eccv|aaai|ijcai)\s+\d{4}", value):
+            return True
+        if re.match(r"^(?:ieee|acm)\s+transactions?.*\bvol\.?\s+", value):
             return True
         return False
 
@@ -1362,6 +1366,14 @@ class PDFParser:
         lines = [line.strip() for line in text.split("\n") if line.strip()]
         candidates: list[str] = []
         for line in lines[:20]:
+            line = re.sub(
+                r"^Published\s+in\s+.+?\(\d{1,2}/\d{4}\)\s*",
+                "",
+                line,
+                flags=re.IGNORECASE,
+            ).strip()
+            if not line:
+                continue
             if line.lower() in {"abstract", "摘要"}:
                 break
             if self._looks_like_running_header(line):
