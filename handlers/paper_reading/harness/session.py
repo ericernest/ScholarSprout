@@ -30,6 +30,7 @@ class ReadingSession:
     """论文阅读会话。"""
 
     session_id: str = field(default_factory=lambda: str(uuid4()))
+    conversation_id: str = ""
     paper_id: str = ""
     paper_title: str = ""
     user_id: str = "default"
@@ -78,6 +79,7 @@ class SessionManager:
         parent_session_id: str | None = None,
         fork_context: str = "",
         session_id: str | None = None,
+        conversation_id: str = "",
     ) -> ReadingSession:
         """创建新会话。
 
@@ -93,6 +95,7 @@ class SessionManager:
         """
         session = ReadingSession(
             session_id=session_id or str(uuid4()),
+            conversation_id=conversation_id,
             paper_id=paper_id,
             paper_title=paper_title,
             user_id=user_id,
@@ -123,6 +126,7 @@ class SessionManager:
             for cp in data.pop("checkpoints", [])
         ]
         data.pop("_last_checkpoint", None)  # 清理内部字段
+        data.pop("dialogue_conversation_id", None)  # storage-only identity
         return ReadingSession(checkpoints=checkpoints, **data)
 
     # ── 暂停与恢复 ──

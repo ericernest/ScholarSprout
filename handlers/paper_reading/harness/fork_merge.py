@@ -90,6 +90,7 @@ class ForkMergeManager:
             user_id=user_id,
             parent_session_id=parent_session_id,
             fork_context=fork_context,
+            conversation_id=parent.conversation_id,
         )
 
         # 设置 fork 专用 skills
@@ -158,15 +159,21 @@ class ForkMergeManager:
         fork_memory: dict[str, Any] | None = None
         if self._memory_service is not None and self._research_store is not None:
             try:
+                parent_dialogue_id = self._research_store.get_reading_dialogue_conversation_id(
+                    parent.session_id
+                )
+                fork_dialogue_id = self._research_store.get_reading_dialogue_conversation_id(
+                    fork.session_id
+                )
                 fork_memory = self._research_store.get_fork_memory_link(
-                    parent.session_id, fork.session_id
+                    parent_dialogue_id, fork_dialogue_id
                 )
                 if fork_memory is None:
-                    fork_memory = self._memory_service.finalize_conversation(fork.session_id)
+                    fork_memory = self._memory_service.finalize_conversation(fork_dialogue_id)
                     if fork_memory is not None:
                         self._research_store.link_fork_memory(
-                            parent.session_id,
-                            fork.session_id,
+                            parent_dialogue_id,
+                            fork_dialogue_id,
                             str(fork_memory["memory_snapshot_id"]),
                         )
             except Exception as error:

@@ -18,7 +18,8 @@ let currentMode = "chat";
 let isGenerating = false;
 let activeResponseController = null;
 let selectedPaperFile = null;
-let activePaperConversation = null;
+let activeDiscussion = null;
+let conversationContexts = [];
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -39,6 +40,8 @@ const paperFileInput = document.querySelector("#paper-file-input");
 const paperFileButton = document.querySelector("#paper-file-button");
 const paperFileLabel = document.querySelector("#paper-file-label");
 const paperUrlInput = document.querySelector("#paper-url-input");
+const discussionBar = document.querySelector("#discussion-context-bar");
+const discussionSelect = document.querySelector("#discussion-context-select");
 
 bindChatPage();
 startParticleField();
@@ -101,6 +104,19 @@ function bindChatPage() {
     await sendMessage();
   });
 
+  discussionSelect?.addEventListener("change", () => {
+    activeDiscussion = conversationContexts.find((item) => contextKey(item) === discussionSelect.value) || null;
+    const params = new URLSearchParams(window.location.search);
+    if (activeDiscussion) {
+      params.set("context_kind", activeDiscussion.kind);
+      params.set("context_id", activeDiscussion.id);
+    } else {
+      params.delete("context_kind");
+      params.delete("context_id");
+    }
+    window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
+  });
+
   paperFileButton.addEventListener("click", () => paperFileInput.click());
   paperFileInput.addEventListener("change", () => {
     setSelectedPaperFile(paperFileInput.files?.[0] || null);
@@ -133,31 +149,35 @@ async function restoreConversationHistory() {
     const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
-    activePaperConversation = null;
+    conversationContexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    restoreDiscussionSelector();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
-    if (!history.length && !conversation.reading_session_id) return;
+    if (!history.length && !conversationContexts.length) return;
     messages.replaceChildren();
-    await restorePaperReadingCard(conversation);
-    history.forEach((message) => {
-      if (message.role === "assistant" && message.mode === "domain_onboarding") {
-        restoreDomainOnboardingCard();
-        return;
+    const timeline = [
+      ...history.map((message) => ({ type: "message", time: message.created_at || "", value: message })),
+      ...conversationContexts.map((context) => ({ type: "context", time: context.linked_at || "", value: context })),
+    ].sort((left, right) => String(left.time).localeCompare(String(right.time)));
+    for (const entry of timeline) {
+      if (entry.type === "context") {
+        if (entry.value.kind === "paper_reading") await restorePaperReadingCard(entry.value);
+        if (entry.value.kind === "domain_onboarding") restoreDomainContextCard(entry.value);
+        continue;
       }
+      const message = entry.value;
+      if (message.role === "assistant" && message.mode === "domain_onboarding") continue;
       if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
-    });
-    if (conversation.reading_session_id) messages.scrollTop = 0;
+    }
+    messages.scrollTop = messages.scrollHeight;
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
 }
 
-async function restorePaperReadingCard(conversation) {
-  const paperId = String(conversation.paper_id || "").trim();
-  const readingSessionId = String(conversation.reading_session_id || "").trim();
+async function restorePaperReadingCard(context) {
+  const paperId = String(context.paper_id || "").trim();
+  const readingSessionId = String(context.id || "").trim();
   if (!paperId || !readingSessionId) return;
-  if (conversation.workspace_kind === "paper_reading") {
-    activePaperConversation = { paperId, sessionId: readingSessionId };
-  }
   try {
     const detail = await callPaperReading({
       action: "get_paper_detail", session_id: readingSessionId, paper_id: paperId, content: "", metadata: {},
@@ -166,16 +186,56 @@ async function restorePaperReadingCard(conversation) {
       paperId,
       sessionId: readingSessionId,
       sourceLabel: "当前论文精读",
-      placement: "prepend",
     });
   } catch {
-    appendPaperCard({ title: conversation.title || "当前论文精读", parse_status: "" }, {
+    appendPaperCard({ title: context.title || "当前论文精读", parse_status: "" }, {
       paperId,
       sessionId: readingSessionId,
       sourceLabel: "当前论文精读",
-      placement: "prepend",
     });
   }
+}
+
+function restoreDomainContextCard(context) {
+  if (!context?.id || document.querySelector(`.domain-card-message[data-task-id="${CSS.escape(context.id)}"]`)) return;
+  const item = document.createElement("article");
+  item.className = "message assistant domain-card-message";
+  item.dataset.taskId = context.id;
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "domain-chat-card";
+  card.innerHTML = `
+    <span class="paper-card-kicker">DOMAIN ONBOARDING · 已保存</span>
+    <strong>${escapeHtml(context.title || "领域入门")}</strong>
+    <span class="domain-card-copy">继续查看领域概览、学习路线与论文清单。</span>
+    <span class="paper-card-enter">进入领域学习工作台 <b>↗</b></span>
+  `;
+  card.addEventListener("click", () => {
+    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(context.id)}`;
+  });
+  item.append(card);
+  messages.append(item);
+}
+
+function contextKey(context) {
+  return `${context?.kind || ""}:${context?.id || ""}`;
+}
+
+function restoreDiscussionSelector() {
+  if (!discussionSelect || !discussionBar) return;
+  discussionSelect.replaceChildren(new Option("不指定", ""));
+  conversationContexts.forEach((context) => {
+    const kind = context.kind === "paper_reading" ? "论文" : "领域";
+    discussionSelect.append(new Option(`${kind}：${context.title || "未命名"}`, contextKey(context)));
+  });
+  const params = new URLSearchParams(window.location.search);
+  const requested = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  activeDiscussion = conversationContexts.find((item) => contextKey(item) === requested)
+    || conversationContexts.find((item) => contextKey(item) === contextKey(activeDiscussion))
+    || conversationContexts.at(-1)
+    || null;
+  discussionSelect.value = activeDiscussion ? contextKey(activeDiscussion) : "";
+  discussionBar.hidden = !conversationContexts.length;
 }
 
 // Close mode menu and sync accessibility state.
@@ -246,32 +306,22 @@ async function sendMessage() {
     const controller = new AbortController();
     activeResponseController = controller;
     const streaming = appendStreamingMessage();
-    const paperContext = requestMode === "chat" ? activePaperConversation : null;
-    const currentPaperId = localStorage.getItem("paper_reading_paper_id") || "";
-    const targetSection = currentPaperId === paperContext?.paperId
-      ? (localStorage.getItem("paper_reading_current_section") || "")
-      : "";
-    const response = await fetch(`${paperContext ? "/paper_reading" : endpoint}/stream`, {
+    const response = await fetch(`${endpoint}/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(paperContext ? {
-        action: "start_reading",
-        session_id: paperContext.sessionId,
-        paper_id: paperContext.paperId,
-        target_section: targetSection,
-        content,
-        user_id: "local-web",
-        metadata: {
-          source_view: "chat",
-          source_section_id: targetSection,
-        },
-      } : {
+      body: JSON.stringify({
         session_id: sessionId,
         content,
         user_id: "local-web",
-        metadata: {},
+        metadata: activeDiscussion ? {
+          active_context: {
+            kind: activeDiscussion.kind,
+            id: activeDiscussion.id,
+            title: activeDiscussion.title || "",
+          },
+        } : {},
       }),
       signal: controller.signal,
     });
@@ -280,10 +330,9 @@ async function sendMessage() {
       (delta) => streaming.append(delta),
       (delta) => streaming.appendReasoning(delta),
     );
-    const paperReply = data?.data?.agent_response;
     streaming.finish(
-      typeof paperReply === "string" ? paperReply : extractReply(data),
-      data?.data?.reasoning || data?.reasoning || "",
+      extractReply(data),
+      data?.reasoning || "",
     );
   } catch (error) {
     if (error.name === "AbortError") {
@@ -438,6 +487,12 @@ function appendDomainOnboardingCard(job, query) {
   item.append(card, cancel);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
+  if (!conversationContexts.some((context) => contextKey(context) === `domain_onboarding:${job.task_id}`)) {
+    conversationContexts.push({ kind: "domain_onboarding", id: job.task_id, title: query });
+  }
+  activeDiscussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`) || activeDiscussion;
+  restoreDiscussionSelector();
+  if (activeDiscussion) discussionSelect.value = contextKey(activeDiscussion);
 }
 
 // Keep the chat card useful while the user decides when to open the workspace.
@@ -588,14 +643,17 @@ async function submitPaper() {
     clearPreviousPaperSession();
     const createdSession = await callPaperReading({
       action: "create_session",
-      session_id: sessionId,
+      session_id: "",
+      conversation_id: sessionId,
       paper_id: paperId,
       content: "",
       metadata: {},
     });
-    const readingSessionId = createdSession.data?.session_id || sessionId;
+    const readingSessionId = createdSession.data?.session_id || "";
+    if (!readingSessionId) throw new Error("创建论文精读后未返回 reading session ID。");
     localStorage.setItem("paper_reading_paper_id", paperId);
     localStorage.setItem("paper_reading_session_id", readingSessionId);
+    localStorage.setItem("paper_reading_conversation_id", sessionId);
     const detail = await callPaperReading({
       action: "get_paper_detail",
       session_id: "",
@@ -609,6 +667,16 @@ async function submitPaper() {
       sourceLabel,
       kgBuild: upload.data?.kg_build || {},
     });
+    const discussion = {
+      kind: "paper_reading",
+      id: readingSessionId,
+      paper_id: paperId,
+      title: detail.data?.paper?.title || "当前论文",
+    };
+    conversationContexts.push(discussion);
+    activeDiscussion = discussion;
+    restoreDiscussionSelector();
+    discussionSelect.value = contextKey(discussion);
     watchPaperCard(paperCard, paperId, sourceLabel);
     resetPaperComposer();
   } catch (error) {
@@ -663,8 +731,9 @@ function appendPaperCard(paper, context) {
   card.addEventListener("click", () => {
     localStorage.setItem("paper_reading_paper_id", context.paperId);
     if (context.sessionId) localStorage.setItem("paper_reading_session_id", context.sessionId);
+    localStorage.setItem("paper_reading_conversation_id", sessionId);
     const query = context.sessionId
-      ? `?paper_id=${encodeURIComponent(context.paperId)}&session_id=${encodeURIComponent(context.sessionId)}`
+      ? `?paper_id=${encodeURIComponent(context.paperId)}&session_id=${encodeURIComponent(context.sessionId)}&conversation_id=${encodeURIComponent(sessionId)}`
       : "";
     window.location.href = `/app/paper-reading${query}`;
   });

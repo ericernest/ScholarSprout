@@ -242,6 +242,44 @@ class ResearchCatalog:
                    ORDER BY updated_at DESC LIMIT 1""",
                 (conversation_id,),
             ).fetchone()
+            context_rows = connection.execute(
+                """SELECT artifact.artifact_kind, artifact.artifact_id, artifact.title,
+                          link.linked_at, reading.reading_session_id, reading.paper_id,
+                          paper.title AS paper_title, domain.query AS domain_query
+                   FROM conversation_artifacts link
+                   JOIN work_artifacts artifact ON artifact.artifact_id = link.artifact_id
+                   LEFT JOIN paper_reading_sessions reading ON reading.artifact_id = artifact.artifact_id
+                   LEFT JOIN papers paper ON paper.paper_id = reading.paper_id
+                   LEFT JOIN domain_onboardings domain ON domain.artifact_id = artifact.artifact_id
+                   WHERE link.conversation_id = ?
+                   ORDER BY link.linked_at""",
+                (conversation_id,),
+            ).fetchall()
+        contexts = []
+        seen_contexts: set[tuple[str, str]] = set()
+        for row in context_rows:
+            kind = str(row["artifact_kind"] or "")
+            context_id = (
+                str(row["reading_session_id"] or "")
+                if kind == "paper_reading"
+                else str(row["artifact_id"])
+            )
+            title = str(row["paper_title"] or row["domain_query"] or row["title"] or "")
+            identity = (kind, context_id)
+            if (
+                context_id
+                and kind in {"paper_reading", "domain_onboarding"}
+                and identity not in seen_contexts
+            ):
+                seen_contexts.add(identity)
+                contexts.append({
+                    "kind": kind,
+                    "id": context_id,
+                    "artifact_id": str(row["artifact_id"]),
+                    "paper_id": str(row["paper_id"] or ""),
+                    "title": title,
+                    "linked_at": str(row["linked_at"]),
+                })
         return {
             "conversation_id": conversation["conversation_id"],
             "title": _conversation_display_title(conversation["title"]),
@@ -253,6 +291,7 @@ class ResearchCatalog:
             "workspace_artifact_id": workspace["artifact_id"] if workspace else "",
             "reading_session_id": reading["reading_session_id"] if reading else "",
             "paper_id": reading["paper_id"] if reading else "",
+            "contexts": contexts,
             "messages": [dict(row) for row in messages],
         }
 

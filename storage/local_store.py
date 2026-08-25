@@ -18,7 +18,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _now() -> str:
@@ -280,11 +280,22 @@ class LocalResearchStore:
                     memory_snapshot_id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
                     through_message_id TEXT REFERENCES messages(message_id),
+                    schema_version TEXT NOT NULL DEFAULT 'conversation-memory-v1',
                     current_goal TEXT NOT NULL DEFAULT '',
                     confirmed_decisions_json TEXT NOT NULL DEFAULT '[]',
                     open_questions_json TEXT NOT NULL DEFAULT '[]',
                     summary TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_memory_facts (
+                    memory_fact_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    fact_text TEXT NOT NULL,
+                    source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL CHECK(status IN ('active', 'superseded')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS conversation_memory_merges (
@@ -305,6 +316,8 @@ class LocalResearchStore:
                     ON paper_annotations(paper_id, page_number, created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_snapshots_conversation
                     ON conversation_memory_snapshots(conversation_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_facts_conversation
+                    ON conversation_memory_facts(conversation_id, status, updated_at DESC);
                 """
             )
             self._ensure_column(connection, "conversations", "user_id", "TEXT")
@@ -315,6 +328,18 @@ class LocalResearchStore:
                 connection, "messages", "channel", "TEXT NOT NULL DEFAULT 'web'"
             )
             self._ensure_column(connection, "paper_reading_sessions", "user_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "paper_reading_sessions",
+                "dialogue_conversation_id",
+                "TEXT REFERENCES conversations(conversation_id)",
+            )
+            self._ensure_column(
+                connection,
+                "conversation_memory_snapshots",
+                "schema_version",
+                "TEXT NOT NULL DEFAULT 'conversation-memory-v1'",
+            )
             self._migrate_folder_name_uniqueness(connection)
             # Tags were removed from the V1 product in schema v6. Drop the old
             # join table first so existing local databases migrate cleanly.
@@ -339,6 +364,7 @@ class LocalResearchStore:
                 "progress_json",
                 "TEXT NOT NULL DEFAULT '{}'",
             )
+            self._migrate_paper_reading_dialogues(connection)
             self._repair_cross_conversation_memory_watermarks(connection)
             connection.execute(
                 "INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (?, ?)",
@@ -360,6 +386,45 @@ class LocalResearchStore:
                        AND messages.conversation_id = conversation_memory_snapshots.conversation_id
                  )"""
         )
+
+    @staticmethod
+    def _migrate_paper_reading_dialogues(connection: sqlite3.Connection) -> None:
+        """Move legacy paper-sidebar messages out of their main chat carrier."""
+        rows = connection.execute(
+            """SELECT reading_session_id, conversation_id, user_id
+               FROM paper_reading_sessions
+               WHERE dialogue_conversation_id IS NULL OR dialogue_conversation_id = ''"""
+        ).fetchall()
+        for row in rows:
+            session_id = str(row["reading_session_id"])
+            carrier_id = str(row["conversation_id"])
+            dialogue_id = f"paper-reading-dialogue:{session_id}"
+            now = _now()
+            connection.execute(
+                """INSERT OR IGNORE INTO conversations(
+                       conversation_id, title, user_id, state, parent_conversation_id,
+                       created_at, last_active_at)
+                   VALUES (?, ?, ?, 'active', ?, ?, ?)""",
+                (dialogue_id, "论文精读右栏讨论", row["user_id"], carrier_id, now, now),
+            )
+            legacy = connection.execute(
+                """SELECT message_id FROM messages
+                   WHERE conversation_id = ? AND mode = 'paper_reading'
+                   ORDER BY sequence_number""",
+                (carrier_id,),
+            ).fetchall()
+            for sequence, message in enumerate(legacy, start=1):
+                connection.execute(
+                    """UPDATE messages
+                       SET conversation_id = ?, sequence_number = ?
+                       WHERE message_id = ?""",
+                    (dialogue_id, sequence, message["message_id"]),
+                )
+            connection.execute(
+                """UPDATE paper_reading_sessions
+                   SET dialogue_conversation_id = ? WHERE reading_session_id = ?""",
+                (dialogue_id, session_id),
+            )
 
     @staticmethod
     def _migrate_folder_name_uniqueness(connection: sqlite3.Connection) -> None:
@@ -962,11 +1027,21 @@ class LocalResearchStore:
         paper_title = str(data.get("paper_title") or paper_id)
         self.ensure_paper_reference(paper_id, title=paper_title)
         parent_session_id = str(data.get("parent_session_id") or "") or None
+        conversation_id = str(data.get("conversation_id") or session_id)
+        dialogue_conversation_id = f"paper-reading-dialogue:{session_id}"
+        parent_dialogue_id = (
+            f"paper-reading-dialogue:{parent_session_id}" if parent_session_id else conversation_id
+        )
         self.ensure_conversation(
-            session_id,
+            conversation_id,
             title=paper_title[:70],
             user_id=str(data.get("user_id") or "") or None,
-            parent_conversation_id=parent_session_id,
+        )
+        self.ensure_conversation(
+            dialogue_conversation_id,
+            title=f"{paper_title[:54]} · 右栏讨论",
+            user_id=str(data.get("user_id") or "") or None,
+            parent_conversation_id=parent_dialogue_id,
         )
         artifact_id = f"paper-reading:{session_id}"
         artifact_state = {
@@ -988,13 +1063,15 @@ class LocalResearchStore:
         with self._connection() as connection:
             connection.execute(
                 """INSERT INTO paper_reading_sessions(
-                   reading_session_id, artifact_id, paper_id, conversation_id, parent_reading_session_id,
+                   reading_session_id, artifact_id, paper_id, conversation_id, dialogue_conversation_id, parent_reading_session_id,
                    user_id, fork_context, state, current_section_id, current_paragraph_index, total_sections,
                    active_skills_json, completed_sections_json, section_statuses_json, progress_json,
                    created_at, updated_at, completed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(reading_session_id) DO UPDATE SET
-                   paper_id = excluded.paper_id, parent_reading_session_id = excluded.parent_reading_session_id,
+                   paper_id = excluded.paper_id, conversation_id = excluded.conversation_id,
+                   dialogue_conversation_id = excluded.dialogue_conversation_id,
+                   parent_reading_session_id = excluded.parent_reading_session_id,
                    user_id = excluded.user_id, fork_context = excluded.fork_context, state = excluded.state,
                    current_section_id = excluded.current_section_id, current_paragraph_index = excluded.current_paragraph_index,
                    total_sections = excluded.total_sections, active_skills_json = excluded.active_skills_json,
@@ -1004,7 +1081,8 @@ class LocalResearchStore:
                     session_id,
                     artifact_id,
                     paper_id,
-                    session_id,
+                    conversation_id,
+                    dialogue_conversation_id,
                     parent_session_id,
                     str(data.get("user_id") or "") or None,
                     str(data.get("fork_context") or ""),
@@ -1021,7 +1099,8 @@ class LocalResearchStore:
                     completed_at,
                 ),
             )
-            self._link_artifact(connection, session_id, artifact_id, "created")
+            if parent_session_id is None:
+                self._link_artifact(connection, conversation_id, artifact_id, "created")
             connection.execute(
                 "DELETE FROM reading_checkpoints WHERE reading_session_id = ?", (session_id,)
             )
@@ -1061,6 +1140,8 @@ class LocalResearchStore:
             ).fetchall()
         return {
             "session_id": row["reading_session_id"],
+            "conversation_id": row["conversation_id"],
+            "dialogue_conversation_id": row["dialogue_conversation_id"] or row["reading_session_id"],
             "paper_id": row["paper_id"],
             "paper_title": self._paper_title(str(row["paper_id"])),
             "user_id": row["user_id"] or "default",
@@ -1087,6 +1168,36 @@ class LocalResearchStore:
             "fork_sessions": [item["reading_session_id"] for item in fork_rows],
             "fork_context": row["fork_context"],
         }
+
+    def get_reading_session_record(self, session_id: str) -> dict[str, Any] | None:
+        """Return the stable carrier/dialogue identity for one reading session."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT reading_session_id, conversation_id, dialogue_conversation_id,
+                          paper_id, parent_reading_session_id, state,
+                          current_section_id, progress_json, updated_at
+                   FROM paper_reading_sessions WHERE reading_session_id = ?""",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "reading_session_id": str(row["reading_session_id"]),
+            "conversation_id": str(row["conversation_id"]),
+            "dialogue_conversation_id": str(
+                row["dialogue_conversation_id"] or f"paper-reading-dialogue:{session_id}"
+            ),
+            "paper_id": str(row["paper_id"]),
+            "parent_reading_session_id": str(row["parent_reading_session_id"] or ""),
+            "state": str(row["state"]),
+            "current_section_id": str(row["current_section_id"] or ""),
+            "progress": json.loads(row["progress_json"] or "{}"),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def get_reading_dialogue_conversation_id(self, session_id: str) -> str:
+        record = self.get_reading_session_record(session_id)
+        return str(record["dialogue_conversation_id"]) if record else session_id
 
     def list_reading_session_snapshots(self, paper_id: str | None = None) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -1168,24 +1279,16 @@ class LocalResearchStore:
                 raise ValueError("through_message_id must belong to the same conversation")
             previous = connection.execute(
                 """SELECT through_message_id FROM conversation_memory_snapshots
-                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                   WHERE conversation_id = ? AND schema_version = 'conversation-memory-v2'
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
                 (conversation_id,),
             ).fetchone()
             previous_through = str(previous["through_message_id"]) if previous and previous["through_message_id"] else None
             if check_expected and previous_through != expected_previous_through_message_id:
                 raise RuntimeError("conversation memory watermark changed concurrently")
             connection.execute(
-                """DELETE FROM conversation_memory_snapshots
-                   WHERE conversation_id = ?
-                     AND NOT EXISTS (
-                         SELECT 1 FROM conversation_memory_merges merge
-                         WHERE merge.source_memory_snapshot_id = conversation_memory_snapshots.memory_snapshot_id
-                     )""",
-                (conversation_id,),
-            )
-            connection.execute(
-                """INSERT INTO conversation_memory_snapshots(memory_snapshot_id, conversation_id, through_message_id, current_goal,
-                   confirmed_decisions_json, open_questions_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO conversation_memory_snapshots(memory_snapshot_id, conversation_id, through_message_id, schema_version, current_goal,
+                   confirmed_decisions_json, open_questions_json, summary, created_at) VALUES (?, ?, ?, 'conversation-memory-v2', ?, ?, ?, ?, ?)""",
                 (
                     snapshot_id,
                     conversation_id,
@@ -1199,11 +1302,98 @@ class LocalResearchStore:
             )
         return snapshot_id
 
+    def apply_memory_fact_changes(
+        self,
+        conversation_id: str,
+        *,
+        facts_to_add: list[dict[str, Any]],
+        fact_ids_to_supersede: list[str],
+    ) -> None:
+        """Apply model-proposed fact deltas without allowing omission to erase old facts."""
+        now = _now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for fact_id in dict.fromkeys(str(item) for item in fact_ids_to_supersede):
+                connection.execute(
+                    """UPDATE conversation_memory_facts
+                       SET status = 'superseded', updated_at = ?
+                       WHERE memory_fact_id = ? AND conversation_id = ?""",
+                    (now, fact_id, conversation_id),
+                )
+            for item in facts_to_add:
+                text = " ".join(str(item.get("text") or "").split()).strip()
+                source_ids = list(
+                    dict.fromkeys(str(value) for value in item.get("source_message_ids") or [])
+                )
+                if not text or not source_ids:
+                    continue
+                placeholders = ",".join("?" for _ in source_ids)
+                rows = connection.execute(
+                    f"""SELECT message_id FROM messages
+                        WHERE conversation_id = ? AND role = 'user'
+                          AND message_id IN ({placeholders})""",
+                    (conversation_id, *source_ids),
+                ).fetchall()
+                valid_ids = [str(row["message_id"]) for row in rows]
+                if not valid_ids:
+                    continue
+                existing = connection.execute(
+                    """SELECT memory_fact_id, source_message_ids_json
+                       FROM conversation_memory_facts
+                       WHERE conversation_id = ? AND status = 'active'
+                         AND lower(fact_text) = lower(?)
+                       ORDER BY updated_at DESC LIMIT 1""",
+                    (conversation_id, text),
+                ).fetchone()
+                if existing is not None:
+                    merged_sources = list(
+                        dict.fromkeys(
+                            [*json.loads(existing["source_message_ids_json"] or "[]"), *valid_ids]
+                        )
+                    )
+                    connection.execute(
+                        """UPDATE conversation_memory_facts
+                           SET source_message_ids_json = ?, updated_at = ?
+                           WHERE memory_fact_id = ?""",
+                        (_json(merged_sources), now, existing["memory_fact_id"]),
+                    )
+                    continue
+                connection.execute(
+                    """INSERT INTO conversation_memory_facts(
+                           memory_fact_id, conversation_id, fact_text,
+                           source_message_ids_json, status, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+                    (_id("memory_fact"), conversation_id, text, _json(valid_ids), now, now),
+                )
+
+    def list_active_memory_facts(self, conversation_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM conversation_memory_facts
+                   WHERE conversation_id = ? AND status = 'active'
+                   ORDER BY updated_at DESC, rowid DESC""",
+                (conversation_id,),
+            ).fetchall()
+        return [
+            {
+                "memory_fact_id": str(row["memory_fact_id"]),
+                "conversation_id": str(row["conversation_id"]),
+                "text": str(row["fact_text"]),
+                "source_message_ids": json.loads(row["source_message_ids_json"] or "[]"),
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
     def get_latest_memory(self, conversation_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
                 """SELECT * FROM conversation_memory_snapshots
-                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                   WHERE conversation_id = ?
+                   ORDER BY (schema_version = 'conversation-memory-v2') DESC,
+                            created_at DESC, rowid DESC LIMIT 1""",
                 (conversation_id,),
             ).fetchone()
         return self._memory_row(row) if row is not None else None
@@ -1217,7 +1407,8 @@ class LocalResearchStore:
             connection.execute("BEGIN")
             memory_row = connection.execute(
                 """SELECT * FROM conversation_memory_snapshots
-                   WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                   WHERE conversation_id = ? AND schema_version = 'conversation-memory-v2'
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
                 (conversation_id,),
             ).fetchone()
             through_message_id = (
@@ -1261,11 +1452,26 @@ class LocalResearchStore:
                    ORDER BY merge.merged_at""",
                 (conversation_id,),
             ).fetchall()
+            fact_rows = connection.execute(
+                """SELECT * FROM conversation_memory_facts
+                   WHERE conversation_id = ? AND status = 'active'
+                   ORDER BY updated_at DESC, rowid DESC LIMIT 32""",
+                (conversation_id,),
+            ).fetchall()
         return {
             "memory": self._memory_row(memory_row) if memory_row is not None else None,
             "through_message_id": through_message_id,
             "messages_to_compress": [dict(row) for row in overflow],
             "recent_messages": [dict(row) for row in recent],
+            "active_facts": [
+                {
+                    "memory_fact_id": str(row["memory_fact_id"]),
+                    "text": str(row["fact_text"]),
+                    "source_message_ids": json.loads(row["source_message_ids_json"] or "[]"),
+                    "updated_at": str(row["updated_at"]),
+                }
+                for row in fact_rows
+            ],
             "linked_forks": [
                 {**self._memory_row(row), "conversation_id": str(row["fork_conversation_id"])}
                 for row in fork_rows
@@ -1315,7 +1521,7 @@ class LocalResearchStore:
             "memory_snapshot_id": str(row["memory_snapshot_id"]),
             "conversation_id": str(row["conversation_id"]),
             "through_message_id": str(row["through_message_id"]) if row["through_message_id"] else None,
-            "schema_version": "conversation-memory-v1",
+            "schema_version": str(row["schema_version"] or "conversation-memory-v1"),
             "current_goal": str(row["current_goal"] or ""),
             "summary": str(row["summary"] or ""),
             "confirmed_decisions": json.loads(row["confirmed_decisions_json"] or "[]"),

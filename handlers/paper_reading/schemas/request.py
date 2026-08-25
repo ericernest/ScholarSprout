@@ -38,7 +38,11 @@ class PaperReadingRequest(BaseModel):
     # ── 通用字段 ──
     session_id: str = Field(
         default="",
-        description="会话 ID（首次请求为空字符串，系统自动创建）",
+        description="论文精读会话 ID（首次请求为空字符串，系统自动创建）",
+    )
+    conversation_id: str = Field(
+        default="",
+        description="承载论文精读成果的主聊天会话 ID",
     )
     paper_id: str = Field(
         default="",

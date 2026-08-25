@@ -272,6 +272,31 @@ h1 {
   scrollbar-color: rgba(102, 245, 214, 0.36) transparent;
 }
 
+.discussion-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 18px 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(123, 110, 93, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 252, 246, 0.78);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.discussion-context-bar[hidden] { display: none; }
+.discussion-context-bar label { color: var(--ink); font-weight: 650; white-space: nowrap; }
+.discussion-context-bar select {
+  min-width: 0;
+  max-width: min(520px, 55vw);
+  padding: 5px 28px 5px 8px;
+  border: 1px solid rgba(123, 110, 93, 0.28);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+
 .messages::-webkit-scrollbar {
   width: 8px;
 }

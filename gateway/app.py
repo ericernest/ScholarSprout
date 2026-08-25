@@ -493,7 +493,7 @@ def start_gateway_server(host: str, port: int) -> None:
     set_kg_builder(kg_builder)
     message_bus = MessageBus()
     input_channel = WebChannel(bus=message_bus)
-    tool_registry = create_builtin_tool_registry()
+    tool_registry = create_builtin_tool_registry(research_storage)
     skill_registry = create_skill_registry()
     capability_selector = CapabilitySelector()
     input_channel.start()

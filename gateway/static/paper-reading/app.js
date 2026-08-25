@@ -3,6 +3,7 @@ const WORKSPACE_PATH = "/app/paper-reading";
 const isDedicatedWorkspace = window.location.pathname === WORKSPACE_PATH;
 const STORAGE = {
   session: "paper_reading_session_id",
+  conversation: "paper_reading_conversation_id",
   paper: "paper_reading_paper_id",
   section: "paper_reading_current_section",
   scroll: "paper_reading_scroll_top",
@@ -29,7 +30,7 @@ const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
 const READING_MAP_STALE_AFTER_MS = 180000;
 
 const state = {
-  sessionId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
+  sessionId: "", conversationId: "", dialogueConversationId: "", paperId: "", paper: null, pdfUrl: "", hasPdf: false,
   paperIndex: null, parseQuality: "", textLayerAvailable: false,
   sectionExtractionSource: "", sectionExtractionStatus: "", sectionExtractionMessage: "", outlineEntriesCount: 0,
   parseStatus: "", readingMapStatus: "", readingMapPhase: "", readingMapProgress: 0, readingMapError: "", readingMapCardProgress: null, readingMap: null, readingMapStartedAt: 0, readingMapHeartbeatAt: "", parsePollTimer: null,
@@ -363,6 +364,7 @@ async function callPaperReading(body, options = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       session_id: body.session_id ?? state.sessionId ?? "",
+      conversation_id: body.conversation_id ?? state.conversationId ?? "",
       paper_id: body.paper_id ?? state.paperId ?? "",
       content: body.content ?? "",
       metadata: body.metadata ?? {},
@@ -709,6 +711,7 @@ async function ensureReadingSession() {
       paper_id: state.paperId,
     });
     state.sessionId = payload.data?.session_id || payload.session?.session_id || "";
+    state.conversationId = payload.data?.conversation_id || payload.session?.conversation_id || state.conversationId;
     state.sessionState = payload.session?.state || state.sessionState;
     state.progress = payload.progress || state.progress;
     if (!state.sessionId) throw new Error("创建阅读会话后未返回 session_id。");
@@ -2239,6 +2242,7 @@ function applyReadingPayload(payload, options = {}) {
   const data = payload.data || {};
   const session = payload.session || {};
   state.sessionId = session.session_id || data.session_id || state.sessionId;
+  state.conversationId = session.conversation_id || data.conversation_id || state.conversationId;
   state.sessionState = session.state || "active";
   state.currentSection = data.current_section || session.current_section || state.currentSection;
   state.activeSkills = session.active_skills || state.activeSkills;
@@ -2276,7 +2280,9 @@ function appendReadingWelcome(target = $("analysis-feed")) {
 async function restoreReadingConversationHistory() {
   if (!state.sessionId || state.historyLoadedFor === state.sessionId) return;
   try {
-    const response = await fetch(`/api/research/conversations/${encodeURIComponent(state.sessionId)}`, { cache: "no-store" });
+    if (!state.dialogueConversationId) await refreshSessionState(false);
+    const historyId = state.dialogueConversationId || `paper-reading-dialogue:${state.sessionId}`;
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(historyId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
     const history = (conversation.messages || []).filter((message) => ["user", "assistant"].includes(message.role));
@@ -2789,6 +2795,8 @@ async function refreshSessionState(showToast = true) {
     const { payload } = await callPaperReading({ action: "get_session_state", session_id: state.sessionId });
     const data = payload.data || {};
     state.paperId = data.paper_id || state.paperId;
+    state.conversationId = data.conversation_id || state.conversationId;
+    state.dialogueConversationId = data.dialogue_conversation_id || state.dialogueConversationId;
     state.sessionState = data.state || state.sessionState;
     state.activeSkills = data.active_skills || state.activeSkills;
     state.progress = payload.progress || state.progress;
@@ -4026,10 +4034,14 @@ async function restoreLocalState() {
   const params = new URLSearchParams(window.location.search);
   const requestedPaper = params.get("paper_id");
   const requestedSession = params.get("session_id");
+  const requestedConversation = params.get("conversation_id");
   state.paperId = requestedPaper || localStorage.getItem(STORAGE.paper) || "";
   state.sessionId = requestedSession !== null
     ? requestedSession
     : (requestedPaper ? "" : localStorage.getItem(STORAGE.session) || "");
+  state.conversationId = requestedConversation !== null
+    ? requestedConversation
+    : (requestedPaper && !requestedSession ? "" : localStorage.getItem(STORAGE.conversation) || "");
   state.currentSection = localStorage.getItem(STORAGE.section) || "";
   if (!state.paperId && !state.sessionId) {
     if (isDedicatedWorkspace) window.location.replace("/app?mode=paper_reading");
@@ -4064,6 +4076,8 @@ function persistState() {
   syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);
+  if (state.conversationId) localStorage.setItem(STORAGE.conversation, state.conversationId);
+  else localStorage.removeItem(STORAGE.conversation);
   if (state.paperId) localStorage.setItem(STORAGE.paper, state.paperId);
   else localStorage.removeItem(STORAGE.paper);
   if (state.currentSection) localStorage.setItem(STORAGE.section, state.currentSection);
@@ -4079,8 +4093,8 @@ function setNavigatorWidth(width, persist = true) {
 function syncReturnChatLink() {
   const link = $("return-chat-link");
   if (!link) return;
-  link.href = state.sessionId
-    ? `/app?conversation_id=${encodeURIComponent(state.sessionId)}`
+  link.href = state.conversationId
+    ? `/app?conversation_id=${encodeURIComponent(state.conversationId)}&context_kind=paper_reading&context_id=${encodeURIComponent(state.sessionId)}`
     : "/app?mode=paper_reading";
 }
 

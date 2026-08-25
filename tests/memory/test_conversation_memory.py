@@ -36,6 +36,8 @@ class FakeModel:
                                 "summary": " | ".join(contents),
                                 "confirmed_decisions": ["保留最近 8 条"],
                                 "open_questions": [],
+                                "facts_to_add": [],
+                                "fact_ids_to_supersede": [],
                             },
                             ensure_ascii=False,
                         )
@@ -43,6 +45,29 @@ class FakeModel:
                 }
             ]
         }
+
+
+class FactModel(FakeModel):
+    def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        payload = json.loads(
+            kwargs["messages"][1]["content"].split("Historical data:\n", 1)[1]
+        )
+        facts = []
+        for message in payload["visible_messages"]:
+            if message["role"] == "user" and "烧烤" in message["content"]:
+                facts.append({
+                    "text": "用户在烧烤聚餐中支付了130元",
+                    "source_message_ids": [message["message_id"]],
+                })
+        return {"choices": [{"message": {"content": json.dumps({
+            "current_goal": "继续对话",
+            "summary": "",
+            "confirmed_decisions": [],
+            "open_questions": [],
+            "facts_to_add": facts,
+            "fact_ids_to_supersede": [],
+        }, ensure_ascii=False)}}]}
 
 
 class AnswerModel:
@@ -171,6 +196,70 @@ class ConversationMemoryTests(unittest.TestCase):
             [item["content"] for item in second_payload["visible_messages"]],
             ["message-2", "message-3"],
         )
+
+    def test_incremental_summary_merges_old_and_new_content(self) -> None:
+        conversation_id = self.conversation()
+        self.append(conversation_id, 9)
+        model = FakeModel()
+        service = ConversationMemoryService(self.store, model)
+        service.prepare_context(conversation_id)
+        self.append(conversation_id, 2)
+        service.prepare_context(conversation_id)
+
+        summary = self.store.get_latest_memory(conversation_id)["summary"]
+        self.assertIn("message-1", summary)
+        self.assertIn("message-2", summary)
+        self.assertIn("message-3", summary)
+
+    def test_bbq_fact_survives_compression_with_user_message_provenance(self) -> None:
+        conversation_id = self.conversation("bbq")
+        source_id = self.store.append_message(
+            conversation_id, role="user", content="烧烤那次是我付的130元"
+        )
+        for index in range(8):
+            self.store.append_message(
+                conversation_id,
+                role="assistant" if index % 2 == 0 else "user",
+                content=f"后续闲聊-{index}",
+            )
+        service = ConversationMemoryService(self.store, FactModel())
+
+        context = service.prepare_context(conversation_id)
+        facts = self.store.list_active_memory_facts(conversation_id)
+
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["source_message_ids"], [source_id])
+        self.assertIn("烧烤聚餐中支付了130元", context.memory_text)
+
+    def test_v1_snapshot_is_retained_for_audit_but_ignored_for_v2_rebuild(self) -> None:
+        conversation_id = self.conversation("legacy")
+        source_id = self.store.append_message(
+            conversation_id, role="user", content="烧烤那次是我付的130元"
+        )
+        for index in range(8):
+            self.store.append_message(
+                conversation_id, role="assistant", content=f"旧对话-{index}"
+            )
+        with self.store._connection() as connection:
+            connection.execute(
+                """INSERT INTO conversation_memory_snapshots(
+                       memory_snapshot_id, conversation_id, through_message_id,
+                       schema_version, summary, created_at)
+                   VALUES ('legacy-memory', ?, ?, 'conversation-memory-v1', '错误旧摘要', '2025-01-01')""",
+                (conversation_id, source_id),
+            )
+
+        context = ConversationMemoryService(self.store, FactModel()).prepare_context(
+            conversation_id
+        )
+        with self.store._connection() as connection:
+            versions = [row[0] for row in connection.execute(
+                "SELECT schema_version FROM conversation_memory_snapshots WHERE conversation_id = ? ORDER BY created_at",
+                (conversation_id,),
+            ).fetchall()]
+
+        self.assertEqual(versions, ["conversation-memory-v1", "conversation-memory-v2"])
+        self.assertIn("烧烤聚餐中支付了130元", context.memory_text)
 
     def test_failure_does_not_advance_watermark_and_keeps_full_fallback(self) -> None:
         conversation_id = self.conversation()

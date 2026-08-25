@@ -17,7 +17,7 @@ from storage.catalog import ResearchCatalog
 class CreatePaperReadingSessionTests(unittest.TestCase):
     def test_create_session_persists_empty_conversation_carrier(self) -> None:
         with TemporaryDirectory() as directory:
-            storage = PaperReadingStorage(Path(directory))
+            storage = PaperReadingStorage(Path(directory) / "paper_reading")
             storage.save_paper("paper-1", {
                 "paper_id": "paper-1",
                 "title": "Session Paper",
@@ -34,7 +34,8 @@ class CreatePaperReadingSessionTests(unittest.TestCase):
             response = _handle_create_session(
                 PaperReadingRequest(
                     action="create_session",
-                    session_id="conversation-1",
+                    session_id="",
+                    conversation_id="conversation-1",
                     paper_id="paper-1",
                 ),
                 state,
@@ -44,10 +45,12 @@ class CreatePaperReadingSessionTests(unittest.TestCase):
             )
 
         self.assertEqual(response["status"], "ok")
-        self.assertEqual(response["data"]["session_id"], "conversation-1")
+        self.assertNotEqual(response["data"]["session_id"], "conversation-1")
+        self.assertEqual(response["data"]["conversation_id"], "conversation-1")
         self.assertEqual(response["progress"]["total_sections"], 2)
         self.assertIsNotNone(conversation)
-        self.assertEqual(conversation["reading_session_id"], "conversation-1")
+        self.assertEqual(conversation["reading_session_id"], response["data"]["session_id"])
+        self.assertEqual(len(conversation["contexts"]), 1)
         self.assertEqual(conversation["messages"], [])
 
 

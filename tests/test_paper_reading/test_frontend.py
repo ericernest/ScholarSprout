@@ -177,14 +177,13 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn(".pdf-document[hidden] { display: none; }", styles)
         self.assertIn("position: absolute; inset: 0", styles)
 
-    def test_paper_conversation_chat_uses_the_paper_reading_stream(self) -> None:
+    def test_main_chat_uses_tools_without_mixing_paper_sidebar_history(self) -> None:
         javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("let activePaperConversation = null", javascript)
-        self.assertIn('conversation.workspace_kind === "paper_reading"', javascript)
-        self.assertIn('action: "start_reading"', javascript)
-        self.assertIn('`${paperContext ? "/paper_reading" : endpoint}/stream`', javascript)
-        self.assertIn("data?.data?.agent_response", javascript)
+        self.assertIn("let activeDiscussion = null", javascript)
+        self.assertIn("active_context: {", javascript)
+        self.assertIn('fetch(`${endpoint}/stream`', javascript)
+        self.assertNotIn('`${paperContext ? "/paper_reading" : endpoint}/stream`', javascript)
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -277,9 +276,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('action: "create_session"', shared)
         self.assertIn("sessionId: readingSessionId", shared)
         self.assertIn("appendReadingWelcome(feed)", javascript)
-        self.assertIn("restorePaperReadingCard(conversation)", shared)
-        self.assertIn('placement: "prepend"', shared)
-        self.assertIn("if (!history.length && !conversation.reading_session_id) return", shared)
+        self.assertIn("restorePaperReadingCard(context)", shared)
+        self.assertIn('const timeline = [', shared)
+        self.assertIn('context.linked_at || ""', shared)
+        self.assertIn("if (!history.length && !conversationContexts.length) return", shared)
         self.assertNotIn("if (!Array.isArray(conversation.messages) || !conversation.messages.length) return", shared)
         self.assertIn("event?.clientX", javascript)
         self.assertIn('closest(".reader-panel")', javascript)

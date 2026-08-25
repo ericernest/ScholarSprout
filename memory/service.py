@@ -74,17 +74,30 @@ class ConversationMemoryService:
             conversation_id, recent_limit=self.recent_message_limit
         )
         prior_memory = self._sanitized_memory(window.get("memory"))
+        active_facts = [
+            fact
+            for item in window.get("active_facts", [])
+            if (fact := self._sanitized_fact(item))
+        ]
         compression_failed = False
         if window["messages_to_compress"]:
             try:
-                memory = self._compress(
-                    prior_memory, window["messages_to_compress"], final=False
+                update = self._compress(
+                    prior_memory,
+                    window["messages_to_compress"],
+                    active_facts=active_facts,
+                    final=False,
                 )
                 self.store.save_latest_memory(
                     conversation_id,
-                    memory=memory,
+                    memory=update["memory"],
                     through_message_id=window["messages_to_compress"][-1]["message_id"],
                     expected_previous_through_message_id=window.get("through_message_id"),
+                )
+                self.store.apply_memory_fact_changes(
+                    conversation_id,
+                    facts_to_add=update["facts_to_add"],
+                    fact_ids_to_supersede=update["fact_ids_to_supersede"],
                 )
                 window = self.store.read_conversation_memory_window(
                     conversation_id, recent_limit=self.recent_message_limit
@@ -105,6 +118,11 @@ class ConversationMemoryService:
                     self._sanitized_memory(linked) or {}
                     for linked in window.get("linked_forks", [])
                 ],
+                [
+                    fact
+                    for item in window.get("active_facts", [])
+                    if (fact := self._sanitized_fact(item))
+                ],
             ),
             context_messages=self._context_messages(history, exclude_message_id),
             compression_failed=compression_failed,
@@ -124,14 +142,26 @@ class ConversationMemoryService:
             if window.get("memory"):
                 return self._sanitized_memory(window["memory"]) or {}
             return None
-        memory = self._compress(
-            self._sanitized_memory(window.get("memory")), remaining, final=True
+        update = self._compress(
+            self._sanitized_memory(window.get("memory")),
+            remaining,
+            active_facts=[
+                fact
+                for item in window.get("active_facts", [])
+                if (fact := self._sanitized_fact(item))
+            ],
+            final=True,
         )
         self.store.save_latest_memory(
             conversation_id,
-            memory=memory,
+            memory=update["memory"],
             through_message_id=remaining[-1]["message_id"],
             expected_previous_through_message_id=window.get("through_message_id"),
+        )
+        self.store.apply_memory_fact_changes(
+            conversation_id,
+            facts_to_add=update["facts_to_add"],
+            fact_ids_to_supersede=update["fact_ids_to_supersede"],
         )
         stored = self.store.get_latest_memory(conversation_id)
         if stored is None:
@@ -143,16 +173,26 @@ class ConversationMemoryService:
         prior_memory: dict[str, Any] | None,
         messages: list[dict[str, Any]],
         *,
+        active_facts: list[dict[str, Any]],
         final: bool,
     ) -> dict[str, Any]:
         if not messages:
-            return self._sanitize(prior_memory or {})
+            return {
+                "memory": self._sanitize(prior_memory or {}),
+                "facts_to_add": [],
+                "fact_ids_to_supersede": [],
+            }
         response = self.model.chat(
             messages=[
                 {"role": "system", "content": COMPRESSION_SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": compression_user_prompt(prior_memory or {}, messages, final=final),
+                    "content": compression_user_prompt(
+                        prior_memory or {},
+                        messages,
+                        active_facts=active_facts,
+                        final=final,
+                    ),
                 },
             ],
             response_format={"type": "json_object"},
@@ -165,7 +205,58 @@ class ConversationMemoryService:
             raise MemoryCompressionError("Memory model did not return valid JSON") from error
         if not isinstance(payload, dict):
             raise MemoryCompressionError("Memory model returned a non-object")
-        return self._sanitize(payload)
+        sanitized = self._sanitize(payload)
+        sanitized["summary"] = self._merge_summary(
+            str((prior_memory or {}).get("summary") or ""),
+            sanitized["summary"],
+        )
+        allowed_source_ids = {
+            str(item.get("message_id") or "")
+            for item in messages
+            if str(item.get("role") or "") == "user"
+        }
+        facts_to_add: list[dict[str, Any]] = []
+        for raw in payload.get("facts_to_add") or []:
+            if not isinstance(raw, dict):
+                continue
+            text = self._text(raw.get("text"), 300)
+            source_ids = [
+                str(value)
+                for value in raw.get("source_message_ids") or []
+                if str(value) in allowed_source_ids
+            ]
+            if text and source_ids:
+                facts_to_add.append(
+                    {"text": text, "source_message_ids": list(dict.fromkeys(source_ids))}
+                )
+        existing_fact_ids = {str(item.get("memory_fact_id") or "") for item in active_facts}
+        superseded = [
+            str(value)
+            for value in payload.get("fact_ids_to_supersede") or []
+            if str(value) in existing_fact_ids
+        ]
+        return {
+            "memory": sanitized,
+            "facts_to_add": facts_to_add[:12],
+            "fact_ids_to_supersede": list(dict.fromkeys(superseded))[:12],
+        }
+
+    @classmethod
+    def _merge_summary(cls, prior: str, candidate: str) -> str:
+        """Keep a bounded running summary even when the model omits an older unit."""
+        units: list[str] = []
+        seen: set[str] = set()
+        for source in (candidate, prior):
+            for raw in re.split(r"[\r\n]+|(?<=[。！？!?])", str(source or "")):
+                text = " ".join(raw.split()).strip()
+                key = cls._key(text)
+                if not text or not key or key in seen:
+                    continue
+                if sum(len(item) + 1 for item in units) + len(text) > 2000:
+                    break
+                units.append(text)
+                seen.add(key)
+        return "\n".join(units)[:2000]
 
     @staticmethod
     def _response_content(response: Any) -> str:
@@ -208,6 +299,20 @@ class ConversationMemoryService:
         if not payload:
             return None
         return {**payload, **cls._sanitize(payload)}
+
+    @classmethod
+    def _sanitized_fact(cls, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        text = cls._text(payload.get("text"), 300)
+        if not text:
+            return None
+        return {
+            "memory_fact_id": str(payload.get("memory_fact_id") or ""),
+            "text": text,
+            "source_message_ids": [str(item) for item in payload.get("source_message_ids") or []],
+            "updated_at": str(payload.get("updated_at") or ""),
+        }
 
     @classmethod
     def _text(cls, value: Any, limit: int) -> str:
