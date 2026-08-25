@@ -653,7 +653,7 @@ function renderPapers(data) {
   `).join("");
   const papers = sourcePapers
     .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
-    .sort((left, right) => Number(right.citation_count || -1) - Number(left.citation_count || -1));
+    .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length
@@ -668,7 +668,6 @@ function renderPapers(data) {
           <h3>${escapeHtml(paper.title)}</h3>
           <small>${escapeHtml((paper.authors || []).slice(0, 4).join("、") || "作者未知")} · ${escapeHtml(paper.year || "年份未知")}</small>
         </span>
-        <span class="paper-score"><b>${paper.citation_count == null ? "—" : escapeHtml(Number(paper.citation_count).toLocaleString("zh-CN"))}</b><span>引用数</span></span>
       </button>
     `).join("")
     : emptyCopy("当前筛选下没有论文。");

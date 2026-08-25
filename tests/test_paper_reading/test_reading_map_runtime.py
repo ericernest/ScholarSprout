@@ -14,9 +14,12 @@ from handlers.paper_reading.handler import (
     SURVEY_MAP_TASK_LIMIT,
     SURVEY_PLAN_MAX_TOKENS,
     SURVEY_SECTION_GUIDE_TASK_LIMIT,
+    SURVEY_MAP_GROUP_KEYS,
     _build_llm_reading_map,
     _build_survey_plan_card_reading_map,
+    _ensure_required_survey_map_tasks,
     _ensure_survey_prerequisite_task,
+    _normalize_survey_card_result,
     _normalize_survey_card_plan,
     _reading_map_response_json,
     _research_reading_sections,
@@ -282,11 +285,29 @@ class ReadingMapRuntimeTests(unittest.TestCase):
         }
 
         normalized = _normalize_survey_card_plan(plan, manifest)
-        bounded = _ensure_survey_prerequisite_task(normalized, manifest)
+        required = _ensure_required_survey_map_tasks(normalized, manifest)
+        bounded = _ensure_survey_prerequisite_task(required, manifest)
 
         self.assertLessEqual(normalized["map_tasks_count"], SURVEY_MAP_TASK_LIMIT)
+        self.assertEqual(
+            {task["group_key"] for task in required["tasks"] if task["target"] == "survey_map"},
+            set(SURVEY_MAP_GROUP_KEYS),
+        )
+        self.assertLessEqual(required["map_tasks_count"], SURVEY_MAP_TASK_LIMIT)
         self.assertLessEqual(normalized["section_guide_tasks_count"], SURVEY_SECTION_GUIDE_TASK_LIMIT)
         self.assertLessEqual(len(bounded["tasks"]), 1 + SURVEY_MAP_TASK_LIMIT + SURVEY_SECTION_GUIDE_TASK_LIMIT)
+
+    def test_schema_echo_is_rejected_instead_of_becoming_an_empty_card(self) -> None:
+        task = {"target": "survey_map", "group_key": "development_timeline", "task_id": "timeline"}
+        sections = [{"section_id": "sec:1", "title": "Introduction", "content": "history"}]
+        schema_echo = {
+            "type": "json_object",
+            "properties": {"items": {"type": "array"}},
+            "required": ["items"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "No survey map items"):
+            _normalize_survey_card_result(schema_echo, task, sections)
 
     def test_restart_requeues_persisted_running_map_with_heartbeat(self) -> None:
         paper = {

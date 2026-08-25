@@ -114,6 +114,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('`正在并行生成${taskLabel}，请稍候。`', javascript)
         self.assertIn('title: "研究问题"', javascript)
         self.assertIn('title: "核心方法"', javascript)
+        self.assertIn("function missingRequiredSurveyMapGroups", javascript)
+        self.assertIn("旧版生成结果缺少固定分区", javascript)
+        self.assertIn('status === "llm_done" && !staleIncompleteSurvey', javascript)
 
     def test_selection_toolbar_is_portaled_and_positioned_next_to_pointer(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -125,13 +128,19 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('toolbar.dataset.side = useRight ? "right" : "left"', javascript)
         self.assertIn('textLayer.style.setProperty("--scale-factor", String(viewport.scale))', javascript)
 
-    def test_mineru_result_opens_as_ai_reflow_instead_of_hidden_index(self) -> None:
+    def test_mineru_result_opens_in_a_separate_ai_reflow_page(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('indexTab.textContent = usesMineruReflow() ? "AI 论文重排" : "智能索引"', javascript)
-        self.assertIn('state.readerMode = usesMineruReflow() ? "structured" : "pdf"', javascript)
-        self.assertIn('create("div", "ai-reflow-label", "MinerU 重排正文")', javascript)
-        self.assertIn("renderMarkdown(section.content)", javascript)
+        self.assertIn('data-reader-mode="structured"', html)
+        self.assertIn('data-reader-mode="reflow"', html)
+        self.assertIn('id="reflow-reader"', html)
+        self.assertIn('indexTab.textContent = "智能索引"', javascript)
+        self.assertIn('reflowTab.textContent = "AI 论文重排"', javascript)
+        self.assertIn('state.readerMode = usesMineruReflow() ? "reflow" : "pdf"', javascript)
+        self.assertIn("function renderReflowSections", javascript)
+        self.assertIn("function cleanMineruMarkdown", javascript)
+        self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -226,6 +235,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("appendReadingWelcome(feed)", javascript)
         self.assertIn("restorePaperReadingCard(conversation)", shared)
         self.assertIn('placement: "prepend"', shared)
+        self.assertIn("if (!history.length && !conversation.reading_session_id) return", shared)
+        self.assertNotIn("if (!Array.isArray(conversation.messages) || !conversation.messages.length) return", shared)
         self.assertIn("event?.clientX", javascript)
         self.assertIn('closest(".reader-panel")', javascript)
         self.assertIn("grid-auto-flow: row", styles)

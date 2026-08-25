@@ -131,7 +131,7 @@
 
           <article class="workspace-panel reader-panel">
             <header class="reader-toolbar">
-              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
+              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">智能索引</button><button class="reader-tab" data-reader-mode="reflow" type="button" hidden>AI 论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
               <div class="reader-actions">
                 <label id="pdf-fit-control" class="pdf-fit-control" hidden>缩放
                   <select id="pdf-fit-select">
@@ -148,6 +148,7 @@
             </div>
             <div id="pdf-mode-hint" class="pdf-mode-hint" hidden>PDF 原文支持划选解释、Fork 深入、高亮和注释；智能索引用于快速浏览章节导读。</div>
             <div id="structured-reader" class="structured-reader"></div>
+            <div id="reflow-reader" class="structured-reader reflow-reader" hidden></div>
             <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
           </article>
 

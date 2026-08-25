@@ -132,10 +132,11 @@ async function restoreConversationHistory() {
     const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
-    if (!Array.isArray(conversation.messages) || !conversation.messages.length) return;
+    const history = Array.isArray(conversation.messages) ? conversation.messages : [];
+    if (!history.length && !conversation.reading_session_id) return;
     messages.replaceChildren();
     await restorePaperReadingCard(conversation);
-    conversation.messages.forEach((message) => {
+    history.forEach((message) => {
       if (message.role === "assistant" && message.mode === "domain_onboarding") {
         restoreDomainOnboardingCard();
         return;

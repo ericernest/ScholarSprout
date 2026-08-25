@@ -56,7 +56,8 @@ SURVEY_MAP_TASK_LIMIT = 12
 SURVEY_SECTION_GUIDE_TASK_LIMIT = 19
 SURVEY_FACT_REQUEST_TIMEOUT_SECONDS = 75.0
 SURVEY_MERGE_REQUEST_TIMEOUT_SECONDS = 90.0
-SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v1"
+SURVEY_CARD_PLAN_VERSION = "survey-card-plan-v2"
+SURVEY_CARD_PROMPT_VERSION = "survey-card-prompt-v2"
 SURVEY_MAP_GROUP_KEYS = (
     "field_overview",
     "development_timeline",
@@ -2042,6 +2043,7 @@ def _build_survey_plan_card_reading_map(
     try:
         raw_plan = _plan_survey_cards(model, paper, manifest, skill_instructions)
         plan = _normalize_survey_card_plan(raw_plan, manifest)
+        plan = _ensure_required_survey_map_tasks(plan, manifest)
         plan = _ensure_survey_prerequisite_task(plan, manifest)
     except Exception as error:
         return _failed_reading_map(f"综述卡片规划失败：{error}")
@@ -2175,7 +2177,9 @@ def _build_survey_plan_card_reading_map(
     else:
         phase = "failed_partial"
         progress = _survey_card_generation_progress(completed + failed, len(tasks))
-        error = "综述导读地图核心卡片不足，请重新生成。"
+        missing_groups = _missing_required_survey_groups(final_map)
+        missing_text = "、".join(reading_map_group_title(key) for key in missing_groups)
+        error = f"综述导读地图固定分区生成不完整：{missing_text or '章节导读'}。请重新生成。"
         final_map["status"] = "failed_partial"
         final_map["partial"] = True
         final_map["error"] = error
@@ -2193,6 +2197,7 @@ def _build_survey_plan_card_reading_map(
             and cached_results.get(task["task_id"], {}).get("status") == "ok"
         ),
         "survey_skill_hash": skill_hash,
+        "survey_card_prompt_version": SURVEY_CARD_PROMPT_VERSION,
     }
     _save_survey_partial_reading_map(
         storage,
@@ -2208,6 +2213,7 @@ def _build_survey_plan_card_reading_map(
             "survey_card_results": card_results,
             "survey_card_progress": _survey_card_progress(completed, len(tasks), failed, ""),
             "survey_skill_hash": skill_hash,
+            "survey_card_prompt_version": SURVEY_CARD_PROMPT_VERSION,
         },
     )
     return final_map
@@ -2403,20 +2409,20 @@ def _plan_survey_cards(
         "Use the section manifest to decide which sections should be read to generate each card. "
         "Do not ask for every section by default; choose the most relevant sections for each card. "
         "Return JSON only. Use section_id for binding; section_index is only a helper.\n"
-        "Actively search for every core group instead of treating them as optional. "
-        "field_overview is required. taxonomy and technical_routes should each have 1-3 tasks when evidence exists. "
+        "All ten map groups are fixed and required: field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges. "
+        "Plan at least one evidence-bound task for every group; never omit a group. taxonomy and technical_routes may each have 1-3 tasks. "
         "If the manifest exposes citation_count_hint, years, et al., Table/Figure, benchmark, baseline, comparison, framework, algorithm, or named_entities_hint, "
         "you must plan representative_methods: either 3-8 specific method tasks or one aggregate method task that can return items[]. "
-        "Plan datasets, evaluation_protocols, and open_challenges whenever the manifest has evidence; if a core group is omitted, include a concise omission reason.\n"
+        "Plan datasets, evaluation_protocols, and open_challenges from the closest relevant sections even when evidence is distributed across the paper.\n"
         "Schema:\n"
         "{\n"
         '  "map_tasks": [{"task_id": "", "group_key": "field_overview|development_timeline|pain_points|taxonomy|technical_routes|representative_methods|datasets|evaluation_protocols|applications|open_challenges", "title": "", "goal": "", "priority": "high|medium|low", "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": [], "output_hint": ""}],\n'
         '  "section_guide_tasks": [{"task_id": "", "section_id": "", "section_index": null, "title": "", "goal": "", "priority": "high|medium|low", "card_types": [], "section_ids": [], "section_indices": [], "evidence_reason": "", "expected_output_fields": []}],\n'
         '  "omissions": [{"group_key": "", "reason": ""}]\n'
         "}\n"
-        "Planning requirements: include high-value map tasks for field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges when evidence exists. "
+        "Planning requirements: include at least one high-value map task for each of field_overview, development_timeline, pain_points, taxonomy, technical_routes, representative_methods, datasets, evaluation_protocols, applications, and open_challenges. "
         "For representative_methods, prioritize sections with citation/year/method/table/benchmark/comparison signals and set expected_output_fields to paper_title, year, method_name, route, problem_addressed, core_mechanism, specific_solution, improves_on, limitations, evidence, source_sections. "
-        "For datasets, set expected_output_fields to name, task, content, structure, scale, metrics, used_by_methods, evidence, source_sections. "
+        "For datasets, set expected_output_fields to name, dataset_type, task, one_sentence_intro, structure, scale, metrics, paper_examples, used_by_methods, evidence, source_sections. "
         "Create section_guide_tasks for important non-reference sections; each should target 2-4 cards. "
         f"Keep map_tasks <= {SURVEY_MAP_TASK_LIMIT} and section_guide_tasks <= {SURVEY_SECTION_GUIDE_TASK_LIMIT}. "
         "Prefer high-value coverage over many small tasks. Write Chinese titles/goals.\n\n"
@@ -2535,6 +2541,96 @@ def _normalize_survey_card_plan(plan: dict[str, Any], manifest: list[dict[str, A
     }
 
 
+def _ensure_required_survey_map_tasks(
+    plan: dict[str, Any],
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Guarantee one evidence-bound task for every fixed overview section."""
+    tasks = [task for task in plan.get("tasks", []) if isinstance(task, dict)]
+    map_tasks = [task for task in tasks if task.get("target") == "survey_map"]
+    guide_tasks = [task for task in tasks if task.get("target") != "survey_map"]
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+
+    for group_key in SURVEY_MAP_GROUP_KEYS:
+        existing = next((task for task in map_tasks if task.get("group_key") == group_key), None)
+        task = existing or _fallback_survey_map_task(group_key, manifest)
+        if not task:
+            continue
+        selected.append(task)
+        selected_ids.add(str(task.get("task_id") or ""))
+
+    extras = [
+        task for task in map_tasks
+        if str(task.get("task_id") or "") not in selected_ids
+    ]
+    selected.extend(extras[: max(0, SURVEY_MAP_TASK_LIMIT - len(selected))])
+    return {
+        **plan,
+        "version": SURVEY_CARD_PLAN_VERSION,
+        "map_tasks_count": len(selected),
+        "section_guide_tasks_count": len(guide_tasks),
+        "tasks": [*selected, *guide_tasks],
+    }
+
+
+def _fallback_survey_map_task(
+    group_key: str,
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    keywords = {
+        "field_overview": ("abstract", "introduction", "overview"),
+        "development_timeline": ("introduction", "related survey", "history", "background"),
+        "pain_points": ("challenge", "introduction", "limitation"),
+        "taxonomy": ("construction", "architecture", "application", "capability"),
+        "technical_routes": ("construction", "architecture", "memory", "planning", "action", "capability"),
+        "representative_methods": ("memory", "planning", "action", "capability", "engineering"),
+        "datasets": ("evaluation", "application", "engineering", "science"),
+        "evaluation_protocols": ("evaluation", "subjective", "objective"),
+        "applications": ("application", "social science", "natural science", "engineering"),
+        "open_challenges": ("challenge", "alignment", "robustness", "hallucination", "efficiency"),
+    }.get(group_key, ())
+    non_reference = [
+        item for item in manifest
+        if "reference" not in str(item.get("title") or "").lower()
+    ]
+    matched = [
+        item for item in non_reference
+        if any(keyword in str(item.get("title") or "").lower() for keyword in keywords)
+    ]
+    chosen = (matched or non_reference)[:6]
+    section_ids = [str(item.get("section_id") or "") for item in chosen if item.get("section_id")]
+    if not section_ids:
+        return None
+    expected_fields = {
+        "field_overview": ["title", "field_scope", "core_tasks", "why_now", "novice_takeaway", "evidence", "source_sections"],
+        "development_timeline": ["stage", "time_range", "key_change", "representative_work", "why_important", "evidence", "source_sections"],
+        "pain_points": ["problem", "why_hard", "impact", "existing_attempts", "unresolved_part", "evidence", "source_sections"],
+        "taxonomy": ["category", "basis", "typical_methods", "problem_fit", "limitations", "evidence", "source_sections"],
+        "technical_routes": ["route_name", "core_mechanism", "typical_flow", "strengths", "limitations", "representative_methods", "evidence", "source_sections"],
+        "representative_methods": ["paper_title", "year", "method_name", "problem_addressed", "core_mechanism", "specific_solution", "limitations", "evidence", "source_sections"],
+        "datasets": ["name", "dataset_type", "task", "one_sentence_intro", "structure", "scale", "metrics", "paper_examples", "evidence", "source_sections"],
+        "evaluation_protocols": ["title", "task", "metrics", "setting", "what_it_tests", "evidence", "source_sections"],
+        "applications": ["application", "scenario", "why_suitable", "typical_methods", "constraints", "evidence", "source_sections"],
+        "open_challenges": ["challenge", "why_hard", "impact", "existing_attempts", "possible_directions", "evidence", "source_sections"],
+    }.get(group_key, [])
+    task = {
+        "task_id": f"required:{group_key}",
+        "target": "survey_map",
+        "group_key": group_key,
+        "title": reading_map_group_title(group_key),
+        "goal": f"基于选定章节生成完整的{reading_map_group_title(group_key)}卡片，不得返回空对象或 JSON Schema。",
+        "priority": "high",
+        "section_ids": section_ids,
+        "section_indices": [item.get("section_index") for item in chosen],
+        "evidence_reason": "该分区属于研究总览固定结构，必须从论文正文提取有来源的内容。",
+        "expected_output_fields": expected_fields,
+        "output_hint": "返回实际论文事实，不要复述输出结构。",
+    }
+    task["task_hash"] = _survey_task_hash(task)
+    return task
+
+
 def _ensure_survey_prerequisite_task(plan: dict[str, Any], manifest: list[dict[str, Any]]) -> dict[str, Any]:
     tasks = list(plan.get("tasks") if isinstance(plan.get("tasks"), list) else [])
     if any(task.get("target") == "prerequisite_card" for task in tasks if isinstance(task, dict)):
@@ -2601,6 +2697,7 @@ def _survey_task_hash(task: dict[str, Any]) -> str:
             "expected_output_fields",
         )
     }
+    payload["prompt_version"] = SURVEY_CARD_PROMPT_VERSION
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -2740,6 +2837,12 @@ def _survey_card_output_schema(task: dict[str, Any]) -> str:
         schema = {"items": [{"category": "", "basis": "", "typical_methods": [], "problem_fit": "", "limitations": "", "evidence": "", "source_sections": []}]}
     elif group_key == "open_challenges":
         schema = {"items": [{"challenge": "", "why_hard": "", "impact": "", "existing_attempts": "", "possible_directions": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "pain_points":
+        schema = {"items": [{"problem": "", "why_hard": "", "impact": "", "existing_attempts": "", "unresolved_part": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "evaluation_protocols":
+        schema = {"items": [{"title": "", "task": "", "metrics": [], "setting": "", "what_it_tests": "", "evidence": "", "source_sections": []}]}
+    elif group_key == "applications":
+        schema = {"items": [{"application": "", "scenario": "", "why_suitable": "", "typical_methods": [], "constraints": "", "evidence": "", "source_sections": []}]}
     elif group_key == "development_timeline":
         schema = {"items": [{"stage": "", "time_range": "", "key_change": "", "representative_work": "", "why_important": "", "evidence": "", "source_sections": []}]}
     elif group_key == "field_overview":
@@ -2784,20 +2887,31 @@ def _generate_survey_card(
         f"Intro context:\n{intro_context}\n\n"
         f"Selected section text:\n{selected_context}"
     )
-    response = _reading_map_json_chat(
-        model,
-        [
-            {"role": "system", "content": "Return only valid JSON for one survey card task."},
-            {"role": "user", "content": prompt},
-        ],
-        timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
-        max_tokens=SURVEY_CARD_MAX_TOKENS,
-    )
-    parsed = _reading_map_response_json(
-        response,
-        label=f"综述卡片 {task.get('task_id')}",
-    )
-    return _normalize_survey_card_result(parsed, task, sections)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        correction = (
+            "\n\nThe previous response repeated a JSON Schema or contained no usable facts. "
+            "Return populated data values from the supplied paper text. Do not output keys such as type, properties, required, $schema, or definitions."
+            if attempt else ""
+        )
+        response = _reading_map_json_chat(
+            model,
+            [
+                {"role": "system", "content": "Return populated JSON data for one survey card task, never a JSON Schema."},
+                {"role": "user", "content": prompt + correction},
+            ],
+            timeout=SURVEY_CARD_REQUEST_TIMEOUT_SECONDS,
+            max_tokens=SURVEY_CARD_MAX_TOKENS,
+        )
+        try:
+            parsed = _reading_map_response_json(
+                response,
+                label=f"综述卡片 {task.get('task_id')}",
+            )
+            return _normalize_survey_card_result(parsed, task, sections)
+        except (ValueError, TypeError) as error:
+            last_error = error
+    raise ValueError(f"综述卡片未返回可展示内容：{last_error}")
 
 
 def _survey_task_context(sections: list[dict[str, Any]], limit: int, task: dict[str, Any] | None = None) -> str:
@@ -2889,13 +3003,15 @@ def _normalize_survey_card_result(
         normalized_items = []
         for raw_item in raw_items[:12]:
             item = dict(raw_item) if isinstance(raw_item, dict) else {}
-            if not item:
+            if not item or _is_json_schema_echo(item):
                 continue
             if not item.get("source_sections"):
                 item["source_sections"] = source_sections
             if not item.get("evidence"):
                 item["evidence"] = item.get("summary") or item.get("why_it_matters") or item.get("core_mechanism") or ""
             _ensure_fact_sources(item, source_sections[0] if source_sections else {})
+            if _is_low_quality_survey_item(str(task.get("group_key") or ""), item):
+                continue
             normalized_items.append(item)
         if not normalized_items:
             raise ValueError(f"No survey map items for {task.get('task_id')}")
@@ -2925,6 +3041,14 @@ def _normalize_survey_card_result(
         "cards": normalized_cards,
         "source_sections": source_sections,
     }
+
+
+def _is_json_schema_echo(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "$schema" in value or "definitions" in value or "$defs" in value:
+        return True
+    return value.get("type") in {"object", "json_object", "array"} and isinstance(value.get("properties"), dict)
 
 
 def _build_survey_reading_map_from_card_results(
@@ -3120,15 +3244,12 @@ def _survey_card_generation_progress(done: int, total: int) -> int:
 
 def _survey_partial_has_core_content(reading_map: dict[str, Any]) -> bool:
     survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
-    if not survey:
-        return False
-    has_overview = bool(survey.get("field_overview"))
-    core_groups = sum(
-        1
-        for key in ("taxonomy", "technical_routes", "representative_methods", "datasets", "open_challenges")
-        if survey.get(key)
-    )
-    return has_overview and core_groups >= 2 and bool(reading_map.get("section_guides"))
+    return not _missing_required_survey_groups(reading_map) and bool(reading_map.get("section_guides"))
+
+
+def _missing_required_survey_groups(reading_map: dict[str, Any]) -> list[str]:
+    survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
+    return [key for key in SURVEY_MAP_GROUP_KEYS if not survey.get(key)]
 
 
 def _build_survey_fulltext_reading_map(

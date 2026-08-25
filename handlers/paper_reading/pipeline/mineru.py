@@ -73,7 +73,8 @@ def _extract_markdown(response: httpx.Response) -> str:
 
 def reflow_document(markdown: str) -> dict[str, Any]:
     """Convert MinerU Markdown into the section contract used downstream."""
-    lines = markdown.replace("\r\n", "\n").splitlines()
+    cleaned_markdown = _clean_reflow_markdown(markdown)
+    lines = cleaned_markdown.splitlines()
     headings: list[tuple[int, str, list[str]]] = []
     preamble: list[str] = []
     current: tuple[int, str, list[str]] | None = None
@@ -117,9 +118,31 @@ def reflow_document(markdown: str) -> dict[str, Any]:
         "title": title[:300],
         "abstract": abstract,
         "sections": sections,
-        "full_text": markdown,
+        "full_text": cleaned_markdown,
         "section_extraction_source": "mineru_markdown",
         "section_extraction_status": "mineru_used",
         "section_extraction_message": "已使用 MinerU AI 论文重排结果。",
         "outline_entries_count": len(sections),
     }
+
+
+def _clean_reflow_markdown(markdown: str) -> str:
+    """Remove MinerU layout artifacts that are not usable without its asset bundle."""
+    text = str(markdown or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(
+        r"<details>\s*<summary>line</summary>[\s\S]*?</details>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"!\[[^\]]*\]\(images/[^)]+\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^Received\s+month\s+dd,\s*yyyy;.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"^E-?mail\s*:.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(
+        r"^\\?\*?Both authors contribute equally to this paper\.?$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(r"([A-Za-z])-[ \t]*\n+[ \t]*([a-z])", r"\1\2", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()

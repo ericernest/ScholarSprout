@@ -21,6 +21,22 @@ class MinerUParserTests(unittest.TestCase):
         self.assertEqual(document["sections"][1]["title"], "1 Introduction")
         self.assertEqual(document["sections"][1]["paragraphs"], ["First paragraph.", "Second paragraph."])
 
+    def test_layout_artifacts_without_assets_are_removed_from_reflow(self) -> None:
+        document = reflow_document(
+            "# Paper\n\n## 1 Intro\n\nac-\ncomplish tasks.\n\n"
+            "Received month dd, yyyy; accepted month dd, yyyy\n\n"
+            "E-mail: author@example.com\n\n"
+            "![](images/missing.jpg)\n\n"
+            "<details> <summary>line</summary>chart coordinates</details>\n\nBody."
+        )
+        content = document["sections"][0]["content"]
+
+        self.assertIn("accomplish tasks", content)
+        self.assertNotIn("Received month", content)
+        self.assertNotIn("E-mail", content)
+        self.assertNotIn("images/missing.jpg", content)
+        self.assertNotIn("chart coordinates", content)
+
 
 if __name__ == "__main__":
     unittest.main()
