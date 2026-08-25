@@ -407,11 +407,6 @@ select option { color: #07120f; }
 .pdf-mark-note {
   outline: 1px solid rgba(5,112,91,.48); pointer-events: auto; cursor: pointer;
 }
-.pdf-mode-hint {
-  padding: .28rem .9rem; border-bottom: 1px solid rgba(30,70,60,.14);
-  color: #7a6b3d; background: rgba(255,224,130,.22); font-size: .66rem;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .reader-panel .empty-state { color: #68736f; }
 .empty-state, .reading-map-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; color: var(--muted); text-align: center; }
 .selection-toolbar {
@@ -607,6 +602,8 @@ select option { color: #07120f; }
 .ai-reflow-content .markdown-content table { width: 100%; overflow-wrap: anywhere; }
 .reflow-reader { background: #fbfaf6; }
 .reflow-reader .ai-reflow-section { max-width: 860px; }
+.reflow-document-header { width: min(100%,860px); margin: .4rem auto 1.2rem; padding: 1rem 1.1rem 1.15rem; border-bottom: 1px solid rgba(35,75,64,.16); }
+.reflow-document-header h1 { margin: .25rem 0 0; color: #172f29; font: 700 clamp(1.45rem,2.5vw,2.25rem)/1.25 Georgia,"Noto Serif CJK SC",serif; }
 .mineru-markdown { display: grid; gap: .9rem; }
 .mineru-markdown > .markdown-content { display: grid; gap: .85rem; }
 .mineru-markdown .markdown-content p { margin: 0; }

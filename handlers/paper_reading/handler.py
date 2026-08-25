@@ -2267,7 +2267,7 @@ def _build_survey_plan_card_reading_map(
         status="llm_done",
         partial=False,
     )
-    if _survey_partial_has_core_content(final_map):
+    if _reading_map_has_visible_content(final_map):
         phase = "llm_done"
         progress = 100
         error = ""
@@ -3359,11 +3359,6 @@ def _survey_card_generation_progress(done: int, total: int) -> int:
     if total <= 0:
         return 10
     return min(94, max(10, int(10 + done / total * 84)))
-
-
-def _survey_partial_has_core_content(reading_map: dict[str, Any]) -> bool:
-    survey = reading_map.get("survey_map") if isinstance(reading_map.get("survey_map"), dict) else {}
-    return not _missing_required_survey_groups(reading_map) and bool(reading_map.get("section_guides"))
 
 
 def _missing_required_survey_groups(reading_map: dict[str, Any]) -> list[str]:

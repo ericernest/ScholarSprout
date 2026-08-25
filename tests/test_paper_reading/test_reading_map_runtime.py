@@ -24,6 +24,7 @@ from handlers.paper_reading.handler import (
     _contains_unnecessary_english_explanation,
     _generate_research_overview,
     _reading_map_json_chat,
+    _reading_map_has_visible_content,
     _reading_map_response_json,
     _research_reading_sections,
     resume_pending_reading_map_generations,
@@ -112,6 +113,19 @@ class _ConcurrentJsonModel:
 
 
 class ReadingMapRuntimeTests(unittest.TestCase):
+    def test_survey_map_with_an_empty_optional_group_is_still_displayable(self) -> None:
+        reading_map = {
+            "map_variant": "survey",
+            "survey_map": {
+                "field_overview": {"field": "智能体研究"},
+                "technical_routes": [{"route_name": "记忆增强"}],
+                "datasets": [],
+            },
+            "section_guides": [{"section_id": "sec:intro", "cards": [{"title": "导读"}]}],
+        }
+
+        self.assertTrue(_reading_map_has_visible_content(reading_map))
+
     def test_research_section_guides_cover_more_than_old_28_section_limit(self) -> None:
         sections = [{
             "section_id": f"sec:{index}",

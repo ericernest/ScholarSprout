@@ -185,7 +185,6 @@ function setupPdfFirstReaderDom() {
     reflowTab.textContent = "AI 论文重排";
     reflowTab.hidden = !usesMineruReflow();
   }
-  updateReaderModeHint();
   const reader = $("pdf-reader");
   if (reader && !$("pdf-document")) {
     const frame = $("pdf-frame");
@@ -216,17 +215,6 @@ function setupPdfFirstReaderDom() {
 function usesMineruReflow() {
   return state.sectionExtractionSource === "mineru_markdown"
     || state.paper?.section_extraction_source === "mineru_markdown";
-}
-
-function updateReaderModeHint() {
-  const hint = $("pdf-mode-hint");
-  if (!hint) return;
-  hint.textContent = state.readerMode === "reflow"
-    ? "AI 论文重排展示 MinerU Markdown 正文；缺失的图片资源请切换 PDF 原文核对。"
-    : state.readerMode === "pdf"
-      ? "PDF 原文支持直接划选并让右侧智能体分析。"
-      : "智能索引提供面向科研新手的章节导读，不与 AI 论文重排混合。";
-  hint.hidden = false;
 }
 
 function createPdfToolbar() {
@@ -1110,21 +1098,14 @@ function syncReadingMapPanelState() {
 
 function isReadingMapReady() {
   const map = state.readingMap || state.paper?.reading_map || {};
-  return readingMapGenerationStatus() === "llm_done" && !missingRequiredSurveyMapGroups(map).length;
+  const status = readingMapGenerationStatus();
+  return status === "llm_done" || (status === "failed_partial" && hasPartialReadingMapContent(map));
 }
 
 function isReadingMapFailed() {
   const status = readingMapGenerationStatus();
   const map = state.readingMap || state.paper?.reading_map || {};
-  return ["failed", "failed_partial"].includes(status)
-    || (status === "llm_done" && Boolean(missingRequiredSurveyMapGroups(map).length));
-}
-
-function missingRequiredSurveyMapGroups(map = state.readingMap || state.paper?.reading_map || {}) {
-  if (!map || map.map_variant !== "survey") return [];
-  return surveyReadingMapGroups(map)
-    .filter((group) => !(group.items || []).some((item) => isRenderableReadingMapItem(item, group.key)))
-    .map((group) => group.title);
+  return status === "failed" || (status === "failed_partial" && !hasPartialReadingMapContent(map));
 }
 
 function hasPartialReadingMapContent(map = state.readingMap || state.paper?.reading_map || {}) {
@@ -1237,6 +1218,12 @@ function renderReflowSections() {
   if (!contentSections.length) {
     reader.append(create("div", "empty-state", "MinerU 已返回章节索引，但没有可展示的重排正文。"));
     return;
+  }
+  const paperTitle = String(state.paper?.title || "").trim();
+  if (paperTitle) {
+    const header = create("header", "reflow-document-header");
+    header.append(create("p", "panel-label", "AI 论文重排"), create("h1", "", paperTitle));
+    reader.append(header);
   }
   contentSections.forEach((section, index) => {
     const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
@@ -1942,12 +1929,10 @@ function setReaderMode(mode, options = {}) {
   const isReflow = normalizedMode === "reflow";
   if (options.userInitiated) state.readerModeChosen = true;
   state.readerMode = normalizedMode;
-  updateReaderModeHint();
   $("structured-reader").hidden = isPdf || isReflow;
   $("reflow-reader").hidden = !isReflow;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
-  $("pdf-mode-hint").hidden = false;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === normalizedMode));
   if (isPdf) {
     renderPdf();
@@ -3465,22 +3450,19 @@ function renderReadingMap() {
       ...group,
       items: (group.items || []).filter((item) => isRenderableReadingMapItem(item, group.key)),
     }));
-  const missingSurveyGroups = isSurvey
-    ? groups.filter((group) => !group.items.length).map((group) => group.title)
-    : [];
-  const staleIncompleteSurvey = status === "llm_done" && Boolean(missingSurveyGroups.length);
-  const mapReady = status === "llm_done" && !staleIncompleteSurvey;
-  const mapFailed = ["failed", "failed_partial"].includes(status) || staleIncompleteSurvey;
-  const mapDisplayable = mapReady || staleIncompleteSurvey || hasPartialReadingMapContent(map);
+  const visibleGroups = groups.filter((group) => group.items.length);
+  const hasContent = visibleGroups.length > 0;
+  const partialWithContent = status === "failed_partial" && hasPartialReadingMapContent(map) && hasContent;
+  const mapReady = (status === "llm_done" && hasContent) || partialWithContent;
+  const mapFailed = status === "failed" || (["llm_done", "failed_partial"].includes(status) && !mapReady);
+  const mapDisplayable = mapReady || hasPartialReadingMapContent(map);
   const regenerating = status === "llm_running" || ["queued", "pending", "parsing"].includes(status);
   const timedOut = isReadingMapTimedOut();
   const regenerateButton = $("regenerate-reading-map-button");
   if (regenerateButton) regenerateButton.disabled = (regenerating && !timedOut) || !state.paperId;
-  const failureText = staleIncompleteSurvey
-    ? `旧版生成结果缺少固定分区：${missingSurveyGroups.join("、")}。请点击“重新生成”，系统会重新读取论文正文补齐。`
-    : readingMapFailureText(map);
+  const failureText = readingMapFailureText(map);
   $("reading-map-status-copy").textContent = mapReady
-    ? (map.partial && map.generation_warning ? `${taskLabel}已生成；${map.generation_warning}` : `${taskLabel}已生成`)
+    ? `${taskLabel}已生成`
     : mapFailed
       ? `${taskLabel}生成失败：${failureText}`
       : timedOut
@@ -3505,7 +3487,6 @@ function renderReadingMap() {
     return;
   }
 
-  const hasContent = groups.some((group) => group.items.some((item) => item && Object.keys(item).length));
   if (empty) empty.hidden = hasContent;
   if (!mapReady) {
     grid.append(create(
@@ -3521,18 +3502,10 @@ function renderReadingMap() {
     return;
   }
 
-  groups.forEach((group, groupIndex) => {
+  visibleGroups.forEach((group, groupIndex) => {
     const column = create("section", "reading-map-column");
     column.append(create("h3", "", group.title));
-    const items = group.items.filter((item) => item && Object.keys(item).length);
-    if (!items.length) {
-      column.append(create(
-        "p",
-        "muted-copy",
-        mapFailed ? "该固定分区生成失败，请重新生成研究总览。" : "正在生成该固定分区…",
-      ));
-    }
-    items.slice(0, 5).forEach((item, index) => {
+    group.items.slice(0, 5).forEach((item, index) => {
       column.append(renderReadingMapCard(item, group.key, groupIndex, index));
     });
     grid.append(column);
