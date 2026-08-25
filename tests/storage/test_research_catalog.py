@@ -441,6 +441,27 @@ class ResearchLibraryApiTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 422)
 
+    def test_annotation_accepts_text_anchor_before_pdf_rects_are_resolved(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = LocalResearchStore(Path(directory) / "research.sqlite3")
+            store.initialize()
+            paper_id = store.upsert_paper(title="Reflow Anchor", authors=[])
+            app.state.research_storage = store
+
+            response = TestClient(app).put(
+                f"/api/research/papers/{paper_id}/annotations/mark-reflow",
+                json={
+                    "annotation_type": "highlight",
+                    "page_number": 1,
+                    "section_id": "mineru:2",
+                    "selected_text": "shared text anchor",
+                    "rects": [],
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["rects"], [])
+
 
 class FolderSchemaMigrationTests(unittest.TestCase):
     def test_schema_v6_removes_deprecated_tag_tables(self) -> None:

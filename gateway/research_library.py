@@ -59,7 +59,9 @@ class AnnotationUpdate(BaseModel):
     page_number: int = Field(ge=1)
     section_id: str | None = Field(default=None, max_length=500)
     selected_text: str = Field(min_length=1, max_length=10000)
-    rects: list[PdfRect] = Field(min_length=1, max_length=300)
+    # AI reflow selections start as text anchors. Their PDF rectangles are
+    # resolved lazily when the matching PDF text layer is rendered.
+    rects: list[PdfRect] = Field(default_factory=list, max_length=300)
     note_text: str = Field(default="", max_length=20000)
 
 

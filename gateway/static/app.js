@@ -18,6 +18,7 @@ let currentMode = "chat";
 let isGenerating = false;
 let activeResponseController = null;
 let selectedPaperFile = null;
+let activePaperConversation = null;
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -132,6 +133,7 @@ async function restoreConversationHistory() {
     const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const conversation = await response.json();
+    activePaperConversation = null;
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
     if (!history.length && !conversation.reading_session_id) return;
     messages.replaceChildren();
@@ -153,6 +155,9 @@ async function restorePaperReadingCard(conversation) {
   const paperId = String(conversation.paper_id || "").trim();
   const readingSessionId = String(conversation.reading_session_id || "").trim();
   if (!paperId || !readingSessionId) return;
+  if (conversation.workspace_kind === "paper_reading") {
+    activePaperConversation = { paperId, sessionId: readingSessionId };
+  }
   try {
     const detail = await callPaperReading({
       action: "get_paper_detail", session_id: readingSessionId, paper_id: paperId, content: "", metadata: {},
@@ -241,12 +246,28 @@ async function sendMessage() {
     const controller = new AbortController();
     activeResponseController = controller;
     const streaming = appendStreamingMessage();
-    const response = await fetch(`${endpoint}/stream`, {
+    const paperContext = requestMode === "chat" ? activePaperConversation : null;
+    const currentPaperId = localStorage.getItem("paper_reading_paper_id") || "";
+    const targetSection = currentPaperId === paperContext?.paperId
+      ? (localStorage.getItem("paper_reading_current_section") || "")
+      : "";
+    const response = await fetch(`${paperContext ? "/paper_reading" : endpoint}/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
+      body: JSON.stringify(paperContext ? {
+        action: "start_reading",
+        session_id: paperContext.sessionId,
+        paper_id: paperContext.paperId,
+        target_section: targetSection,
+        content,
+        user_id: "local-web",
+        metadata: {
+          source_view: "chat",
+          source_section_id: targetSection,
+        },
+      } : {
         session_id: sessionId,
         content,
         user_id: "local-web",
@@ -259,7 +280,11 @@ async function sendMessage() {
       (delta) => streaming.append(delta),
       (delta) => streaming.appendReasoning(delta),
     );
-    streaming.finish(extractReply(data), data?.reasoning || "");
+    const paperReply = data?.data?.agent_response;
+    streaming.finish(
+      typeof paperReply === "string" ? paperReply : extractReply(data),
+      data?.data?.reasoning || data?.reasoning || "",
+    );
   } catch (error) {
     if (error.name === "AbortError") {
       finishInterruptedMessage();

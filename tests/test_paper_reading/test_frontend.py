@@ -153,6 +153,39 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn(".mineru-figure img", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
         self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
 
+    def test_ai_reflow_shares_annotations_and_selection_questions_with_pdf(self) -> None:
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-selection-action="ask"', html)
+        self.assertIn('closest("#structured-reader, #reflow-reader")', javascript)
+        self.assertIn('state.sourceView = pdfPage ? "pdf" : (reflow ? "reflow" : "index")', javascript)
+        self.assertIn("function addMarkFromSelection", javascript)
+        self.assertIn("function renderReflowAnnotations", javascript)
+        self.assertIn("function resolveTextOnlyPdfMarks", javascript)
+        self.assertIn("renderReflowAnnotations();", javascript)
+        self.assertIn(".reflow-annotation", styles)
+        self.assertNotIn("高亮和注释目前只支持 PDF 原文选区", javascript)
+
+    def test_pdf_native_fallback_is_not_covered_by_pdfjs_host(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("host.hidden = true", javascript)
+        self.assertIn("frame.hidden = false", javascript)
+        self.assertIn(".pdf-document[hidden] { display: none; }", styles)
+        self.assertIn("position: absolute; inset: 0", styles)
+
+    def test_paper_conversation_chat_uses_the_paper_reading_stream(self) -> None:
+        javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("let activePaperConversation = null", javascript)
+        self.assertIn('conversation.workspace_kind === "paper_reading"', javascript)
+        self.assertIn('action: "start_reading"', javascript)
+        self.assertIn('`${paperContext ? "/paper_reading" : endpoint}/stream`', javascript)
+        self.assertIn("data?.data?.agent_response", javascript)
+
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 

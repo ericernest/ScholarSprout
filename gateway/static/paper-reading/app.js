@@ -1237,6 +1237,7 @@ function renderReflowSections() {
     article.append(body);
     reader.append(article);
   });
+  renderReflowAnnotations();
   restoreReaderPosition(reader);
 }
 
@@ -1731,6 +1732,7 @@ function currentPdfPage() {
 async function renderPdf(force = false, options = {}) {
   setupPdfFirstReaderDom();
   const host = $("pdf-document");
+  const frame = $("pdf-frame");
   const fit = state.pdfZoom ? String(state.pdfZoom) : ($("pdf-fit-select").value || "width");
   const baseUrl = state.pdfUrl.split("#", 1)[0];
   const anchor = options.preserveViewport ? capturePdfViewportAnchor() : null;
@@ -1740,6 +1742,8 @@ async function renderPdf(force = false, options = {}) {
     if (host) host.replaceChildren();
     return;
   }
+  host.hidden = false;
+  frame.hidden = true;
   const renderKey = `${baseUrl}::${fit}::${host.clientWidth}`;
   if (!force && state.pdfRenderedKey === renderKey && host.childElementCount) {
     if (state.pendingPdfPage) scrollPdfToPage(state.pendingPdfPage, false);
@@ -1787,7 +1791,7 @@ async function renderPdf(force = false, options = {}) {
     }
     state.pdfRenderedKey = renderKey;
     state.pdfRenderingKey = "";
-    $("pdf-frame").hidden = true;
+    frame.hidden = true;
     if (preserveViewport) restorePdfViewportAnchor(anchor);
     else scrollPdfToPage(targetPage, false);
     state.pendingPdfPage = null;
@@ -1795,10 +1799,11 @@ async function renderPdf(force = false, options = {}) {
     if (generation !== state.pdfRenderGeneration) return;
     state.pdfRenderingKey = "";
     console.warn("PDF.js render failed, fallback to iframe.", error);
-    host.replaceChildren(create("div", "pdf-loading", "PDF.js 加载失败，已切换到浏览器原生 PDF 预览。"));
     const nextUrl = `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}`;
-    if ($("pdf-frame").getAttribute("src") !== nextUrl) $("pdf-frame").src = nextUrl;
-    $("pdf-frame").hidden = false;
+    if (frame.getAttribute("src") !== nextUrl) frame.src = nextUrl;
+    host.hidden = true;
+    frame.hidden = false;
+    toast("PDF.js 加载失败，已切换到浏览器原生 PDF 预览。", true);
   }
 }
 
@@ -2826,11 +2831,12 @@ function captureSelection(event) {
     return;
   }
   const anchor = selection.anchorNode?.parentElement;
-  const structured = anchor?.closest("#structured-reader");
+  const textReader = anchor?.closest("#structured-reader, #reflow-reader");
+  const reflow = anchor?.closest("#reflow-reader");
   const pdfPage = anchor?.closest(".pdf-page");
-  if (!structured && !pdfPage) return;
+  if (!textReader && !pdfPage) return;
   state.selectedText = text.slice(0, 6000);
-  state.sourceView = pdfPage ? "pdf" : "index";
+  state.sourceView = pdfPage ? "pdf" : (reflow ? "reflow" : "index");
   state.selectedPage = pdfPage ? Number(pdfPage.dataset.pageNumber || 0) : null;
   state.selectedRect = selectionRectForMetadata(selection, pdfPage);
   const section = anchor.closest(".paper-section");
@@ -2840,7 +2846,7 @@ function captureSelection(event) {
   syncComposerContext();
   const toolbar = $("selection-toolbar");
   toolbar.hidden = false;
-  const readerBounds = (pdfPage || structured)?.closest(".reader-panel")?.getBoundingClientRect();
+  const readerBounds = (pdfPage || textReader)?.closest(".reader-panel")?.getBoundingClientRect();
   const rangeRect = selection.getRangeAt(0).getBoundingClientRect();
   const pointer = {
     x: Number.isFinite(event?.clientX) && event.clientX > 0 ? event.clientX : rangeRect.right,
@@ -2872,29 +2878,40 @@ async function handleSelectionAction(event) {
   if (!action) return;
   $("selection-toolbar").hidden = true;
   const quoted = `\n\n选中内容：\n${state.selectedText}`;
+  if (action === "ask") {
+    const input = $("reading-chat-input");
+    input.placeholder = "针对当前选中内容输入问题…";
+    syncComposerContext();
+    input.focus();
+  }
   if (action === "explain") await startReading(`请解释这段内容的直觉、上下文和关键假设。${quoted}`);
   if (action === "fork") openFork("请围绕选中内容进行深入探索。");
-  if (action === "highlight") addPdfMarkFromSelection("highlight");
-  if (action === "note") addPdfMarkFromSelection("note");
+  if (action === "highlight") addMarkFromSelection("highlight");
+  if (action === "note") addMarkFromSelection("note");
 }
 
-function addPdfMarkFromSelection(type) {
+function addMarkFromSelection(type) {
   const selection = window.getSelection();
-  if (!selection?.rangeCount || !state.selectedText) return toast("请先在 PDF 原文中划选内容。", true);
+  if (!selection?.rangeCount || !state.selectedText) return toast("请先在论文正文中划选内容。", true);
   const page = selection.anchorNode?.parentElement?.closest(".pdf-page");
-  if (!page) return toast("高亮和注释目前只支持 PDF 原文选区。", true);
-  const pageRect = page.getBoundingClientRect();
-  const rects = normalizePdfMarkRects(selection.getRangeAt(0), pageRect);
-  if (!rects.length) return;
+  const reflowSection = selection.anchorNode?.parentElement?.closest("#reflow-reader .paper-section");
+  if (!page && !reflowSection) return toast("高亮和注释支持 PDF 原文与 AI 论文重排。", true);
+  const sectionId = reflowSection?.dataset.sectionId || state.currentSection;
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  const rects = page
+    ? normalizePdfMarkRects(selection.getRangeAt(0), page.getBoundingClientRect())
+    : [];
+  if (page && !rects.length) return;
   const mark = {
     id: `mark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type,
     color: state.pdfMarkColor || "yellow",
-    page: Number(page.dataset.pageNumber || 1),
+    page: page ? Number(page.dataset.pageNumber || 1) : Number(section?.start_page || 1),
     rects,
     text: state.selectedText,
     note: "",
-    section_id: state.currentSection,
+    section_id: sectionId,
+    source_view: page ? "pdf" : "reflow",
     created_at: new Date().toISOString(),
   };
 
@@ -2962,6 +2979,7 @@ function commitPdfMark(mark, editingId = "") {
   void savePdfMarkRemote(mark);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
   renderPdfMarks(page, mark.page);
+  renderReflowAnnotations();
   window.getSelection()?.removeAllRanges();
   toast(mark.type === "note" ? (editingId ? "注释已更新。" : "注释已添加。") : "高亮已添加。");
 }
@@ -3012,11 +3030,138 @@ function undoLastPdfMark() {
   void deletePdfMarkRemote(removed.id);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
   if (page) renderPdfMarks(page, removed.page);
+  renderReflowAnnotations();
   toast("已撤销最近一次标注。");
+}
+
+function renderReflowAnnotations() {
+  const reader = $("reflow-reader");
+  if (!reader) return;
+  reader.querySelectorAll(".reflow-annotation").forEach((wrapper) => {
+    const parent = wrapper.parentNode;
+    wrapper.replaceWith(document.createTextNode(wrapper.textContent || ""));
+    parent?.normalize();
+  });
+  state.pdfMarks.forEach((mark) => {
+    if (!mark?.text) return;
+    const section = mark.section_id
+      ? reader.querySelector(`[data-section-id="${cssEscape(mark.section_id)}"] .paper-section-body`)
+      : null;
+    const root = section || reader;
+    const match = findTextMatch(root, mark.text);
+    if (match) wrapReflowTextMatch(match, mark);
+  });
+}
+
+function normalizeAnchorText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/([A-Za-z])-[ \t\r\n]+(?=[a-z])/gu, "$1")
+    .replace(/[\s\u00ad]+/gu, "")
+    .toLocaleLowerCase();
+}
+
+function findTextMatch(root, query) {
+  if (!root) return null;
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || node.parentElement?.closest(".reflow-annotation,script,style,button")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const rawPositions = [];
+  let raw = "";
+  nodes.forEach((node) => {
+    const value = node.nodeValue || "";
+    for (let offset = 0; offset < value.length; offset += 1) {
+      raw += value[offset];
+      rawPositions.push({ node, offset });
+    }
+  });
+  const normalized = [];
+  const positions = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (/\s|\u00ad/u.test(char)) continue;
+    if (char === "-" && /[A-Za-z]/u.test(raw[index - 1] || "")) {
+      let next = index + 1;
+      while (next < raw.length && /\s/u.test(raw[next])) next += 1;
+      if (next > index + 1 && /[a-z]/u.test(raw[next] || "")) continue;
+    }
+    const folded = char.normalize("NFKC").toLocaleLowerCase();
+    for (const item of folded) {
+      if (/\s|\u00ad/u.test(item)) continue;
+      normalized.push(item);
+      positions.push(rawPositions[index]);
+    }
+  }
+  const needle = normalizeAnchorText(query);
+  if (!needle) return null;
+  const start = normalized.join("").indexOf(needle);
+  if (start < 0) return null;
+  return positions.slice(start, start + needle.length);
+}
+
+function wrapReflowTextMatch(positions, mark) {
+  const groups = [];
+  positions.forEach((position) => {
+    const previous = groups.at(-1);
+    if (previous?.node === position.node && previous.end === position.offset) {
+      previous.end += 1;
+    } else {
+      groups.push({ node: position.node, start: position.offset, end: position.offset + 1 });
+    }
+  });
+  groups.reverse().forEach((group) => {
+    if (!group.node.isConnected || group.end > group.node.length) return;
+    const tail = group.node.splitText(group.end);
+    const selected = group.node.splitText(group.start);
+    const wrapper = create("mark", `reflow-annotation pdf-mark-${mark.type} pdf-mark-${mark.color || "yellow"}`);
+    wrapper.dataset.annotationId = mark.id;
+    wrapper.title = mark.note || (mark.type === "note" ? "查看注释" : "论文高亮");
+    wrapper.append(selected);
+    tail.parentNode?.insertBefore(wrapper, tail);
+    if (mark.type === "note") {
+      wrapper.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPdfNoteModal(mark, true);
+      });
+    }
+  });
+}
+
+function resolveTextOnlyPdfMarks(pageShell, pageNumber) {
+  const textLayer = pageShell?.querySelector(".textLayer");
+  if (!textLayer) return;
+  let changed = false;
+  state.pdfMarks
+    .filter((mark) => (!Array.isArray(mark.rects) || !mark.rects.length) && mark.text)
+    .forEach((mark) => {
+      const positions = findTextMatch(textLayer, mark.text);
+      if (!positions?.length) return;
+      const range = document.createRange();
+      const first = positions[0];
+      const last = positions.at(-1);
+      range.setStart(first.node, first.offset);
+      range.setEnd(last.node, last.offset + 1);
+      const rects = normalizePdfMarkRects(range, pageShell.getBoundingClientRect());
+      if (!rects.length) return;
+      mark.page = pageNumber;
+      mark.rects = rects;
+      changed = true;
+      void savePdfMarkRemote(mark);
+    });
+  if (changed) persistPdfMarks();
 }
 
 function renderPdfMarks(pageShell, pageNumber) {
   if (!pageShell) return;
+  resolveTextOnlyPdfMarks(pageShell, pageNumber);
   const layer = pageShell.querySelector(".pdf-mark-layer");
   if (!layer) return;
   layer.replaceChildren();
@@ -3063,6 +3208,7 @@ async function loadPdfMarks() {
     state.pdfMarks = cached;
   }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
+  renderReflowAnnotations();
 }
 
 function appendUserQuestion(text, target = $("analysis-feed")) {
@@ -3365,7 +3511,8 @@ function switchFeed(feedId) {
 
 function syncComposerContext() {
   const fork = state.forks.find((item) => item.id === state.activeFeedId);
-  $("composer-context").textContent = fork ? `Fork：${fork.label}` : `当前：${sectionTitle(state.currentSection) || "全文"}`;
+  const selection = state.selectedText ? ` · 已选中：${truncate(state.selectedText, 34)}` : "";
+  $("composer-context").textContent = fork ? `Fork：${fork.label}${selection}` : `当前：${sectionTitle(state.currentSection) || "全文"}${selection}`;
 }
 
 function skillShort(id) {
