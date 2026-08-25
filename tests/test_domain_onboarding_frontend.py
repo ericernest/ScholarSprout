@@ -70,7 +70,12 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertNotIn("推荐依据", script)
         self.assertNotIn('["领域语境", paper.context_score]', script)
         self.assertNotIn('["内容差异性", paper.diversity_score]', script)
-        self.assertIn("paperGuidance(paper)", script)
+        self.assertNotIn("paperGuidance(paper)", script)
+        self.assertNotIn("<h3>主要贡献</h3>", script)
+        self.assertNotIn('fieldStatusCopy("贡献说明")', script)
+        self.assertIn("data.evidence_papers", script)
+        self.assertIn("data-retry-task", script)
+        self.assertIn("重试生成论文清单", script)
         self.assertNotIn("阅读重点", script)
         self.assertIn("返回对话", html)
         self.assertNotIn("结构化结果随生成过程增量更新", html)
@@ -110,6 +115,19 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertNotIn("新建领域", html)
         self.assertNotIn("正在生成个性化学习路线", script)
         self.assertNotIn("学习者画像已完成", script)
+
+    def test_restored_domain_card_keeps_persisted_message_order(self) -> None:
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        restore = script.split("async function restoreConversationHistory()", 1)[1].split(
+            "async function restorePaperReadingCard", 1
+        )[0]
+
+        self.assertIn('message.mode === "domain_onboarding"', restore)
+        self.assertIn("restoreDomainOnboardingCard();", restore)
+        self.assertLess(
+            restore.index("restoreDomainOnboardingCard();"),
+            restore.index('appendMessage(message.role, message.content)'),
+        )
 
     def test_paper_actions_download_pdf_without_opening_metadata_page(self) -> None:
         html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(

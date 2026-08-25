@@ -1,7 +1,7 @@
 const VIEWS = {
   conversations: { title: "会话", kicker: "CONVERSATIONS", description: "回到最近的科研讨论，保留每一次问题演进。", endpoint: "/api/research/conversations", empty: "开始一次新会话后，它会自动出现在这里。" },
   "domain-onboardings": { title: "领域入门", kicker: "DOMAIN ONBOARDING", description: "保存完整的领域地图、学习路径和推荐论文。", endpoint: "/api/research/domain-onboardings", empty: "选择领域入门模式，完成的研究地图会集中保存在这里。" },
-  "paper-readings": { title: "论文精读", kicker: "PAPER READING", description: "继续阅读、查看进度，并回到已有的 Fork 和分析结果。", endpoint: "/api/research/paper-readings", empty: "导入一篇 PDF 并开始阅读，精读记录会显示在这里。" },
+  "paper-readings": { title: "论文精读", kicker: "PAPER READING", description: "查看每篇论文的阅读进度，并继续章节分析、Fork 探索和标注。", endpoint: "/api/research/paper-readings", empty: "导入一篇 PDF 并开始阅读，精读记录会显示在这里。" },
   papers: { title: "论文管理", kicker: "PAPER LIBRARY", description: "收藏、标记阅读状态，并管理论文上的高亮与注释。", endpoint: "/api/research/papers", empty: "在全部论文中选择需要长期管理的论文。" },
 };
 

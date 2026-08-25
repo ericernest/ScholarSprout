@@ -136,7 +136,10 @@ async function restoreConversationHistory() {
     messages.replaceChildren();
     await restorePaperReadingCard(conversation);
     conversation.messages.forEach((message) => {
-      if (message.role === "assistant" && message.mode === "domain_onboarding") return;
+      if (message.role === "assistant" && message.mode === "domain_onboarding") {
+        restoreDomainOnboardingCard();
+        return;
+      }
       if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
     });
     if (conversation.reading_session_id) messages.scrollTop = 0;
@@ -557,7 +560,16 @@ async function submitPaper() {
     }
 
     clearPreviousPaperSession();
+    const createdSession = await callPaperReading({
+      action: "create_session",
+      session_id: sessionId,
+      paper_id: paperId,
+      content: "",
+      metadata: {},
+    });
+    const readingSessionId = createdSession.data?.session_id || sessionId;
     localStorage.setItem("paper_reading_paper_id", paperId);
+    localStorage.setItem("paper_reading_session_id", readingSessionId);
     const detail = await callPaperReading({
       action: "get_paper_detail",
       session_id: "",
@@ -567,6 +579,7 @@ async function submitPaper() {
     });
     const paperCard = appendPaperCard(detail.data?.paper, {
       paperId,
+      sessionId: readingSessionId,
       sourceLabel,
       kgBuild: upload.data?.kg_build || {},
     });

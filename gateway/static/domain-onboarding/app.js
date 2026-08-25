@@ -175,6 +175,11 @@ function bindInteractions() {
   });
 
   $("content").addEventListener("click", async (event) => {
+    const retry = event.target.closest("[data-retry-task]");
+    if (retry) {
+      await retryTask();
+      return;
+    }
     const filter = event.target.closest("[data-paper-filter]");
     if (filter) {
       state.paperFilter = filter.dataset.paperFilter;
@@ -631,10 +636,13 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  if (!Array.isArray(data.papers) || !data.papers.length) {
+  const sourcePapers = Array.isArray(data.papers) && data.papers.length
+    ? data.papers
+    : (Array.isArray(data.evidence_papers) ? data.evidence_papers : []);
+  if (!sourcePapers.length) {
     const container = $("papers-content");
     container.classList.remove("loading-grid");
-    container.innerHTML = sectionStatusCopy("论文清单", data);
+    container.innerHTML = paperListStatusCopy();
     return;
   }
   const priorities = ["all", "core", "recommended", "optional", "extended"];
@@ -643,7 +651,7 @@ function renderPapers(data) {
       ${priority === "all" ? "全部" : PRIORITY_LABELS[priority]}
     </button>
   `).join("");
-  const papers = data.papers
+  const papers = sourcePapers
     .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
     .sort((left, right) => Number(right.citation_count || -1) - Number(left.citation_count || -1));
   const container = $("papers-content");
@@ -827,8 +835,6 @@ function showDetail(kind, id) {
 }
 
 function renderPaperDetail(paper) {
-  const guidance = paperGuidance(paper);
-  const contribution = paper.contribution || guidance.contribution;
   const citationKnown = paper.citation_count != null
     && Number.isFinite(Number(paper.citation_count));
   const metadata = [
@@ -856,10 +862,6 @@ function renderPaperDetail(paper) {
         <p class="detail-summary">${escapeHtml((paper.authors || []).join("、") || "作者信息暂无")}</p>
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
-      <div class="detail-block">
-        <h3>主要贡献</h3>
-        <p class="detail-summary">${escapeHtml(contribution || fieldStatusCopy("贡献说明"))}</p>
-      </div>
       ${pdfUrl ? `<a class="source-link" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">查看 PDF 原文 ↗</a>` : ""}
       <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
       <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}" ${pdfUrl ? "" : "disabled"}>
@@ -1036,20 +1038,19 @@ function sectionStatusCopy(label, data) {
   </div>`;
 }
 
-function fieldStatusCopy(label) {
-  return `${label}${isTerminalTask() ? "待完善" : "待生成"}`;
+function paperListStatusCopy() {
+  if (!isTerminalTask()) return emptyCopy("论文清单待生成");
+  if (state.snapshot?.retryable) {
+    return `<div class="empty-copy">
+      论文清单生成不完整
+      <button class="ghost-button inline-retry-button" type="button" data-retry-task>重试生成论文清单</button>
+    </div>`;
+  }
+  return emptyCopy("当前任务没有检索到可展示的论文。");
 }
 
-function paperGuidance(paper) {
-  const data = currentData() || {};
-  const references = [
-    ...(data.development_stages || []).flatMap((stage) => stage.representative_papers || []),
-    ...(data.learning_path || []).flatMap((step) => step.papers || []),
-  ];
-  const matches = references.filter((item) => String(item.paper_id) === String(paper.paper_id));
-  return {
-    contribution: matches.find((item) => item.contribution)?.contribution || "",
-  };
+function fieldStatusCopy(label) {
+  return `${label}${isTerminalTask() ? "待完善" : "待生成"}`;
 }
 
 function saveWorkspace() {

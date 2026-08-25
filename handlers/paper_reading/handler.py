@@ -180,6 +180,7 @@ def handle_paper_reading_message(
     handler_map = {
         "search_paper": _handle_search_paper,
         "upload_paper": _handle_upload_paper,
+        "create_session": _handle_create_session,
         "start_reading": _handle_start_reading,
         "pause_reading": _handle_pause_reading,
         "resume_reading": _handle_resume_reading,
@@ -751,6 +752,58 @@ def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id:
             f"导读地图与智能索引生成失败：{error}",
             generation_id=generation_id,
         )
+
+
+def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict:
+    """Create the conversation carrier for a paper workspace without an LLM turn."""
+    session_mgr = getattr(app_state, "session_manager", None)
+    storage = getattr(app_state, "paper_storage", None)
+    if session_mgr is None:
+        return _error("Session manager 未初始化", action="create_session")
+    if not request.paper_id:
+        return _error("缺少 paper_id", action="create_session")
+
+    session = session_mgr.get_session(request.session_id) if request.session_id else None
+    if session is not None and session.paper_id and session.paper_id != request.paper_id:
+        return _error(
+            "当前会话已经关联另一篇论文，请从资料库新建会话后再打开。",
+            action="create_session",
+            session_id=session.session_id,
+        )
+
+    paper_data = _load_paper_data(storage, request.paper_id) or {}
+    if session is None:
+        session = session_mgr.create_session(
+            session_id=request.session_id or None,
+            paper_id=request.paper_id,
+            paper_title=str(paper_data.get("title") or ""),
+            user_id=request.session_id or "default",
+        )
+    else:
+        if not session.paper_id:
+            session.paper_id = request.paper_id
+        if not session.paper_title:
+            session.paper_title = str(paper_data.get("title") or "")
+
+    sections = paper_data.get("sections", []) or []
+    session_mgr.set_total_sections(session.session_id, len(sections))
+    research_store = getattr(storage, "research_store", None)
+    if research_store is not None:
+        research_store.ensure_library_item(request.paper_id, reading_status="reading")
+
+    return _ok(
+        "create_session",
+        {"session_id": session.session_id, "paper_id": request.paper_id},
+        session={
+            "session_id": session.session_id,
+            "paper_id": session.paper_id,
+            "paper_title": session.paper_title,
+            "state": session.state,
+            "current_section": session.progress.get("current_position", {}).get("section_id", ""),
+            "active_skills": session.active_skills,
+        },
+        progress=session.progress,
+    )
 
 
 def _handle_start_reading(

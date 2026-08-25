@@ -53,6 +53,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
         actions = {
             "search_paper",
             "upload_paper",
+            "create_session",
             "get_paper_detail",
             "start_reading",
             "fork",
@@ -122,6 +123,15 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("const rightX = pointer.x + gap", javascript)
         self.assertIn("const leftX = pointer.x - toolbarWidth - gap", javascript)
         self.assertIn('toolbar.dataset.side = useRight ? "right" : "left"', javascript)
+        self.assertIn('textLayer.style.setProperty("--scale-factor", String(viewport.scale))', javascript)
+
+    def test_mineru_result_opens_as_ai_reflow_instead_of_hidden_index(self) -> None:
+        javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('indexTab.textContent = usesMineruReflow() ? "AI 论文重排" : "智能索引"', javascript)
+        self.assertIn('state.readerMode = usesMineruReflow() ? "structured" : "pdf"', javascript)
+        self.assertIn('create("div", "ai-reflow-label", "MinerU 重排正文")', javascript)
+        self.assertIn("renderMarkdown(section.content)", javascript)
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -210,6 +220,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
         styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("restoreReadingConversationHistory", javascript)
+        self.assertIn("function ensureReadingSession", javascript)
+        self.assertIn('action: "create_session"', shared)
+        self.assertIn("sessionId: readingSessionId", shared)
         self.assertIn("appendReadingWelcome(feed)", javascript)
         self.assertIn("restorePaperReadingCard(conversation)", shared)
         self.assertIn('placement: "prepend"', shared)

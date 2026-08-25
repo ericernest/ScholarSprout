@@ -286,6 +286,7 @@ button { color: inherit; }
 .skeleton.title { width: 68%; height: 45px; }
 .skeleton.short { width: 58%; }
 .empty-copy { padding: 1rem; border: 1px dashed var(--line); border-radius: 13px; color: var(--muted); font-size: 0.72rem; text-align: center; }
+.inline-retry-button { display: block; margin: .75rem auto 0; }
 
 .empty-overlay { position: fixed; inset: 68px 0 0; z-index: 50; display: grid; place-items: center; padding: 1rem; background: var(--color-overlay); backdrop-filter: blur(14px); }
 .empty-card { display: grid; gap: 0.8rem; width: min(520px, 100%); padding: 1.6rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--color-surface); box-shadow: var(--shadow); }
