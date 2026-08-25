@@ -33,7 +33,7 @@ embeddings = [
 novicesynapse = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "models*", "runtime*", "skills*", "storage*", "tools*"]
+include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
