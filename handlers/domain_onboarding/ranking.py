@@ -216,7 +216,12 @@ class WeightedPaperRanker:
             )
             ranked.append(
                 RankedPaper(
-                    **paper.model_dump(),
+                    # Recommendation selection can re-rank papers that already
+                    # came through the evidence ranker.  Keep only the stable
+                    # candidate fields here so stale score fields from a
+                    # RankedPaper do not collide with the freshly computed
+                    # values below.
+                    **paper.model_dump(include=set(PaperCandidate.model_fields)),
                     relevance_score=round(relevance, 6),
                     context_score=round(context_score, 6),
                     recency_score=round(recency, 6),
