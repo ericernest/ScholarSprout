@@ -284,10 +284,10 @@ class DomainOnboardingPipeline:
                     trace.development_stage_count = 0
 
             if subdirection_bundles:
-                ranked = self.subdirection_policy.merge(
-                    ranked,
-                    subdirection_bundles,
-                )
+                # _research_subdirections already merged these bundles before
+                # stage research. Merging them a second time here can fill the
+                # selection limit with subdirection papers and evict every
+                # paper bound to an independently researched development stage.
                 kept_ids = {paper.paper_id for paper in ranked}
                 bundle_statuses = {
                     bundle.subdirection_id: bundle.status

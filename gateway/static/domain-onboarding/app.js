@@ -1060,9 +1060,12 @@ function isTerminalTask() {
 
 function sectionStatusCopy(label, data) {
   if (!isTerminalTask()) return emptyCopy(`${label}待生成`);
+  const retryAction = state.snapshot?.retryable
+    ? `<button class="ghost-button inline-retry-button" type="button" data-retry-task>重试生成${escapeHtml(label)}</button>`
+    : `<div class="empty-action">当前任务不可重试，请返回对话重新发起。</div>`;
   return `<div class="empty-copy">
     ${escapeHtml(label)}内容待完善
-    <div class="empty-action">点击下方重试按钮生成更优内容</div>
+    ${retryAction}
   </div>`;
 }
 
