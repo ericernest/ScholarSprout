@@ -66,6 +66,21 @@ const PRIORITY_LABELS = {
   optional: "选读",
   extended: "拓展",
 };
+const PAPER_ROLE_LABELS = {
+  survey: "综述",
+  foundational: "奠基",
+  method: "方法",
+  evaluation: "评测",
+  application: "应用",
+  frontier: "前沿",
+  other: "论文",
+};
+const RECOMMENDATION_LABELS = {
+  recent_survey: "近期综述",
+  established_survey: "成熟综述",
+  influential_survey: "高影响综述",
+  survey_reference: "综述引用",
+};
 const state = {
   taskId: "",
   accessToken: "",
@@ -77,7 +92,7 @@ const state = {
   eventSource: null,
   pollTimer: null,
   activeLLMStage: "",
-  paperFilter: "focus",
+  paperFilter: "all",
   selected: null,
 };
 
@@ -636,9 +651,10 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  const sourcePapers = Array.isArray(data.papers) && data.papers.length
-    ? data.papers
-    : (Array.isArray(data.evidence_papers) ? data.evidence_papers : []);
+  // `papers` is the backend-owned, survey-led recommendation result.
+  // `evidence_papers` supports the generated map and must not be promoted into
+  // the user-facing reading list when recommendation filtering returns empty.
+  const sourcePapers = Array.isArray(data.papers) ? data.papers : [];
   if (!sourcePapers.length) {
     $("paper-filters").replaceChildren();
     const container = $("papers-content");
@@ -651,15 +667,12 @@ function renderPapers(data) {
     counts[priority] = (counts[priority] || 0) + 1;
     return counts;
   }, {});
-  const focusCount = Number(priorityCounts.core || 0) + Number(priorityCounts.recommended || 0);
   const filters = [
-    { value: "focus", label: `重点 ${focusCount}` },
     { value: "all", label: `全部 ${sourcePapers.length}` },
-    ...["optional", "extended"]
+    ...["core", "recommended", "optional", "extended"]
       .filter((priority) => priorityCounts[priority])
       .map((priority) => ({ value: priority, label: `${PRIORITY_LABELS[priority]} ${priorityCounts[priority]}` })),
   ];
-  if (!focusCount && state.paperFilter === "focus") state.paperFilter = "all";
   $("paper-filters").innerHTML = filters.map((filter) => `
     <button class="filter-button${state.paperFilter === filter.value ? " is-active" : ""}" type="button" data-paper-filter="${filter.value}">
       ${escapeHtml(filter.label)}
@@ -667,13 +680,7 @@ function renderPapers(data) {
   `).join("");
   const papers = sourcePapers
     .filter((paper) => state.paperFilter === "all"
-      || (state.paperFilter === "focus" && ["core", "recommended"].includes(paper.reading_priority))
-      || paper.reading_priority === state.paperFilter)
-    .sort((left, right) => {
-      const priorityOrder = { core: 0, recommended: 1, optional: 2, extended: 3 };
-      const priorityDelta = Number(priorityOrder[left.reading_priority] ?? 9) - Number(priorityOrder[right.reading_priority] ?? 9);
-      return priorityDelta || Number(right.year || 0) - Number(left.year || 0);
-    });
+      || paper.reading_priority === state.paperFilter);
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length
@@ -682,7 +689,9 @@ function renderPapers(data) {
         <span class="paper-title">
           <span class="chip-row">
             <span class="chip">${escapeHtml(PRIORITY_LABELS[paper.reading_priority] || paper.reading_priority || "论文")}</span>
-            <span class="chip">${escapeHtml(paper.paper_role || "other")}</span>
+            <span class="chip">${escapeHtml(PAPER_ROLE_LABELS[paper.paper_role] || paper.paper_role || "论文")}</span>
+            ${paper.recommendation_category ? `<span class="chip">${escapeHtml(RECOMMENDATION_LABELS[paper.recommendation_category] || paper.recommendation_category)}</span>` : ""}
+            ${paper.citation_count == null ? "" : `<span class="chip">引用 ${escapeHtml(Number(paper.citation_count))}</span>`}
             ${paper.is_canonical ? '<span class="chip">Canonical</span>' : ""}
           </span>
           <h3>${escapeHtml(paper.title)}</h3>
@@ -1065,7 +1074,7 @@ function paperListStatusCopy() {
       <button class="ghost-button inline-retry-button" type="button" data-retry-task>重试生成论文清单</button>
     </div>`;
   }
-  return emptyCopy("当前任务没有检索到可展示的论文。");
+  return emptyCopy("当前任务没有筛选出推荐论文；证据论文未混入清单。");
 }
 
 function fieldStatusCopy(label) {

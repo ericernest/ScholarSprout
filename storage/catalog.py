@@ -330,7 +330,10 @@ class ResearchCatalog:
         for row in rows:
             overview = _loads(row["overview_json"], {})
             job_result = job_results.get(str(row["artifact_id"]), {})
-            job_papers = job_result.get("papers") or job_result.get("evidence_papers") or []
+            job_papers = job_result.get("papers")
+            job_recommendation_count = (
+                len(job_papers) if isinstance(job_papers, list) else None
+            )
             persisted_count = int(row["recommendation_count"])
             items.append(
                 {
@@ -341,7 +344,11 @@ class ResearchCatalog:
                     "language": row["language"],
                     "state": row["state"],
                     "current_stage": row["current_stage"],
-                    "recommendation_count": persisted_count or len(job_papers),
+                    "recommendation_count": (
+                        job_recommendation_count
+                        if job_recommendation_count is not None
+                        else persisted_count
+                    ),
                     "preview": str(
                         overview.get("summary")
                         or overview.get("domain_definition")

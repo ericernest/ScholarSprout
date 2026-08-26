@@ -139,12 +139,22 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertNotIn(transient, conversation_ids)
         self.assertIn(self.conversation_id, conversation_ids)
 
-    def test_domain_count_uses_evidence_papers_when_recommendations_are_empty(self) -> None:
+    def test_domain_count_does_not_treat_evidence_as_recommendations(self) -> None:
         task_id = "domain-evidence-fallback"
         self.store.create_domain_onboarding(
             artifact_id=task_id,
             title="领域入门：证据论文回退",
             query="证据论文回退",
+        )
+        self.store.persist_domain_onboarding_result(
+            artifact_id=task_id,
+            query="证据论文回退",
+            response={
+                "status": "ok",
+                "papers": [
+                    {"paper_id": "stale-recommendation", "title": "Stale Recommendation"}
+                ],
+            },
         )
         evidence_papers = [
             {"paper_id": "evidence-1", "title": "Evidence One"},
@@ -173,9 +183,9 @@ class ResearchCatalogTests(unittest.TestCase):
             if value["artifact_id"] == task_id
         )
 
-        self.assertEqual(item["recommendation_count"], 2)
+        self.assertEqual(item["recommendation_count"], 0)
 
-    def test_domain_persistence_keeps_displayed_evidence_papers(self) -> None:
+    def test_domain_persistence_keeps_evidence_out_of_recommendations(self) -> None:
         task_id = "domain-persist-evidence"
         self.store.create_domain_onboarding(
             artifact_id=task_id,
@@ -199,7 +209,7 @@ class ResearchCatalogTests(unittest.TestCase):
             if value["artifact_id"] == task_id
         )
 
-        self.assertEqual(item["recommendation_count"], 1)
+        self.assertEqual(item["recommendation_count"], 0)
 
     def test_annotation_round_trip_keeps_pdf_anchor_and_note(self) -> None:
         saved = self.catalog.upsert_annotation(
