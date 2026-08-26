@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NoviceSynapse"
-version = "0.1.0"
-description = "NoviceSynapse - AI Research Assistant"
+name = "paperaurora"
+version = "1.0.0"
+description = "PaperAurora (研见 · SeeFurther) - a local-first AI research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -33,7 +33,7 @@ embeddings = [
 novicesynapse = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
+include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
