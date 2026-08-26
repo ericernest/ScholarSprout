@@ -45,6 +45,9 @@ _DOMAIN_ALIASES = {
     "图神经网络": "graph neural networks",
     "扩散模型": "diffusion models",
     "大模型幻觉检测": "large language model hallucination detection",
+    "情感大模型": "emotion-aware large language models",
+    "情感大语言模型": "emotion-aware large language models",
+    "情感语言模型": "emotion-aware language models",
 }
 _DOMAIN_CANONICAL_NAMES = {
     "rag": "检索增强生成",
@@ -57,6 +60,15 @@ _DOMAIN_EXPANSIONS = {
     "graph neural networks": ["GNN", "graph neural network"],
     "diffusion models": ["DDPM", "denoising diffusion probabilistic models"],
     "multimodal large language models": ["MLLM"],
+    "emotion-aware large language models": [
+        "emotion-aware LLMs",
+        "affective language models",
+        "empathetic language models",
+    ],
+    "emotion-aware language models": [
+        "affective language models",
+        "empathetic language models",
+    ],
 }
 
 
@@ -238,9 +250,18 @@ class StormLitePlanner:
         return list(dict.fromkeys([english_domain, *_DOMAIN_EXPANSIONS.get(key, [])]))
 
     def _expand_plan_queries(self, plan: DomainResearchPlan) -> DomainResearchPlan:
-        english = plan.translated_domain.strip() or _DOMAIN_ALIASES.get(
-            plan.normalized_domain.lower(),
-            _DOMAIN_ALIASES.get(plan.normalized_domain, plan.normalized_domain),
+        translated = plan.translated_domain.strip()
+        translated_is_english = bool(
+            re.search(r"[A-Za-z]{3}", translated)
+            and not re.search(r"[\u4e00-\u9fff]", translated)
+        )
+        english = (
+            translated
+            if translated_is_english
+            else _DOMAIN_ALIASES.get(
+                plan.normalized_domain.lower(),
+                _DOMAIN_ALIASES.get(plan.normalized_domain, plan.normalized_domain),
+            )
         )
         plan.translated_domain = english
         plan.expanded_terms = list(

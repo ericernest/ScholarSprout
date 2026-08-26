@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from contextlib import closing
@@ -138,6 +139,78 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertNotIn(transient, conversation_ids)
         self.assertIn(self.conversation_id, conversation_ids)
 
+    def test_domain_count_does_not_treat_evidence_as_recommendations(self) -> None:
+        task_id = "domain-evidence-fallback"
+        self.store.create_domain_onboarding(
+            artifact_id=task_id,
+            title="领域入门：证据论文回退",
+            query="证据论文回退",
+        )
+        self.store.persist_domain_onboarding_result(
+            artifact_id=task_id,
+            query="证据论文回退",
+            response={
+                "status": "ok",
+                "papers": [
+                    {"paper_id": "stale-recommendation", "title": "Stale Recommendation"}
+                ],
+            },
+        )
+        evidence_papers = [
+            {"paper_id": "evidence-1", "title": "Evidence One"},
+            {"paper_id": "evidence-2", "title": "Evidence Two"},
+        ]
+        with self.store._connection() as connection:
+            connection.execute(
+                """CREATE TABLE jobs(
+                       task_id TEXT PRIMARY KEY,
+                       state TEXT NOT NULL,
+                       current_stage TEXT NOT NULL,
+                       progress REAL NOT NULL,
+                       request_json TEXT NOT NULL,
+                       result_json TEXT,
+                       retryable INTEGER NOT NULL
+                   )"""
+            )
+            connection.execute(
+                """INSERT INTO jobs(task_id, state, current_stage, progress, request_json, result_json, retryable)
+                   VALUES (?, 'completed', 'completed', 1.0, '{}', ?, 0)""",
+                (task_id, json.dumps({"papers": [], "evidence_papers": evidence_papers})),
+            )
+
+        item = next(
+            value for value in self.catalog.list_domain_onboardings()
+            if value["artifact_id"] == task_id
+        )
+
+        self.assertEqual(item["recommendation_count"], 0)
+
+    def test_domain_persistence_keeps_evidence_out_of_recommendations(self) -> None:
+        task_id = "domain-persist-evidence"
+        self.store.create_domain_onboarding(
+            artifact_id=task_id,
+            title="领域入门：持久化证据论文",
+            query="持久化证据论文",
+        )
+        self.store.persist_domain_onboarding_result(
+            artifact_id=task_id,
+            query="持久化证据论文",
+            response={
+                "status": "ok",
+                "papers": [],
+                "evidence_papers": [
+                    {"paper_id": "persisted-evidence", "title": "Persisted Evidence"}
+                ],
+            },
+        )
+
+        item = next(
+            value for value in self.catalog.list_domain_onboardings()
+            if value["artifact_id"] == task_id
+        )
+
+        self.assertEqual(item["recommendation_count"], 0)
+
     def test_annotation_round_trip_keeps_pdf_anchor_and_note(self) -> None:
         saved = self.catalog.upsert_annotation(
             annotation_id="mark-1",
@@ -249,18 +322,20 @@ class ResearchLibraryApiTests(unittest.TestCase):
     def test_library_page_is_available(self) -> None:
         response = TestClient(app).get("/library")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("研究资料库", response.text)
-        self.assertIn('id="paper-import"', response.text)
-        self.assertIn('id="paper-file-button"', response.text)
-        self.assertIn('id="reading-filter"', response.text)
-        self.assertIn('id="paper-note-dialog"', response.text)
-        self.assertIn('id="library-paper-note-content"', response.text)
-        self.assertIn('/static/vendor/katex/katex.min.js', response.text)
-        self.assertIn('/static/paper-reading/note-editor.js', response.text)
-        self.assertIn('id="folder-tree"', response.text)
-        self.assertIn('id="folder-form-dialog"', response.text)
-        self.assertIn('id="folder-picker-dialog"', response.text)
-        self.assertIn('href="/app?new=1"', response.text)
+        self.assertIn('data-seefurther-entry="library"', response.text)
+        self.assertIn("研究资料库 · 研见 · SeeFurther", response.text)
+
+        legacy_html = (
+            Path(__file__).resolve().parents[2] / "gateway/static/library/index.html"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            'id="paper-import"', 'id="paper-file-button"', 'id="reading-filter"',
+            'id="paper-note-dialog"', 'id="library-paper-note-content"',
+            '/static/vendor/katex/katex.min.js', '/static/paper-reading/note-editor.js',
+            'id="folder-tree"', 'id="folder-form-dialog"', 'id="folder-picker-dialog"',
+            'href="/app?new=1"',
+        ):
+            self.assertIn(marker, legacy_html)
 
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)
@@ -276,6 +351,9 @@ class ResearchLibraryApiTests(unittest.TestCase):
         self.assertIn('return item.paper_abstract || "暂无摘要"', script)
         self.assertNotIn('"paper-authors", item.authors.join', script)
         self.assertIn('dataset.action = "view-paper-note"', script)
+        self.assertIn("function domainStageLabel", script)
+        self.assertIn('paperCount ? `${paperCount} 篇相关论文` : "暂无相关论文"', script)
+        self.assertNotIn('阶段：${item.current_stage}', script)
         self.assertIn("function openLibraryPaperNote", script)
         self.assertIn("window.renderPaperMarkdown(note.content_markdown)", script)
         self.assertNotIn('element("pre", "paper-note-source"', script)

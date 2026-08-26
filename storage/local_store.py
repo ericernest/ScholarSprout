@@ -864,7 +864,12 @@ class LocalResearchStore:
             current_stage="completed" if state == "completed" else status,
             error_summary=str(response.get("error") or "") or None,
         )
-        for rank, paper in enumerate(response.get("papers") or [], start=1):
+        # Degraded survey generation can legitimately return an empty
+        # recommendation set while still providing verified evidence papers.
+        # Persist only the backend recommendation contract. Evidence papers
+        # support the map but are not part of the user-facing reading list.
+        recommended_papers = response.get("papers") or []
+        for rank, paper in enumerate(recommended_papers, start=1):
             if not isinstance(paper, dict) or not str(paper.get("title") or "").strip():
                 continue
             paper_id = self.upsert_paper(

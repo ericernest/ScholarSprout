@@ -268,6 +268,44 @@ class SurveyRecommendationPolicyTests(unittest.TestCase):
         self.assertEqual(merged[0].recommendation_category, "survey_reference")
         self.assertEqual(merged[0].survey_source_ids, ["recent-survey"])
 
+    def test_default_policy_caps_display_list_at_three_surveys_and_three_references(self) -> None:
+        config = DomainOnboardingConfig(enforce_core_paper_coverage=False)
+        policy = SurveyRecommendationPolicy(WeightedPaperRanker(config), config)
+        surveys, _ = policy.select_surveys(
+            [
+                candidate(
+                    f"survey-{index}",
+                    f"Retrieval Augmented Generation Survey {index}",
+                    year=2025,
+                    citations=100 - index,
+                )
+                for index in range(5)
+            ],
+            self.plan,
+            language="zh-CN",
+        )
+        references, _ = policy.select_references(
+            [
+                candidate(
+                    f"reference-{index}",
+                    f"Retrieval Augmented Generation Method {index}",
+                    year=2023,
+                    citations=80 - index,
+                    survey_sources=[f"survey-{index % 3}"],
+                )
+                for index in range(7)
+            ],
+            self.plan,
+            language="zh-CN",
+        )
+
+        self.assertEqual(len(surveys), 3)
+        self.assertEqual(len(references), 3)
+        self.assertTrue(all(paper.recommendation_category for paper in surveys))
+        self.assertTrue(
+            all(paper.recommendation_category == "survey_reference" for paper in references)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
