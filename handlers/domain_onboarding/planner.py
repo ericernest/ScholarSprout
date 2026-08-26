@@ -107,6 +107,7 @@ class StormLitePlanner:
                 stream_stage="planning",
                 contract=DOMAIN_PLAN_CONTRACT,
             )
+            payload = self._normalize_plan_payload(payload)
             plan = DomainResearchPlan.model_validate(payload)
             if len(plan.perspectives) < 3 or not plan.search_queries:
                 raise ValueError("planner coverage is insufficient")
@@ -124,6 +125,37 @@ class StormLitePlanner:
             plan.planning_mode = "fallback"
             plan.planning_fallback_reason = "invalid_or_incomplete_plan"
             return PlanningResult(plan=plan, stats=stats)
+
+    @staticmethod
+    def _normalize_plan_payload(payload: Any) -> Any:
+        """Recover subdirection names from otherwise valid structured plans.
+
+        Some models return the full subdirection objects in both
+        ``expected_subdirections`` and ``subdirection_plans``.  The response
+        contract correctly drops those objects from the string-only summary
+        field, but the detailed plans still contain the required names.  Use
+        those names instead of discarding the model's valid English domain and
+        falling back to a Chinese-only search plan.
+        """
+
+        if not isinstance(payload, dict):
+            return payload
+        normalized = dict(payload)
+        names = [
+            item.strip()
+            for item in normalized.get("expected_subdirections", [])
+            if isinstance(item, str) and item.strip()
+        ]
+        if len(names) < 3:
+            for branch in normalized.get("subdirection_plans", []):
+                if not isinstance(branch, dict):
+                    continue
+                name = str(branch.get("name_zh") or branch.get("name_en") or "").strip()
+                if name and name not in names:
+                    names.append(name)
+        if names:
+            normalized["expected_subdirections"] = names[:3]
+        return normalized
 
     def _fallback_plan(self, query: str, profile: LearnerProfile | None = None) -> DomainResearchPlan:
         domain = self._extract_domain(query)

@@ -142,13 +142,14 @@ class PipelineTests(unittest.TestCase):
                 source="semantic_scholar",
             )
         ]
+        evidence = pipeline.ranker.rank(candidates, plan, limit=1).papers
         trace = DomainOnboardingRequestTrace()
 
         merged = pipeline._build_paper_recommendations(
             DomainOnboardingRequest(query="我想学习具身智能"),
             plan,
             candidates,
-            [],
+            evidence,
             trace,
             PipelineExecutionContext(timeout_seconds=30.0),
         )

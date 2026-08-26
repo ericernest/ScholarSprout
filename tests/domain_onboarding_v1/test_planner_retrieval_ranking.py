@@ -81,6 +81,34 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(any(query.priority == 1 for query in branch_queries))
         self.assertTrue(any(query.priority == 2 for query in branch_queries))
 
+    def test_plan_recovers_subdirection_names_without_losing_english_domain(
+        self,
+    ) -> None:
+        payload = make_plan().model_dump(mode="json")
+        payload.update(
+            {
+                "normalized_domain": "智能体记忆",
+                "translated_domain": "Agent Memory",
+                "expanded_terms": ["episodic memory", "semantic memory"],
+                # This is the shape observed from the live planner: the model
+                # repeated detailed objects where the summary string list was
+                # requested. The response contract drops those invalid items.
+                "expected_subdirections": list(payload["subdirection_plans"]),
+            }
+        )
+
+        result = StormLitePlanner(
+            FakeJSONModel([payload]), DomainOnboardingConfig()
+        ).plan("介绍智能体记忆领域", make_profile())
+
+        self.assertEqual(result.plan.planning_mode, "model")
+        self.assertIsNone(result.plan.planning_fallback_reason)
+        self.assertEqual(result.plan.translated_domain, "Agent Memory")
+        self.assertEqual(len(result.plan.expected_subdirections), 3)
+        self.assertTrue(
+            any("Agent Memory" in query for query in result.plan.search_queries)
+        )
+
     def test_valid_plan_uses_single_model_call(self) -> None:
         model = FakeJSONModel(
             [
