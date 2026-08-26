@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "paperaurora"
+name = "seefurther"
 version = "1.0.0"
-description = "PaperAurora (研见 · SeeFurther) - a local-first AI research assistant"
+description = "研见 · SeeFurther - a local-first AI research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
