@@ -39,3 +39,15 @@ test("gateway keeps stable API routes while serving the Vue build", () => {
   assert.ok(app.includes('FRONTEND_DIR = STATIC_DIR / "app-v2"'));
   assert.ok(app.includes("legacy_path"), "source-checkout fallback was removed");
 });
+
+test("Vue compatibility layer preserves the previous surface design", () => {
+  const overrides = readFileSync(join(root, "webui", "public", "styles", "legacy-overrides.css"), "utf8");
+  const guide = readFileSync(join(root, "webui", "src", "components", "ProductGuide.vue"), "utf8");
+  const home = readFileSync(join(root, "gateway", "static", "index.html"), "utf8");
+  assert.ok(home.includes("研见 · SeeFurther"));
+  assert.ok(home.includes("See Further into Research."));
+  assert.ok(!overrides.includes(".chat-page { max-width"));
+  assert.ok(!overrides.includes("focus-within"));
+  assert.ok(!overrides.includes("outline: 3px"));
+  assert.ok(!guide.includes("本地版不会额外启动前端服务"));
+});

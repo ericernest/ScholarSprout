@@ -124,9 +124,15 @@ class ConfigWebTests(unittest.TestCase):
     def test_configuration_page_is_available(self) -> None:
         response = TestClient(app).get("/settings")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-paperaurora-entry="settings"', response.text)
+        self.assertIn('data-seefurther-entry="settings"', response.text)
         settings_html = (
             Path(__file__).resolve().parents[1] / "gateway/static/settings/index.html"
+        ).read_text(encoding="utf-8")
+        settings_script = (
+            Path(__file__).resolve().parents[1] / "gateway/static/settings/app.js"
+        ).read_text(encoding="utf-8")
+        manager_source = (
+            Path(__file__).resolve().parents[1] / "config/manager.py"
         ).read_text(encoding="utf-8")
         self.assertIn('id="embedding-model-name"', settings_html)
         self.assertIn('id="embedding-base-url"', settings_html)
@@ -138,6 +144,9 @@ class ConfigWebTests(unittest.TestCase):
         self.assertLess(settings_html.index('id="embedding-api-key"'), settings_html.index('id="embedding-model-name"'))
         self.assertNotIn("配置文件：", settings_html)
         self.assertIn("三步完成配置", settings_html)
+        self.assertIn("模型数据配置", settings_script)
+        self.assertNotIn(r"C:\Users\sss", settings_html + settings_script + manager_source)
+        self.assertIn("Path.home()", manager_source)
 
     def test_runtime_connection_changes_can_apply_without_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -77,7 +77,7 @@ const state = {
   eventSource: null,
   pollTimer: null,
   activeLLMStage: "",
-  paperFilter: "all",
+  paperFilter: "focus",
   selected: null,
 };
 
@@ -640,20 +640,40 @@ function renderPapers(data) {
     ? data.papers
     : (Array.isArray(data.evidence_papers) ? data.evidence_papers : []);
   if (!sourcePapers.length) {
+    $("paper-filters").replaceChildren();
     const container = $("papers-content");
     container.classList.remove("loading-grid");
     container.innerHTML = paperListStatusCopy();
     return;
   }
-  const priorities = ["all", "core", "recommended", "optional", "extended"];
-  $("paper-filters").innerHTML = priorities.map((priority) => `
-    <button class="filter-button${state.paperFilter === priority ? " is-active" : ""}" type="button" data-paper-filter="${priority}">
-      ${priority === "all" ? "全部" : PRIORITY_LABELS[priority]}
+  const priorityCounts = sourcePapers.reduce((counts, paper) => {
+    const priority = paper.reading_priority || "optional";
+    counts[priority] = (counts[priority] || 0) + 1;
+    return counts;
+  }, {});
+  const focusCount = Number(priorityCounts.core || 0) + Number(priorityCounts.recommended || 0);
+  const filters = [
+    { value: "focus", label: `重点 ${focusCount}` },
+    { value: "all", label: `全部 ${sourcePapers.length}` },
+    ...["optional", "extended"]
+      .filter((priority) => priorityCounts[priority])
+      .map((priority) => ({ value: priority, label: `${PRIORITY_LABELS[priority]} ${priorityCounts[priority]}` })),
+  ];
+  if (!focusCount && state.paperFilter === "focus") state.paperFilter = "all";
+  $("paper-filters").innerHTML = filters.map((filter) => `
+    <button class="filter-button${state.paperFilter === filter.value ? " is-active" : ""}" type="button" data-paper-filter="${filter.value}">
+      ${escapeHtml(filter.label)}
     </button>
   `).join("");
   const papers = sourcePapers
-    .filter((paper) => state.paperFilter === "all" || paper.reading_priority === state.paperFilter)
-    .sort((left, right) => Number(right.year || 0) - Number(left.year || 0));
+    .filter((paper) => state.paperFilter === "all"
+      || (state.paperFilter === "focus" && ["core", "recommended"].includes(paper.reading_priority))
+      || paper.reading_priority === state.paperFilter)
+    .sort((left, right) => {
+      const priorityOrder = { core: 0, recommended: 1, optional: 2, extended: 3 };
+      const priorityDelta = Number(priorityOrder[left.reading_priority] ?? 9) - Number(priorityOrder[right.reading_priority] ?? 9);
+      return priorityDelta || Number(right.year || 0) - Number(left.year || 0);
+    });
   const container = $("papers-content");
   container.classList.remove("loading-grid");
   container.innerHTML = papers.length

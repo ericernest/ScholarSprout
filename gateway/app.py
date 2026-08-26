@@ -64,7 +64,7 @@ from tools.builtin.kg_build_tool import set_kg_builder
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FRONTEND_DIR = STATIC_DIR / "app-v2"
 
-app = FastAPI(title="PaperAurora Gateway")
+app = FastAPI(title="SeeFurther Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(config_router)
 app.include_router(research_library_router)

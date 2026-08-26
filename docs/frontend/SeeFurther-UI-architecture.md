@@ -1,8 +1,8 @@
-# PaperAurora（研见）前端重构说明
+# SeeFurther（研见）前端重构说明
 
 ## 结论
 
-v1 使用 Vue 3 + TypeScript + Vite 的多页面构建，产物仍由 FastAPI 静态托管。后端 API、SSE、数据库、Agent 与部署命令保持不变。六个公开入口由 typed surface registry 统一声明；每个入口先加载对应的 v1 功能页面，再按顺序装载原样式、功能脚本和 PaperAurora 视觉层，因此重构期间不牺牲已经可用的交互。
+v1 使用 Vue 3 + TypeScript + Vite 的多页面构建，产物仍由 FastAPI 静态托管。后端 API、SSE、数据库、Agent 与部署命令保持不变。六个公开入口由 typed surface registry 统一声明；每个入口先加载对应的 v1 功能页面，再按顺序装载原样式、功能脚本和 SeeFurther 兼容层，因此重构期间不牺牲已经可用的交互，也不改变上一版页面配色和布局。
 
 这是一条刻意的渐进迁移边界：新增功能直接写成 Vue feature；旧页面按功能域逐步从 `LegacySurface` 中拆成 Vue 组件。某个功能域完成原生迁移时，只替换 registry 对应入口，不改 URL 和后端协议。
 

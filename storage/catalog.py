@@ -311,9 +311,27 @@ class ResearchCatalog:
                    GROUP BY d.artifact_id ORDER BY w.updated_at DESC LIMIT ?""",
                 (pattern, pattern, limit),
             ).fetchall()
+            job_results: dict[str, dict[str, Any]] = {}
+            has_jobs = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+            ).fetchone()
+            if rows and has_jobs:
+                artifact_ids = [str(row["artifact_id"]) for row in rows]
+                placeholders = ",".join("?" for _ in artifact_ids)
+                job_rows = connection.execute(
+                    f"SELECT task_id, result_json FROM jobs WHERE task_id IN ({placeholders})",
+                    artifact_ids,
+                ).fetchall()
+                job_results = {
+                    str(row["task_id"]): _loads(row["result_json"], {})
+                    for row in job_rows
+                }
         items = []
         for row in rows:
             overview = _loads(row["overview_json"], {})
+            job_result = job_results.get(str(row["artifact_id"]), {})
+            job_papers = job_result.get("papers") or job_result.get("evidence_papers") or []
+            persisted_count = int(row["recommendation_count"])
             items.append(
                 {
                     "artifact_id": row["artifact_id"],
@@ -323,7 +341,7 @@ class ResearchCatalog:
                     "language": row["language"],
                     "state": row["state"],
                     "current_stage": row["current_stage"],
-                    "recommendation_count": int(row["recommendation_count"]),
+                    "recommendation_count": persisted_count or len(job_papers),
                     "preview": str(
                         overview.get("summary")
                         or overview.get("domain_definition")

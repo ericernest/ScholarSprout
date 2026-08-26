@@ -221,7 +221,7 @@ __marimo__/
 # Local TODO
 TODO.md
 
-# PaperAurora frontend dependencies and Vite caches
+# SeeFurther frontend dependencies and Vite caches
 webui/node_modules/
 webui/.vite/
 

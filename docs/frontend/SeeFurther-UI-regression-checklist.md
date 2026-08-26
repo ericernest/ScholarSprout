@@ -1,4 +1,4 @@
-# PaperAurora UI 功能复核清单
+# SeeFurther UI 功能复核清单
 
 ## 自动门禁
 

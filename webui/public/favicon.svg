@@ -1,12 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PaperAurora">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="研见 SeeFurther">
   <defs>
-    <linearGradient id="night" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse"><stop stop-color="#123d4a"/><stop offset="1" stop-color="#07151f"/></linearGradient>
-    <linearGradient id="aurora" x1="13" y1="46" x2="53" y2="18" gradientUnits="userSpaceOnUse"><stop stop-color="#7EE7A8"/><stop offset=".5" stop-color="#3DD7D0"/><stop offset="1" stop-color="#9A83FF"/></linearGradient>
+    <radialGradient id="dawn" cx="49" cy="14" r="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66f5d6"/>
+      <stop offset=".34" stop-color="#225a55"/>
+      <stop offset=".72" stop-color="#10282a"/>
+      <stop offset="1" stop-color="#07120f"/>
+    </radialGradient>
+    <linearGradient id="trail" x1="10" y1="52" x2="55" y2="14" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#66f5d6"/>
+      <stop offset=".58" stop-color="#8edfcf"/>
+      <stop offset="1" stop-color="#a8bbff"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.4"/>
+    </filter>
   </defs>
-  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#night)"/>
-  <path d="M18 13.5h20l9 9V48a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V17.5a4 4 0 0 1 4-4Z" fill="#F4FBFA" fill-opacity=".96"/>
-  <path d="M38 13.5v9h9" fill="none" stroke="#BDE7E1" stroke-width="2.5" stroke-linejoin="round"/>
-  <path d="M18.5 42.5c7.8-8.4 17.6-10.2 28.5-6.2" fill="none" stroke="url(#aurora)" stroke-width="4" stroke-linecap="round"/>
-  <path d="M20.5 35.5c6.2-5.7 14.4-7 23.8-4.1" fill="none" stroke="url(#aurora)" stroke-width="2.6" stroke-linecap="round" opacity=".86"/>
-  <circle cx="44.5" cy="31" r="2.2" fill="#9A83FF"/>
+  <rect width="64" height="64" rx="18" fill="url(#dawn)"/>
+  <path d="M9 51c13-5 29-6 46-2" fill="none" stroke="#b8fff1" stroke-opacity=".18" stroke-width="2" stroke-linecap="round"/>
+  <path d="M11 48c7-5 7-14 15-13 8 2 10-5 15-10 4-4 8-6 13-9" fill="none" stroke="url(#trail)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="11" cy="48" r="3.4" fill="#eafff7"/>
+  <circle cx="26" cy="35" r="3.4" fill="#eafff7"/>
+  <circle cx="41" cy="25" r="3.4" fill="#eafff7"/>
+  <circle cx="54" cy="16" r="6" fill="#a8bbff" opacity=".28" filter="url(#soft-glow)"/>
+  <circle cx="54" cy="16" r="3.8" fill="#eafff7"/>
 </svg>

@@ -105,7 +105,7 @@ function applyConfig(config) {
     ? "MinerU API Key 已配置；留空保存会关闭 MinerU。"
     : "尚未配置；MinerU 当前不启用。");
   setText(setupBadge, config.setup_complete ? "已配置" : "首次配置");
-  setText(guideTitle, config.setup_complete ? "随时调整配置" : "三步完成配置");
+  setText(guideTitle, config.setup_complete ? "模型数据配置" : "三步完成配置");
   if (config.storage?.environment_override) {
     setText(dataDirHelp, `环境变量当前覆盖此项，实际目录为：${config.storage.effective_data_dir}`);
   } else {
