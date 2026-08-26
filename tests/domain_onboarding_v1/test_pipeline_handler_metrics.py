@@ -92,32 +92,51 @@ def make_pipeline(
 
 
 class PipelineTests(unittest.TestCase):
-    def test_missing_english_domain_anchor_stops_all_survey_recommendation_paths(
+    def test_missing_english_domain_anchor_bootstraps_verified_survey_and_references(
         self,
     ) -> None:
-        config = DomainOnboardingConfig(enforce_core_paper_coverage=False)
+        config = DomainOnboardingConfig(
+            enforce_core_paper_coverage=False,
+            ranking_min_relevance_score=0.01,
+        )
         pipeline = make_pipeline([make_generation_payload(["survey-cn"])], config=config)
 
-        class RetrieverMustNotRun:
+        class EvidenceBootstrapRetriever:
             def search(self, queries, *, limit_per_query):
                 raise AssertionError("survey retrieval must not run without an English anchor")
 
             def fetch_references(self, surveys, *, limit_per_paper):
-                raise AssertionError("reference retrieval must not run without an English anchor")
+                self.survey_ids = [paper.paper_id for paper in surveys]
+                return RetrievalResult(
+                    papers=[
+                        PaperCandidate(
+                            paper_id="survey-reference",
+                            title="具身智能的视觉表征学习方法",
+                            abstract="这是一篇由具身智能 Survey 引用的基础方法论文。",
+                            year=2021,
+                            url="https://example.org/survey-reference",
+                            source="semantic_scholar",
+                            survey_source_ids=["survey-cn"],
+                        )
+                    ]
+                )
 
-        pipeline.retriever = RetrieverMustNotRun()
+        retriever = EvidenceBootstrapRetriever()
+        pipeline.retriever = retriever
         plan = make_plan().model_copy(
             update={
                 "normalized_domain": "具身智能",
                 "translated_domain": "具身智能",
                 "expanded_terms": ["具身智能"],
+                "search_queries": [],
+                "expected_subdirections": ["具身感知", "具身规划", "机器人行动"],
             }
         )
         candidates = [
             PaperCandidate(
                 paper_id="survey-cn",
-                title="A Comprehensive Survey on Embodied AI",
-                abstract="Embodied AI connects perception, planning and robot action.",
+                title="具身智能综述：A Comprehensive Survey on Embodied AI",
+                abstract="具身智能连接感知、规划与机器人行动。",
                 year=2025,
                 url="https://example.org/survey-cn",
                 source="semantic_scholar",
@@ -134,13 +153,25 @@ class PipelineTests(unittest.TestCase):
             PipelineExecutionContext(timeout_seconds=30.0),
         )
 
-        self.assertEqual(merged, [])
-        self.assertEqual(plan.recommendation_strategy, "survey_degraded_no_result")
-        self.assertEqual(trace.recommendation_strategy, "survey_degraded_no_result")
+        self.assertEqual(
+            [paper.paper_id for paper in merged],
+            ["survey-cn", "survey-reference"],
+        )
+        self.assertEqual(retriever.survey_ids, ["survey-cn"])
+        self.assertEqual(plan.recommendation_strategy, "survey_success")
+        self.assertEqual(trace.recommendation_strategy, "survey_success")
         self.assertEqual(trace.recommendation_survey_query_count, 0)
+        self.assertEqual(trace.recommendation_selected_survey_count, 1)
+        self.assertEqual(trace.recommendation_selected_reference_count, 1)
         self.assertEqual(
             trace.recommendation_query_audit[0]["reason"],
             "missing_standard_english_domain",
+        )
+        self.assertTrue(
+            any(
+                item["reason"] == "verified_evidence_surveys"
+                for item in trace.recommendation_query_audit
+            )
         )
 
     def test_full_pipeline_reports_empty_recommendations_after_validated_survey_miss(self) -> None:

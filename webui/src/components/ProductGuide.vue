@@ -28,9 +28,13 @@ onBeforeUnmount(() => window.clearTimeout(openTimer));
 <template>
   <button class="pa-help-button" type="button" aria-label="打开页面使用指南" @click="openGuide">?</button>
   <dialog ref="dialog" class="pa-guide-dialog" @cancel.prevent="closeGuide">
-    <div class="pa-guide-mark"><img :src="faviconPath" alt="" /></div>
-    <p class="pa-guide-kicker">研见 · SEEFURTHER</p>
-    <h2>{{ surface.guideTitle }}</h2>
+    <div class="pa-guide-header">
+      <div class="pa-guide-mark"><img :src="faviconPath" alt="" /></div>
+      <div class="pa-guide-heading">
+        <p class="pa-guide-kicker">研见 · SeeFurther</p>
+        <h2>{{ surface.guideTitle }}</h2>
+      </div>
+    </div>
     <ol>
       <li v-for="(step, index) in surface.guideSteps" :key="step">
         <span>{{ index + 1 }}</span><p>{{ step }}</p>

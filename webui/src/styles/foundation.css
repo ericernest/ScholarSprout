@@ -33,13 +33,16 @@ body { font-family: var(--pa-font); }
   font-family: var(--pa-font);
 }
 .pa-guide-dialog::backdrop { background: rgba(3,14,22,.68); backdrop-filter: blur(5px); }
-.pa-guide-mark img { width: 48px; height: 48px; }
-.pa-guide-kicker { margin: 14px 0 6px; color: #77ded6; font-size: .72rem; font-weight: 800; letter-spacing: .16em; }
-.pa-guide-dialog h2 { margin: 0 0 20px; font-size: 1.45rem; }
+.pa-guide-header { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 14px; margin-bottom: 22px; }
+.pa-guide-mark { display: grid; place-items: center; width: 48px; height: 48px; }
+.pa-guide-mark img { display: block; width: 48px; height: 48px; }
+.pa-guide-heading { min-width: 0; }
+.pa-guide-kicker { margin: 0 0 5px; color: #77ded6; font-size: .72rem; font-weight: 800; letter-spacing: .1em; line-height: 1.2; }
+.pa-guide-dialog h2 { margin: 0; font-size: 1.45rem; line-height: 1.25; }
 .pa-guide-dialog ol { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
-.pa-guide-dialog li { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: 11px; }
+.pa-guide-dialog li { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 11px; }
 .pa-guide-dialog li > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #09252b; background: linear-gradient(135deg, #7ee7a8, #3dd7d0); font-weight: 900; }
 .pa-guide-dialog li p { margin: 0; color: #c5e1df; line-height: 1.55; }
 .pa-guide-note { margin: 20px 0; padding: 12px 14px; border: 1px solid rgba(141,124,247,.2); border-radius: 12px; color: #a9c7c9; background: rgba(141,124,247,.07); font-size: .82rem; line-height: 1.55; }
-.pa-guide-primary { width: 100%; border: 0; border-radius: 12px; padding: 12px 16px; color: #052027; background: linear-gradient(100deg, #7ee7a8, #3dd7d0); font-weight: 800; cursor: pointer; }
+.pa-guide-primary { width: 100%; margin-top: 22px; border: 0; border-radius: 12px; padding: 12px 16px; color: #052027; background: linear-gradient(100deg, #7ee7a8, #3dd7d0); font-weight: 800; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }

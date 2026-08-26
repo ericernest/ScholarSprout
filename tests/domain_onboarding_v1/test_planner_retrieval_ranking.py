@@ -226,6 +226,48 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(plan.planning_mode, "fallback")
         self.assertEqual(plan.planning_fallback_reason, "structured_llm_error")
 
+    def test_fallback_maps_chinese_emotion_llm_domain_to_english_queries(self) -> None:
+        planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
+
+        plan = planner.plan("介绍情感大模型领域", make_profile()).plan
+
+        self.assertEqual(plan.normalized_domain, "情感大模型")
+        self.assertEqual(
+            plan.translated_domain,
+            "emotion-aware large language models",
+        )
+        self.assertIn("affective language models", plan.expanded_terms)
+        self.assertTrue(
+            all(
+                not any("\u4e00" <= character <= "\u9fff" for character in query)
+                for query in plan.search_queries
+            )
+        )
+
+    def test_model_plan_with_untranslated_domain_uses_known_english_alias(self) -> None:
+        payload = make_plan().model_dump(mode="json")
+        payload.update(
+            {
+                "normalized_domain": "情感大模型",
+                "translated_domain": "情感大模型",
+                "expanded_terms": ["情感大模型"],
+            }
+        )
+        planner = StormLitePlanner(FakeJSONModel([payload]), DomainOnboardingConfig())
+
+        plan = planner.plan("介绍情感大模型领域", make_profile()).plan
+
+        self.assertEqual(
+            plan.translated_domain,
+            "emotion-aware large language models",
+        )
+        self.assertTrue(
+            all(
+                not any("\u4e00" <= character <= "\u9fff" for character in query)
+                for query in plan.search_queries
+            )
+        )
+
     def test_query_expansion_allocates_queries_across_paths(self) -> None:
         planner = StormLitePlanner(FakeJSONModel(["not json"]), DomainOnboardingConfig())
 

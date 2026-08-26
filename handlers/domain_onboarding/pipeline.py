@@ -1344,12 +1344,7 @@ class DomainOnboardingPipeline:
                     "reason": "missing_standard_english_domain",
                 }
             )
-            trace.recommendation_query_audit = query_audit
-            plan.recommendation_query_audit = list(query_audit)
             trace.recommendation_degraded_count += 1
-            plan.recommendation_strategy = "survey_degraded_no_result"
-            trace.recommendation_strategy = "survey_degraded_no_result"
-            return self.recommendation_policy.merge_with_evidence(evidence, [])
 
         def search_and_validate(
             queries: list[Any],

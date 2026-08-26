@@ -27,6 +27,23 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 }
 .brand:has(.brand-mark)::before { display: none; }
 
+/* Keep every legacy header mark on the same optical baseline as its name. */
+.chat-header .brand,
+.topbar .brand,
+.pr-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.15;
+}
+.chat-header .brand::before,
+.topbar .brand-mark,
+.pr-brand .brand-mark {
+  align-self: center;
+  vertical-align: middle;
+}
+.chat-header .brand span { line-height: inherit; }
+
 /* These headings previously inherited color directly from body. */
 .workspace :where(h1, h2, h3, h4, strong) { color: var(--color-ink, #eafff7); }
 .task-status { color: var(--color-ink-soft, #d8f3ed) !important; }
