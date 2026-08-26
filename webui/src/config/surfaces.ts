@@ -35,15 +35,23 @@ export const surfaces: Record<SurfaceId, SurfaceDefinition> = {
     id: "paper-reading",
     sourcePath: "/static/paper-reading/index.html",
     title: "论文精读 · 研见 · SeeFurther",
-    guideTitle: "论文精读工作台",
-    guideSteps: ["左侧浏览章节与阅读地图", "中间切换 PDF 与重排阅读", "右侧提问、使用 Skill 或创建 Fork" ]
+    guideTitle: "论文精读",
+    guideSteps: [
+      "导读地图：快速把握论文的问题、方法、结论与章节联系",
+      "实验重点分析：聚焦实验设置、关键结果、对比与局限",
+      "原文选区提问：选中 PDF 原文后，围绕选区继续追问"
+    ]
   },
   "domain-onboarding": {
     id: "domain-onboarding",
     sourcePath: "/static/domain-onboarding/index.html",
     title: "领域入门 · 研见 · SeeFurther",
-    guideTitle: "领域学习工作台",
-    guideSteps: ["查看生成进度与研究阶段", "沿学习地图展开问题和方向", "把推荐论文加入资料库或继续精读"]
+    guideTitle: "领域入门",
+    guideSteps: [
+      "前置知识梳理：明确进入该领域需要掌握的基础概念",
+      "领域发展路径：沿研究阶段理解关键问题与方法演进",
+      "相关论文推荐：查看 Survey 主导的论文清单并继续精读"
+    ]
   },
   library: {
     id: "library",
