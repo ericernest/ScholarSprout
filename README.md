@@ -67,14 +67,25 @@ v1 面向个人电脑本地部署：数据、模型配置和 API Key 由本地�
 ### 环境要求
 
 - Python 3.11+
-- Node.js 18+（仅在修改前端时需要）
+- Node.js 18+（从源码重新构建前端时需要）
 - Windows 或 Linux
 
-### 安装后端
+### 安装运行环境
 
 ```bash
 python -m pip install -e .
 ```
+
+发布分支已经包含可直接使用的前端构建产物。如果你是从源码完整准备环境，或修改过 `webui/`，再执行：
+
+```bash
+cd webui
+npm install
+npm run build
+cd ..
+```
+
+这一步会把 Vue 页面构建到网关使用的 `gateway/static/app-v2/` 目录；只运行已经发布的 v1 时可以跳过。
 
 ### 启动研见
 
@@ -82,7 +93,7 @@ python -m pip install -e .
 novicesynapse gateway --host 127.0.0.1 --port 8000
 ```
 
-打开 <http://127.0.0.1:8000/> 即可使用。`novicesynapse` 是当前 v1 的命令行入口名称，产品名称为“研见 · SeeFurther”。
+打开 <http://127.0.0.1:8000/> 即可使用。产品名称为“研见 · SeeFurther”。
 
 ### 配置模型
 
@@ -111,18 +122,6 @@ novicesynapse gateway --host 127.0.0.1 --port 8000
 ```
 
 浏览器请求由 FastAPI 网关接收，领域入门、论文精读、对话和设置分别由现有后端处理器提供能力；前端负责页面呈现、交互状态和 API 调用。保持这个边界可以让本地版足够轻量，也方便未来把后端替换为集中式服务。
-
-## 前端开发
-
-前端源码位于 `webui/`，采用 Vue 3 + TypeScript + Vite 多页面结构。网关运行时使用已构建的 `gateway/static/app-v2/` 静态资源。
-
-```bash
-cd webui
-npm install
-npm run build
-```
-
-生成资源后重新启动网关即可查看页面变化。
 
 ## 版本边界
 
