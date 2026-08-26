@@ -1,4 +1,4 @@
-"""提供 paper_reading mode 的占位 handler。"""
+"""提供 paper_reading mode 的稳定入口，委托到 handlers 子包。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,19 @@ from typing import Any
 from channels.base import ChannelMessage
 
 
-# 处理 paper_reading mode 消息。
-def handle_paper_reading_message(message: ChannelMessage, app_state: Any) -> dict[str, str]:
-    return {
-        "text": "paper reading handler is not implemented yet",
-        "status": "not_implemented",
-    }
+def handle_paper_reading_message(
+    message: ChannelMessage,
+    app_state: Any,
+) -> dict[str, Any]:
+    """论文精读 handler — 委托到 handlers.paper_reading.handler 模块。
+
+    框架接口: (ChannelMessage, app_state) -> dict
+    """
+    from handlers.paper_reading.handler import handle_paper_reading_message as _impl
+    return _impl(message, app_state)
+
+
+def resume_pending_reading_map_generations(app_state: Any) -> int:
+    """Requeue persisted reading-map work after the gateway restarts."""
+    from handlers.paper_reading.handler import resume_pending_reading_map_generations as _impl
+    return _impl(app_state)

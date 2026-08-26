@@ -50,6 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.artifacts/
 
 # Translations
 *.mo
@@ -216,3 +217,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local TODO
+TODO.md
+
+# SeeFurther frontend dependencies and Vite caches
+webui/node_modules/
+webui/.vite/
+
+# Local domain-onboarding review notes
+docs/领域入门-问题与改进建议.md

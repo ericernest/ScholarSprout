@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07120f" />
+    <title>论文精读 · 研见 · SeeFurther</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/vendor/katex/katex.min.css" />
+    <link rel="stylesheet" href="/static/paper-reading/styles.css" />
+  </head>
+  <body class="paper-reading-body is-booting">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div id="cursor-glow" aria-hidden="true"></div>
+
+    <header class="pr-topbar">
+        <a class="pr-brand" href="/"><span class="brand-mark">SF</span><span>研见 · SeeFurther</span></a>
+      <div class="topbar-center"><span class="status-dot"></span><span id="workspace-status">论文精读工作台</span></div>
+      <nav class="topbar-actions" aria-label="页面导航">
+        <button id="paper-note-button" class="ghost-button" type="button" hidden>论文笔记</button>
+        <button id="fullscreen-button" class="ghost-button" type="button">全屏阅读</button>
+        <a class="ghost-button" href="/library?view=paper-readings">精读列表</a>
+        <a id="return-chat-link" class="ghost-button" href="/app">返回对话</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="paper-boot" class="paper-boot" aria-live="polite">
+        <span class="loading-orb" aria-hidden="true"></span>
+        <div><strong>正在打开论文精读</strong><p>恢复论文、阅读进度和 PDF 缓存…</p></div>
+      </section>
+
+      <section id="paper-intake" class="intake-view" hidden>
+        <div class="intake-hero">
+          <p class="eyebrow">Deep Paper Reading</p>
+          <h1>把一篇论文，拆成可理解的知识网络。</h1>
+          <p>上传本地 PDF、粘贴论文链接，或先搜索再导入。系统会解析章节、生成阅读地图，并让不同 AI 专家协同分析。</p>
+          <div class="capability-row"><span>PDF 结构化解析</span><span>8 个阅读 Skill</span><span>智能索引卡片</span><span>Fork 深入探索</span></div>
+        </div>
+
+        <div class="intake-grid">
+          <article class="intake-card upload-card">
+            <div class="card-index">01</div><p class="card-kicker">本地论文</p><h2>上传 PDF</h2>
+              <p>适合本地保存的论文。文件只发送到当前 SeeFurther 后端进行解析。</p>
+            <label id="upload-dropzone" class="upload-dropzone" for="pdf-file-input">
+              <span class="upload-icon">↥</span><strong>选择或拖入 PDF</strong><small id="upload-file-label">仅支持 .pdf 文件</small>
+            </label>
+            <input id="pdf-file-input" type="file" accept="application/pdf,.pdf" hidden />
+          </article>
+
+          <article class="intake-card">
+            <div class="card-index">02</div><p class="card-kicker">在线论文</p><h2>从链接导入</h2>
+            <p>支持 PDF 直链与 arXiv abs/pdf 地址，arXiv 摘要页会自动转换为 PDF 地址。</p>
+            <form id="url-import-form" class="stack-form">
+              <label for="paper-url-input">论文链接</label>
+              <input id="paper-url-input" type="url" placeholder="https://arxiv.org/abs/2506.07398" required />
+              <button class="accent-button" type="submit">解析这篇论文 <span>→</span></button>
+            </form>
+          </article>
+
+          <article class="intake-card search-card">
+            <div class="card-index">03</div><p class="card-kicker">论文检索</p><h2>搜索并选择</h2>
+            <form id="paper-search-form" class="search-form">
+              <label for="paper-search-input">关键词、标题或 arXiv ID</label>
+              <div class="search-row">
+                <input id="paper-search-input" type="search" placeholder="例如：hierarchical memory agents" required />
+                <button class="accent-button" type="submit">搜索</button>
+              </div>
+              <div class="search-options">
+                <label>来源<select id="paper-search-source"><option value="all">全部来源</option><option value="arxiv">arXiv</option><option value="semantic_scholar">Semantic Scholar</option></select></label>
+                <label>数量<input id="paper-search-limit" type="number" min="1" max="50" value="6" /></label>
+              </div>
+            </form>
+          </article>
+        </div>
+
+        <section id="search-results-section" class="result-section" hidden>
+          <div class="section-heading"><div><p class="card-kicker">Search results</p><h2>选择要精读的论文</h2></div><span id="search-result-count" class="count-pill">0 篇</span></div>
+          <div id="search-results" class="paper-result-grid"></div>
+        </section>
+
+        <section id="paper-ready-section" class="ready-section" hidden>
+          <div class="ready-orbit" aria-hidden="true"></div>
+          <article id="paper-ready-card" class="paper-ready-card" tabindex="0" role="button">
+            <div class="ready-topline"><span>解析完成</span><span id="ready-source">PDF</span></div>
+            <h2 id="ready-title">论文标题</h2><p id="ready-authors">作者</p><p id="ready-abstract" class="ready-abstract"></p>
+            <div class="ready-capabilities" aria-label="精读工作台能力">
+              <span>PDF 原文可划选</span><span>智能索引自动生成</span><span>阅读进度自动保存</span>
+            </div>
+            <div class="enter-hint">点击进入精读工作台 <span>↗</span></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="paper-workbench" class="workbench" hidden>
+        <header class="paper-ribbon">
+          <div><p id="paper-ribbon-meta">正在阅读</p><h1 id="paper-ribbon-title">未命名论文</h1></div>
+          <div class="ribbon-actions"><button id="reparse-paper-button" class="mini-button" type="button">重新解析论文</button><span id="session-state-badge" class="state-badge">未开始</span></div>
+        </header>
+
+        <section id="reading-map-panel" class="workspace-panel reading-map-panel is-collapsed">
+          <header class="reading-map-header">
+            <div><p id="reading-map-kicker" class="panel-label">研究总览</p><h2 id="reading-map-title">研究总览</h2><p id="reading-map-status-copy" class="muted-copy">研究问题、核心方法、方法步骤、实验支撑与局限追问会汇总在这里。</p></div>
+            <div class="reading-map-header-actions">
+              <button id="regenerate-reading-map-button" class="mini-button is-accent" type="button">重新生成</button>
+              <button id="reading-map-toggle-button" class="mini-button" type="button" aria-expanded="false" aria-controls="reading-map-panel">展开</button>
+            </div>
+          </header>
+          <div class="reading-map-layout">
+            <div class="reading-map-shell">
+              <div id="reading-map-grid" class="reading-map-grid"></div>
+              <div id="reading-map-empty" class="reading-map-empty">导读地图正在生成。你可以先阅读 PDF 原文、划选内容并让右侧智能体分析。</div>
+            </div>
+            <aside class="reading-map-detail">
+              <div id="reading-map-detail"><p class="panel-label">导读</p><h3>阅读地图</h3><p class="muted-copy">点击卡片可以跳转原文，或让右侧智能体解释这一段。</p></div>
+            </aside>
+          </div>
+        </section>
+
+        <div id="workbench-grid" class="workbench-grid">
+          <aside class="workspace-panel navigator-panel">
+            <section class="side-section paper-summary"><p class="panel-label">论文</p><h2 id="side-paper-title">论文标题</h2><p id="side-paper-authors" class="muted-copy"></p><div id="side-paper-tags" class="tag-row"></div></section>
+            <section class="side-section">
+              <div class="panel-heading"><span>阅读进度</span><strong id="progress-percentage">0%</strong></div>
+              <div class="progress-track"><span id="progress-bar"></span></div><p id="progress-copy" class="muted-copy">尚未开始阅读</p>
+            </section>
+            <section class="side-section outline-section"><div class="panel-heading"><span>论文索引</span><strong id="outline-count" hidden></strong></div><p id="outline-source-warning" class="outline-source-warning" hidden></p><nav id="paper-outline" class="paper-outline" aria-label="论文目录"></nav></section>
+          </aside>
+
+          <div id="navigator-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整论文索引宽度"></div>
+
+          <article class="workspace-panel reader-panel">
+            <header class="reader-toolbar">
+              <div class="reader-tabs" role="tablist"><button class="reader-tab is-active" data-reader-mode="structured" type="button">智能索引</button><button class="reader-tab" data-reader-mode="reflow" type="button" hidden>AI 论文重排</button><button class="reader-tab" data-reader-mode="pdf" type="button">PDF 原文</button></div>
+              <div class="reader-actions">
+                <label id="pdf-fit-control" class="pdf-fit-control" hidden>缩放
+                  <select id="pdf-fit-select">
+                    <option value="width">适应宽度</option>
+                    <option value="page">适应整页</option>
+                    <option value="100">100%</option>
+                  </select>
+                </label>
+                <button id="previous-section-button" class="mini-button" type="button">← 上一章</button><button id="analyze-section-button" class="mini-button is-accent" type="button">分析本节</button><button id="fork-explore-button" class="mini-button" type="button" title="打开 Fork 专项探索弹窗">⑂ Fork 探索</button><button id="next-section-button" class="mini-button" type="button">下一章 →</button>
+              </div>
+            </header>
+            <div id="selection-toolbar" class="selection-toolbar" hidden>
+              <button data-selection-action="ask" type="button">提问</button><button data-selection-action="explain" type="button">解释</button><button data-selection-action="fork" type="button">Fork 深入</button>
+            </div>
+            <div id="structured-reader" class="structured-reader"></div>
+            <div id="reflow-reader" class="structured-reader reflow-reader" hidden></div>
+            <div id="pdf-reader" class="pdf-reader" hidden><iframe id="pdf-frame" title="论文 PDF 原文"></iframe><div id="pdf-empty" class="empty-state">当前论文没有可恢复的 PDF 文件。</div></div>
+          </article>
+
+          <div id="copilot-resize-handle" class="resize-handle" aria-hidden="true" title="拖动调整协作区宽度"></div>
+
+          <aside id="copilot-panel" class="workspace-panel copilot-panel">
+            <header class="copilot-heading"><div><p class="panel-label">Synapse Copilot</p><h2>阅读协作区</h2></div><div class="copilot-heading-actions"><button id="regenerate-button" class="mini-button is-accent" type="button" title="分析当前章节">分析本节</button></div></header>
+            <div id="copilot-tabs" class="copilot-tabs" role="tablist" aria-label="分析选项卡"></div>
+            <div id="copilot-feeds" class="copilot-feeds">
+              <div id="analysis-feed" class="analysis-feed copilot-feed is-active" data-feed-id="main" aria-live="polite">
+                <article class="welcome-card"><span class="assistant-avatar">N</span><div><strong>准备开始精读</strong><p>点击章节或直接提问。我会结合当前正文、阅读进度和智能索引回答。</p></div></article>
+              </div>
+            </div>
+            <form id="reading-chat-form" class="reading-composer">
+              <textarea id="reading-chat-input" rows="3" placeholder="针对当前章节提问，或让专家继续分析…" required></textarea>
+              <div class="composer-row"><span id="composer-context">当前：全文 · Enter 发送，Shift+Enter 换行</span><button id="reading-stop-button" class="mini-button is-stop" type="button" hidden>中断</button><button class="accent-button" type="submit">发送</button></div>
+            </form>
+          </aside>
+        </div>
+
+      </section>
+    </main>
+
+    <section id="paper-note-drawer" class="paper-note-drawer" aria-hidden="true" aria-label="论文 Markdown 笔记">
+      <button id="paper-note-drag-handle" class="paper-note-drag-handle" type="button" aria-label="拖动调整论文笔记高度" title="按住并上下拖动调整笔记高度"><span></span></button>
+      <header>
+        <div><p class="panel-label">Paper note · Markdown</p><h2 id="paper-note-title">论文笔记</h2></div>
+        <div class="paper-note-actions"><span id="paper-note-save-status">尚未修改</span><div id="paper-note-mode" class="paper-note-mode" role="group" aria-label="笔记编辑模式"><button class="is-active" type="button" data-paper-note-mode="normal">正常模式</button><button type="button" data-paper-note-mode="source">源码模式</button></div><button id="paper-note-save-button" class="mini-button is-accent" type="button">保存</button><button id="paper-note-close-button" class="dialog-close" type="button" aria-label="收起论文笔记">×</button></div>
+      </header>
+      <div id="paper-note-toolbar" class="paper-note-toolbar" role="toolbar" aria-label="Markdown 格式工具">
+        <button type="button" data-markdown-action="heading1" title="一级标题（Ctrl+1）">H1</button><button type="button" data-markdown-action="heading2" title="二级标题（Ctrl+2）">H2</button><button type="button" data-markdown-action="heading3" title="三级标题（Ctrl+3）">H3</button><button type="button" data-markdown-action="bold" title="加粗（Ctrl+B）"><strong>B</strong></button><button type="button" data-markdown-action="italic" title="斜体（Ctrl+I）"><em>I</em></button><span></span><button type="button" data-markdown-action="quote" title="引用">❝</button><button type="button" data-markdown-action="bullet" title="无序列表（Ctrl+Shift+8）">• 列表</button><button type="button" data-markdown-action="ordered" title="有序列表（Ctrl+Shift+7）">1. 列表</button><button type="button" data-markdown-action="task" title="任务列表">☐ 任务</button><button type="button" data-markdown-action="table" title="插入表格">表格</button><span></span><button type="button" data-markdown-action="code" title="行内代码">&lt;/&gt;</button><button type="button" data-markdown-action="link" title="链接（Ctrl+K）">链接</button><button type="button" data-markdown-action="inline_math" title="行内公式（$...$）">∑ 公式</button><button type="button" data-markdown-action="block_math" title="块公式（$$...$$）">∫ 公式块</button>
+      </div>
+      <div class="paper-note-editor-body"><div id="paper-note-normal" class="paper-note-normal" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="开始记录论文笔记……"></div><textarea id="paper-note-input" spellcheck="false" placeholder="# 阅读笔记&#10;&#10;记录核心问题、方法、证据、疑问与后续想法……" hidden></textarea></div>
+      <footer><span id="paper-note-shortcuts">Ctrl+1~6 标题 · Ctrl+0 正文 · Ctrl+B 加粗 · Ctrl+I 斜体 · Ctrl+K 链接 · Ctrl+S 保存</span><span id="paper-note-count">0 字</span></footer>
+    </section>
+
+    <div id="fork-modal" class="fork-modal" hidden>
+      <div class="fork-modal-backdrop" data-fork-close></div>
+      <section id="fork-panel" class="fork-panel" role="dialog" aria-modal="true" aria-label="Fork 专项探索">
+        <header><div><p class="panel-label">Fork exploration</p><h2>创建专项探索分支</h2></div><button id="fork-close-button" class="dialog-close" type="button" aria-label="关闭 Fork 弹窗">×</button></header>
+        <label>选中上下文<textarea id="fork-context-input" rows="3" placeholder="选中的公式、段落或概念"></textarea></label>
+        <label>探索问题<textarea id="fork-question-input" rows="2" placeholder="希望这个分支重点回答什么？"></textarea></label>
+        <p class="fork-hint">创建后会在右侧协作区生成独立选项卡，可继续追问，随时合并回主流程。</p>
+        <footer><button id="fork-create-button" class="accent-button" type="button">创建并分析</button></footer>
+      </section>
+    </div>
+
+    <div id="note-modal" class="annotation-modal" hidden>
+      <div class="annotation-modal-backdrop" data-note-close></div>
+      <section id="note-panel" class="annotation-panel" role="dialog" aria-modal="true" aria-labelledby="note-modal-title">
+        <header>
+          <div><p class="panel-label">论文标注</p><h2 id="note-modal-title">添加注释</h2></div>
+          <button id="note-close-button" class="dialog-close" type="button" aria-label="关闭注释弹窗">×</button>
+        </header>
+        <p id="note-selection-copy" class="annotation-selection"></p>
+        <label for="note-text-input">注释内容</label>
+        <textarea id="note-text-input" rows="5" placeholder="记录你的理解、疑问或后续验证事项"></textarea>
+        <footer>
+          <button class="mini-button" type="button" data-note-close>取消</button>
+          <button id="note-save-button" class="accent-button" type="button">保存注释</button>
+        </footer>
+      </section>
+    </div>
+
+    <div id="global-loading" class="global-loading" hidden><span class="loading-orb"></span><div><strong id="loading-title">正在处理</strong><p id="loading-detail">请稍候…</p></div></div>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+    <script src="/static/vendor/katex/katex.min.js"></script>
+    <script src="/static/paper-reading/note-editor.js"></script>
+    <script type="module" src="/static/paper-reading/app.js"></script>
+  </body>
+</html>

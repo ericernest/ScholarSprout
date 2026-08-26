@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>领域入门 · 研见 · SeeFurther</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/domain-onboarding/tokens.css" />
+    <link rel="stylesheet" href="/static/domain-onboarding/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a id="brand-chat-link" class="brand" href="/app">
+        <span class="brand-mark">PA</span>
+        <span><b>研见 · SeeFurther</b><small>领域学习工作台</small></span>
+      </a>
+      <div class="task-status">
+        <span id="status-dot" class="status-dot"></span>
+        <span id="status-label">正在分析任务</span>
+        <span id="progress-label">0%</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="topbar-retry-button" class="ghost-button" type="button" hidden>重试任务</button>
+        <button id="cancel-button" class="ghost-button" type="button">中断生成</button>
+        <a class="ghost-button" href="/library?view=domain-onboardings">领域列表</a>
+      </div>
+    </header>
+
+    <div class="progress-track" aria-hidden="true">
+      <span id="progress-fill"></span>
+    </div>
+
+    <main class="workspace">
+      <aside class="sidebar panel">
+        <div class="sidebar-heading">
+          <p>LEARNING MAP</p>
+          <h1 id="sidebar-domain">领域入门</h1>
+        </div>
+        <nav id="section-nav" aria-label="领域入门目录">
+          <button class="nav-item is-active" data-target="overview" type="button"><span>01</span>学习概览</button>
+          <button class="nav-item" data-target="prerequisites" type="button"><span>02</span>前置知识</button>
+          <button class="nav-item" data-target="development" type="button"><span>03</span>发展路径</button>
+          <button class="nav-item" data-target="landscape" type="button"><span>04</span>概念全景</button>
+          <button class="nav-item" data-target="learning-path" type="button"><span>05</span>学习路线</button>
+          <button class="nav-item" data-target="papers" type="button"><span>06</span>论文清单</button>
+          <button id="graph-nav" class="nav-item" data-target="knowledge-graph" type="button" hidden><span>07</span>知识图谱</button>
+        </nav>
+        <div class="sidebar-foot">
+          <a id="return-chat-link" href="/app">← 返回对话</a>
+        </div>
+      </aside>
+
+      <div id="sidebar-resizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整学习目录宽度"></div>
+
+      <section id="content" class="content-column">
+        <section id="overview" class="content-section hero-section reveal">
+          <div id="overview-content" class="loading-section">
+            <span class="skeleton wide"></span>
+            <span class="skeleton title"></span>
+            <span class="skeleton"></span>
+            <span class="skeleton short"></span>
+          </div>
+        </section>
+
+        <section id="prerequisites" class="content-section reveal">
+          <header class="section-heading">
+            <div><span>FOUNDATIONS</span><h2>前置知识</h2></div>
+            <p>点击知识节点，在右侧查看关键概念与关联论文。</p>
+          </header>
+          <div id="prerequisites-content" class="card-grid loading-grid"></div>
+        </section>
+
+        <section id="development" class="content-section reveal">
+          <header class="section-heading">
+            <div><span>EVOLUTION</span><h2>发展路径</h2></div>
+            <p>按后端给定顺序理解关键阶段、技术转折与代表工作。</p>
+          </header>
+          <div id="development-content" class="timeline loading-grid"></div>
+        </section>
+
+        <section id="landscape" class="content-section reveal">
+          <header class="section-heading">
+            <div><span>LANDSCAPE</span><h2>概念全景</h2></div>
+            <p>从当前问题进入子方向，展开一条可继续探索的研究分支。</p>
+          </header>
+          <div id="landscape-content" class="loading-grid"></div>
+        </section>
+
+        <section id="learning-path" class="content-section reveal">
+          <header class="section-heading">
+            <div><span>STANDARD ROUTE</span><h2>学习路线</h2></div>
+            <p>按基础、概念、方法、实验与前沿组成一条标准科研入门路线。</p>
+          </header>
+          <div id="learning-content" class="learning-list loading-grid"></div>
+        </section>
+
+        <section id="papers" class="content-section reveal">
+          <header class="section-heading">
+            <div><span>READING SET</span><h2>论文清单</h2></div>
+            <div id="paper-filters" class="filter-row"></div>
+          </header>
+          <div id="papers-content" class="paper-list loading-grid"></div>
+        </section>
+
+        <section id="knowledge-graph" class="content-section reveal" hidden>
+          <header class="section-heading">
+            <div><span>EXPERIMENTAL GRAPH</span><h2>知识图谱</h2></div>
+            <p>图谱仅在后端通过验证并返回时展示。</p>
+          </header>
+          <div id="graph-content"></div>
+        </section>
+      </section>
+
+      <div id="inspector-resizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整详情栏宽度"></div>
+
+      <aside class="inspector panel">
+        <div class="inspector-heading">
+          <span>CONTEXT</span>
+          <h2 id="inspector-title">学习详情</h2>
+          <p id="inspector-subtitle">选择中间区域的知识、阶段、方向或论文。</p>
+        </div>
+        <div id="inspector-content" class="inspector-content">
+          <div class="inspector-empty">
+            <span class="orbit-icon" aria-hidden="true">◎</span>
+            <strong>上下文会在这里展开</strong>
+            <p>关联论文、概念要点与路线任务不会打断主阅读流。</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <section id="empty-state" class="empty-overlay" hidden>
+      <div class="empty-card">
+        <span>DOMAIN ONBOARDING</span>
+        <h2 id="empty-title">还没有领域任务</h2>
+        <p id="empty-message">从聊天页选择“领域入门”并提出你的学习目标。</p>
+        <div>
+          <button id="retry-button" class="ghost-button" type="button" hidden>重试当前任务</button>
+          <a class="primary-button" href="/app?mode=domain_onboarding">返回对话提问</a>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="/static/domain-onboarding/app.js"></script>
+  </body>
+</html>

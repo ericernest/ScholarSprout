@@ -18,10 +18,37 @@ class OpenAIClientConfig:
     output_cost_per_million_tokens: float | None = None
 
 
+@dataclass(slots=True)
+class EmbeddingConfig:
+    """OpenAI-compatible embedding endpoint used by domain onboarding."""
+
+    model_name: str = "qwen3-embedding"
+    base_url: str | None = None
+    api_key: str = ""
+
+
+@dataclass(slots=True)
+class MinerUConfig:
+    """Optional MinerU endpoint. Blank endpoint or key keeps it disabled."""
+
+    base_url: str | None = None
+    api_key: str = ""
+    timeout: float = 180.0
+
+
+# 描述本地持久化数据的目录配置。
+@dataclass(slots=True)
+class StorageConfig:
+    data_dir: str = "~/.novicesynapse"
+
+
 # 描述当前应用配置。
 @dataclass(slots=True)
 class AppConfig:
     client: OpenAIClientConfig = field(default_factory=OpenAIClientConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    mineru: MinerUConfig = field(default_factory=MinerUConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
 
 # 将配置对象转换为可写入 JSON 的字典。

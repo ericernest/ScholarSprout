@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NoviceSynapse"
-version = "0.1.0"
-description = "NoviceSynapse - AI Research Assistant"
+name = "paperaurora"
+version = "1.0.0"
+description = "PaperAurora (研见 · SeeFurther) - a local-first AI research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -13,16 +13,29 @@ dependencies = [
     "fastapi>=0.110,<1.0",
     "openai>=1.0,<2.0",
     "pydantic>=2.9,<3.0",
+    "PyYAML>=6.0,<7.0",
     "typer>=0.12,<1.0",
     "uvicorn>=0.30,<1.0",
+    # 论文精读模块新增依赖
+    "PyMuPDF>=1.23.0",           # PDF 解析
+    "httpx>=0.27.0",              # 异步 HTTP 客户端（arXiv/Semantic Scholar API）
+    "feedparser>=6.0.0",          # arXiv Atom/RSS 解析
+    "networkx>=3.0,<4.0",         # 知识图谱数据结构
+    "json-repair==0.*",           # LLM 偶发非法 JSON 的本地确定性修复
+]
+
+[project.optional-dependencies]
+embeddings = [
+    "fastembed>=0.8,<1.0",
 ]
 
 [project.scripts]
 novicesynapse = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "gateway*", "handlers*", "models*", "runtime*", "tools*"]
+include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]
-gateway = ["static/*"]
+gateway = ["static/*", "static/app-v2/*", "static/app-v2/assets/*", "static/app-v2/pages/*", "static/app-v2/styles/*", "static/paper-reading/*", "static/domain-onboarding/*", "static/settings/*", "static/library/*", "static/vendor/katex/*", "static/vendor/katex/fonts/*"]
+skills = ["builtin/*/*/SKILL.md", "builtin/*/*/*/SKILL.md"]

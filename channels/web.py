@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from bus.events import INBOUND
@@ -56,7 +57,7 @@ class WebChannel(BaseChannel):
 
         return self.create_inbound_message(
             session_id=self._read_session_id(body),
-            content=str(body.get("content") or ""),
+            content=body if mode == "paper_reading" else str(body.get("content") or ""),
             mode=mode,
             user_id=body.get("user_id"),
             metadata=metadata if isinstance(metadata, dict) else None,
@@ -74,6 +75,8 @@ class WebChannel(BaseChannel):
     def _read_session_id(self, body: dict[str, Any]) -> str:
         session_id = str(body.get("session_id") or "").strip()
         if not session_id:
+            if str(body.get("action") or "").strip():
+                return f"paper-reading-{uuid4()}"
             raise HTTPException(status_code=400, detail="session_id is required.")
 
         return session_id

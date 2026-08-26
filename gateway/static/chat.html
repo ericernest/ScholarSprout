@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NoviceSynapse Chat</title>
+    <title>研究对话 · 研见 · SeeFurther</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body class="chat-body">
@@ -12,13 +13,43 @@
 
     <main class="page chat-page">
       <header class="chat-header">
-        <a class="brand" href="/">NoviceSynapse</a>
-        <span id="mode-pill" class="mode-pill">当前模式：日常聊天</span>
+        <a class="brand" href="/">研见 <span>· SeeFurther</span></a>
+        <div class="header-actions">
+          <span id="mode-pill" class="mode-pill">当前模式：日常聊天</span>
+          <a class="settings-link" href="/library">资料库</a>
+          <a class="settings-link" href="/settings">配置</a>
+        </div>
       </header>
+
+      <section id="discussion-context-bar" class="discussion-context-bar" hidden>
+        <div class="discussion-context-copy">
+          <span class="discussion-context-label">当前讨论</span>
+          <span class="discussion-context-hint">内容按需读取，不会自动塞入对话</span>
+        </div>
+        <div class="discussion-context-picker">
+          <button
+            id="discussion-context-button"
+            class="discussion-context-button"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+          >
+            <span id="discussion-context-value" class="discussion-context-value">不指定</span>
+            <span class="discussion-context-chevron" aria-hidden="true"></span>
+          </button>
+          <div
+            id="discussion-context-menu"
+            class="discussion-context-menu"
+            role="listbox"
+            aria-label="选择当前讨论的论文或领域"
+            hidden
+          ></div>
+        </div>
+      </section>
 
       <section id="messages" class="messages" aria-live="polite">
         <article class="message assistant">
-          <div class="bubble">你好，我是 NoviceSynapse。可以从科研讨论、代码思路或方向规划开始。</div>
+          <div class="bubble">你好，我是研见 · SeeFurther。可以从论文精读、领域探索或科研讨论开始。</div>
         </article>
       </section>
 
@@ -37,6 +68,21 @@
             <button id="clear-mode-button" type="button" aria-label="取消当前模式">×</button>
           </div>
           <textarea id="message-input" rows="1" placeholder="输入你的问题..." required></textarea>
+          <div id="paper-mode-input" class="paper-mode-input" title="也可以把 PDF 直接拖到这里" hidden>
+            <input id="paper-file-input" type="file" accept="application/pdf,.pdf" hidden />
+            <button id="paper-file-button" class="paper-file-button" type="button">
+              <span>↥</span>
+              <span id="paper-file-label">选择 PDF</span>
+            </button>
+            <span class="paper-input-divider">或</span>
+            <input
+              id="paper-url-input"
+              class="paper-url-input"
+              type="text"
+              inputmode="url"
+              placeholder="拖入 PDF，或粘贴 PDF、arXiv 链接 / ID"
+            />
+          </div>
         </div>
         <button id="send-button" class="send-button" type="submit">发送</button>
       </form>
