@@ -62,8 +62,9 @@ from tools.builtin.kg_query_tool import set_kg_engine
 from tools.builtin.kg_build_tool import set_kg_builder
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+FRONTEND_DIR = STATIC_DIR / "app-v2"
 
-app = FastAPI(title="NoviceSynapse Gateway")
+app = FastAPI(title="PaperAurora Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(config_router)
 app.include_router(research_library_router)
@@ -106,40 +107,59 @@ def readiness(request: Request) -> dict[str, object]:
     return {"status": "ready", "components": components}
 
 
+def _frontend_page(relative_path: str, legacy_path: Path) -> FileResponse:
+    """Serve the built Vue surface, with a source-checkout fallback.
+
+    The fallback keeps the Python gateway usable before a developer has run the
+    frontend build. API, SSE, storage and agent contracts remain unchanged.
+    """
+    built_path = FRONTEND_DIR / relative_path
+    return FileResponse(built_path if built_path.is_file() else legacy_path)
+
+
 # 返回首页。
 @app.get("/")
 def home_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return _frontend_page("index.html", STATIC_DIR / "index.html")
 
 
 # 返回聊天页。
 @app.get("/app")
 def chat_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "chat.html")
+    return _frontend_page("pages/chat.html", STATIC_DIR / "chat.html")
 
 
 # 返回首次运行与后续修改共用的配置向导。
 @app.get("/settings")
 def settings_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "settings" / "index.html")
+    return _frontend_page(
+        "pages/settings.html", STATIC_DIR / "settings" / "index.html"
+    )
 
 
 # 返回会话、模式产物和论文的统一资料库。
 @app.get("/library")
 def library_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "library" / "index.html")
+    return _frontend_page(
+        "pages/library.html", STATIC_DIR / "library" / "index.html"
+    )
 
 
 # 返回嵌入应用层级的论文精读工作台。
 @app.get("/app/paper-reading")
 def paper_reading_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "paper-reading" / "index.html")
+    return _frontend_page(
+        "pages/paper-reading.html", STATIC_DIR / "paper-reading" / "index.html"
+    )
 
 
 # 返回领域入门工作台。
 @app.get("/app/domain-onboarding")
 def domain_onboarding_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "domain-onboarding" / "index.html")
+    return _frontend_page(
+        "pages/domain-onboarding.html",
+        STATIC_DIR / "domain-onboarding" / "index.html",
+    )
 
 
 # 旧入口回到聊天页的论文精读模式。

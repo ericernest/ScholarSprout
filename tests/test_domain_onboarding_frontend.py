@@ -17,7 +17,8 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         package_config = (STATIC_DIR.parents[1] / "pyproject.toml").read_text(encoding="utf-8")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("领域学习工作台", response.text)
+        self.assertIn('data-paperaurora-entry="domain-onboarding"', response.text)
+        self.assertIn("领域入门 · 研见 PaperAurora", response.text)
         self.assertTrue((STATIC_DIR / "domain-onboarding" / "app.js").is_file())
         self.assertTrue((STATIC_DIR / "domain-onboarding" / "styles.css").is_file())
         self.assertIn('"static/domain-onboarding/*"', package_config)

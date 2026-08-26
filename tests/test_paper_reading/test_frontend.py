@@ -26,7 +26,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
     def test_dedicated_page_route_targets_frontend_entry(self) -> None:
         response = paper_reading_page()
 
-        self.assertEqual(Path(response.path), FRONTEND / "index.html")
+        self.assertEqual(
+            Path(response.path), STATIC / "app-v2" / "pages" / "paper-reading.html"
+        )
 
     def test_legacy_page_route_returns_to_chat_paper_mode(self) -> None:
         response = legacy_paper_reading_page()
@@ -39,6 +41,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
         patterns = config["tool"]["setuptools"]["package-data"]["gateway"]
 
         self.assertIn("static/paper-reading/*", patterns)
+        self.assertIn("static/app-v2/pages/*", patterns)
         self.assertTrue((FRONTEND / "index.html").is_file())
         self.assertTrue((FRONTEND / "styles.css").is_file())
         self.assertTrue((FRONTEND / "app.js").is_file())

@@ -221,5 +221,9 @@ __marimo__/
 # Local TODO
 TODO.md
 
+# PaperAurora frontend dependencies and Vite caches
+webui/node_modules/
+webui/.vite/
+
 # Local domain-onboarding review notes
 docs/领域入门-问题与改进建议.md

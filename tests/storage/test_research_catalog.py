@@ -249,18 +249,20 @@ class ResearchLibraryApiTests(unittest.TestCase):
     def test_library_page_is_available(self) -> None:
         response = TestClient(app).get("/library")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("研究资料库", response.text)
-        self.assertIn('id="paper-import"', response.text)
-        self.assertIn('id="paper-file-button"', response.text)
-        self.assertIn('id="reading-filter"', response.text)
-        self.assertIn('id="paper-note-dialog"', response.text)
-        self.assertIn('id="library-paper-note-content"', response.text)
-        self.assertIn('/static/vendor/katex/katex.min.js', response.text)
-        self.assertIn('/static/paper-reading/note-editor.js', response.text)
-        self.assertIn('id="folder-tree"', response.text)
-        self.assertIn('id="folder-form-dialog"', response.text)
-        self.assertIn('id="folder-picker-dialog"', response.text)
-        self.assertIn('href="/app?new=1"', response.text)
+        self.assertIn('data-paperaurora-entry="library"', response.text)
+        self.assertIn("研究资料库 · 研见 PaperAurora", response.text)
+
+        legacy_html = (
+            Path(__file__).resolve().parents[2] / "gateway/static/library/index.html"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            'id="paper-import"', 'id="paper-file-button"', 'id="reading-filter"',
+            'id="paper-note-dialog"', 'id="library-paper-note-content"',
+            '/static/vendor/katex/katex.min.js', '/static/paper-reading/note-editor.js',
+            'id="folder-tree"', 'id="folder-form-dialog"', 'id="folder-picker-dialog"',
+            'href="/app?new=1"',
+        ):
+            self.assertIn(marker, legacy_html)
 
         script = (Path(__file__).resolve().parents[2] / "gateway/static/library/app.js").read_text(encoding="utf-8")
         self.assertIn("card.tabIndex = 0", script)

@@ -1,0 +1,20 @@
+{
+  "name": "paperaurora-webui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "verify": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "vue": "3.5.41"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.8",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}
