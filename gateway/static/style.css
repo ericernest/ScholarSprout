@@ -516,6 +516,14 @@ h1 {
 }
 .domain-card-cancel:hover { background: rgba(255,127,136,.22); }
 
+.domain-card-retry {
+  align-self: flex-start; margin: .65rem 0 0 .65rem; padding: .48rem .78rem;
+  border: 1px solid rgba(102,245,214,.44); border-radius: 999px;
+  color: #dffff8; background: rgba(102,245,214,.12); cursor: pointer;
+}
+.domain-card-retry:hover { background: rgba(102,245,214,.2); }
+.domain-card-retry:disabled { cursor: wait; opacity: .68; }
+
 .domain-chat-card {
   position: relative;
   display: grid;

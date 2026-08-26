@@ -601,7 +601,17 @@ function appendDomainOnboardingCard(job, query) {
       cancel.textContent = "重试中断";
     }
   });
-  item.append(card, cancel);
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "domain-card-retry";
+  retry.textContent = "重试生成";
+  retry.hidden = true;
+  retry.addEventListener("click", async () => {
+    retry.disabled = true;
+    retry.textContent = "正在重试";
+    await retryDomainOnboardingFromCard(item, query, job.access_token || "");
+  });
+  item.append(card, cancel, retry);
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
   if (!conversationContexts.some((context) => contextKey(context) === `domain_onboarding:${job.task_id}`)) {
@@ -609,6 +619,61 @@ function appendDomainOnboardingCard(job, query) {
   }
   activeDiscussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`) || activeDiscussion;
   restoreDiscussionSelector();
+}
+
+async function retryDomainOnboardingFromCard(item, query, accessToken) {
+  const taskId = item?.dataset?.taskId || "";
+  const retry = item?.querySelector(".domain-card-retry");
+  const stateNode = item?.querySelector("[data-domain-state]");
+  if (!taskId) return;
+  try {
+    const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}/retry`, {
+      method: "POST",
+      headers: accessToken
+        ? { Accept: "application/json", Authorization: `Bearer ${accessToken}` }
+        : { Accept: "application/json" },
+    });
+    let job;
+    try {
+      job = await response.json();
+    } catch {
+      job = null;
+    }
+    if (!response.ok || !job?.task_id) {
+      const detail = typeof job?.detail === "string" ? job.detail : "";
+      throw new Error(detail || `重试任务失败（HTTP ${response.status}）`);
+    }
+
+    const saved = loadDomainWorkspace() || {};
+    const nextAccessToken = job.access_token || "";
+    const nextSnapshot = { ...job, progress: 0 };
+    saveDomainWorkspace({
+      ...saved,
+      schema_version: "1.9",
+      saved_at: new Date().toISOString(),
+      task_id: job.task_id,
+      access_token: nextAccessToken,
+      request: saved.request || { query, session_id: sessionId, user_id: "local-web", metadata: {} },
+      snapshot: nextSnapshot,
+    });
+    const previousContextKey = `domain_onboarding:${taskId}`;
+    conversationContexts = conversationContexts.filter(
+      (context) => contextKey(context) !== previousContextKey,
+    );
+    if (activeDiscussion && contextKey(activeDiscussion) === previousContextKey) {
+      activeDiscussion = null;
+    }
+    item.remove();
+    appendDomainOnboardingCard(job, query);
+    updateDomainOnboardingCard(job.task_id, nextSnapshot);
+    watchDomainOnboardingCard(job.task_id, nextAccessToken);
+  } catch (error) {
+    if (stateNode) stateNode.textContent = error.message || "重试失败";
+    if (retry) {
+      retry.disabled = false;
+      retry.textContent = "重试失败，再试一次";
+    }
+  }
 }
 
 // Keep the chat card useful while the user decides when to open the workspace.
@@ -675,9 +740,20 @@ function updateDomainOnboardingCard(taskId, snapshot, labels = null) {
   if (progressNode) progressNode.textContent = `${Math.round(progress * 100)}%`;
   if (fillNode) fillNode.style.transform = `scaleX(${progress})`;
   if (kickerNode) kickerNode.textContent =
-    snapshot.state === "completed" ? "DOMAIN ONBOARDING · 已完成" : "DOMAIN ONBOARDING · 生成中";
+    snapshot.state === "completed"
+      ? "DOMAIN ONBOARDING · 已完成"
+      : snapshot.state === "failed"
+        ? "DOMAIN ONBOARDING · 生成失败"
+        : "DOMAIN ONBOARDING · 生成中";
   const cancel = item.querySelector(".domain-card-cancel");
   if (cancel) cancel.hidden = DOMAIN_TERMINAL_STATES.has(snapshot.state);
+  const retry = item.querySelector(".domain-card-retry");
+  if (retry) {
+    const canRetry = ["failed", "interrupted"].includes(snapshot.state) && Boolean(snapshot.retryable);
+    retry.hidden = !canRetry;
+    retry.disabled = !canRetry;
+    if (canRetry) retry.textContent = "重试生成";
+  }
 }
 
 // Returning from the workspace must restore the task card instead of losing it.

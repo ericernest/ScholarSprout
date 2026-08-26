@@ -36,6 +36,9 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("getPendingDomainRequestId", script)
         self.assertIn("findReusableDomainJob", script)
         self.assertIn("你可以随时进入工作台查看进度", script)
+        self.assertIn("retryDomainOnboardingFromCard", script)
+        self.assertIn('className = "domain-card-retry"', script)
+        self.assertIn("Boolean(snapshot.retryable)", script)
         self.assertNotIn('initialMode === "paper_reading"', script)
 
     def test_domain_workspace_restore_is_scoped_to_its_conversation(self) -> None:
@@ -91,6 +94,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn('id="sidebar-resizer"', html)
         self.assertIn('id="inspector-resizer"', html)
         self.assertIn("sectionStatusCopy", script)
+        self.assertIn("重试生成${escapeHtml(label)}", script)
         self.assertIn("待完善", script)
         self.assertIn("待生成", script)
         self.assertIn('action: "upload_paper"', script)

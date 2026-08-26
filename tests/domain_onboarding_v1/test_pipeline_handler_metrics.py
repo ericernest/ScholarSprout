@@ -425,6 +425,34 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(trace.stage_retrieval_query_count, 3)
         self.assertGreater(trace.stage_bound_paper_count, 0)
 
+    def test_subdirection_evidence_is_not_merged_twice(self) -> None:
+        pipeline = make_pipeline(
+            [make_generation_payload([paper.paper_id for paper in make_candidates()])]
+        )
+        delegate = pipeline.subdirection_policy
+
+        class CountingSubdirectionPolicy:
+            def __init__(self) -> None:
+                self.merge_calls = 0
+
+            def __getattr__(self, name):
+                return getattr(delegate, name)
+
+            def merge(self, ranked, bundles):
+                self.merge_calls += 1
+                return delegate.merge(ranked, bundles)
+
+        counting = CountingSubdirectionPolicy()
+        pipeline.subdirection_policy = counting
+
+        result = pipeline.run(
+            DomainOnboardingRequest(query="RAG"),
+            DomainOnboardingRequestTrace(),
+        )
+
+        self.assertIn(result.status, {"ok", "quality_warning"}, result.error)
+        self.assertEqual(counting.merge_calls, 1)
+
     def test_cancelled_request_stops_before_first_stage(self) -> None:
         pipeline = make_pipeline([make_generation_payload(["unused-paper"])])
         context = PipelineExecutionContext(timeout_seconds=30)
