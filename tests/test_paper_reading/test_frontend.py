@@ -13,6 +13,7 @@ from gateway.app import (
     paper_reading_figure,
     paper_reading_page,
     paper_reading_upload_pdf,
+    tutorial_page,
 )
 from handlers.paper_reading.harness.storage import PaperReadingStorage
 
@@ -29,6 +30,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertEqual(
             Path(response.path), STATIC / "app-v2" / "pages" / "paper-reading.html"
         )
+
+    def test_tutorial_route_targets_vue_entry(self) -> None:
+        response = tutorial_page()
+
+        self.assertEqual(Path(response.path), STATIC / "app-v2" / "pages" / "tutorial.html")
 
     def test_legacy_page_route_returns_to_chat_paper_mode(self) -> None:
         response = legacy_paper_reading_page()
@@ -48,8 +54,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertTrue((FRONTEND / "note-editor.js").is_file())
         self.assertIn("static/vendor/katex/*", patterns)
         self.assertIn("static/vendor/katex/fonts/*", patterns)
+        self.assertIn("static/vendor/pdfjs/*", patterns)
         self.assertTrue((STATIC / "vendor" / "katex" / "katex.min.js").is_file())
         self.assertTrue((STATIC / "vendor" / "katex" / "katex.min.css").is_file())
+        self.assertTrue((STATIC / "vendor" / "pdfjs" / "pdf.min.js").is_file())
+        self.assertTrue((STATIC / "vendor" / "pdfjs" / "pdf.worker.min.js").is_file())
 
     def test_all_backend_actions_have_frontend_calls(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -441,9 +450,13 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('window.scrollTo({ top: 0, left: 0, behavior: "auto" })', javascript)
         self.assertIn("document.scrollingElement", javascript)
         self.assertIn("document.fullscreenElement", javascript)
-        self.assertIn('jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "")', javascript)
+        self.assertIn("function resolveReadingMapSource", javascript)
+        self.assertIn("candidate.page ?? candidate.start_page ?? candidate.page_number", javascript)
+        self.assertIn("jumpToPdfPage(source.page, source.section_id)", javascript)
         self.assertIn('setReaderMode("pdf", { targetPage })', javascript)
         self.assertIn('scrollPdfToPage(targetPage, false)', javascript)
+        self.assertIn('script.src = PDFJS_SRC', javascript)
+        self.assertIn('const PDFJS_SRC = "/static/vendor/pdfjs/pdf.min.js"', javascript)
         self.assertNotIn('id="ready-nodes"', html)
         self.assertNotIn('id="ready-edges"', html)
         self.assertIn("智能索引自动生成", html)

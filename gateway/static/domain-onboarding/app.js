@@ -249,6 +249,9 @@ function bindScrollSpy() {
 }
 
 async function submitTask(request) {
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) {
+    throw new Error("请先完成基础模型配置。");
+  }
   const clientRequestId = pendingRequestId(request);
   const response = await fetch("/domain_onboarding/jobs", {
     method: "POST",
@@ -906,6 +909,7 @@ function renderPaperDetail(paper) {
 async function addPaperToLibrary(paperId, button) {
   const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
   if (!paper) return;
+  if (paperPdfUrl(paper) && window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   button.disabled = true;
   try {
     if (paperPdfUrl(paper)) {
@@ -933,6 +937,7 @@ async function addPaperToLibrary(paperId, button) {
 async function importPaper(paperId) {
   const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
   if (!paper) return;
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   try {
     toast("正在下载 PDF 并导入论文精读…");
     const importedId = await downloadDomainPaper(paper);
@@ -1042,6 +1047,7 @@ async function retryTask() {
     window.location.href = "/app?mode=domain_onboarding";
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   setRetryButtonsDisabled(true);
   try {
     const response = await fetch(

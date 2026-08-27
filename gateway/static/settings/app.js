@@ -88,11 +88,11 @@ function applyConfig(config) {
   setValue(embeddingBaseUrl, config.embedding?.base_url || "");
   setValue(dataDir, config.storage?.data_dir || "~/.novicesynapse");
   setText(apiKeyState, config.client?.api_key_configured
-    ? "API Key 已配置；留空保存会保留原密钥。"
-    : "API Key 尚未配置，请输入后保存。");
+    ? "已保存在本地后端；留空可保留。"
+    : "尚未保存 API Key。");
   setText(embeddingApiKeyState, config.embedding?.uses_client_api_key
-    ? "当前复用基础模型 API Key；输入后可改用独立 Key。"
-    : "已配置独立 Key；留空保存会改为复用基础模型 API Key。");
+    ? "当前复用基础模型 API Key。"
+    : "独立 Key 已保存在本地后端。");
   setText(setupBadge, config.setup_complete ? "已配置" : "首次配置");
   setText(guideTitle, config.setup_complete ? "模型数据配置" : "三步完成配置");
   if (config.storage?.environment_override) {
