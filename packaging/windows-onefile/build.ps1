@@ -51,6 +51,10 @@ try {
         --collect-submodules skills `
         $Launcher
 
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller 打包失败，退出码：$LASTEXITCODE"
+    }
+
     $ExePath = Join-Path $OutputDir "SeeFurther.exe"
     if (-not (Test-Path -LiteralPath $ExePath)) {
         throw "打包命令结束，但没有生成 $ExePath"

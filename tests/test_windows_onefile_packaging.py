@@ -16,6 +16,8 @@ def test_onefile_packaging_sources_are_complete() -> None:
     assert '"$BuiltinSkillsDir;skills\\builtin"' in build_script
     assert '"$AgentProfiles;agents"' in build_script
     assert "--collect-all fitz" in build_script
+    assert 'if ($LASTEXITCODE -ne 0)' in build_script
+    assert "PyInstaller 打包失败" in build_script
 
 
 def test_onefile_local_artifacts_are_ignored() -> None:
