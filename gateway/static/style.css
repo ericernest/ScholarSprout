@@ -273,6 +273,8 @@ h1 {
 }
 
 .discussion-context-bar {
+  position: relative;
+  z-index: 10020;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -303,6 +305,7 @@ h1 {
 }
 .discussion-context-picker {
   position: relative;
+  z-index: 10021;
   min-width: 0;
   width: min(620px, 62vw);
 }
@@ -359,7 +362,7 @@ h1 {
   left: 0;
   right: 0;
   top: calc(100% + 7px);
-  z-index: 40;
+  z-index: 10022;
   display: grid;
   gap: 4px;
   max-height: min(320px, 48vh);
@@ -889,6 +892,7 @@ textarea::placeholder {
 }
 
 .thinking-status { margin: 0; color: var(--muted); font-size: .82rem; }
+.streaming-plain-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.72; }
 .thinking-details {
   margin: 0 0 .7rem; padding: .5rem .65rem; border: 1px solid rgba(102,245,214,.18);
   border-radius: 11px; color: var(--muted); background: rgba(102,245,214,.045);

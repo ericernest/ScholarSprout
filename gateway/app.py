@@ -56,7 +56,6 @@ from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
 from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.pipeline.sources import PaperPipeline
-from handlers.paper_reading.pipeline.mineru import MinerUClient
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
 from tools.registry import create_builtin_tool_registry
@@ -574,7 +573,6 @@ def start_gateway_server(
     app.state.session_manager = session_manager
     app.state.fork_manager = fork_manager
     app.state.paper_pipeline = paper_pipeline
-    app.state.mineru_client = MinerUClient(config.mineru)
     app.state.retired_runtime_resources = []
     app.state.reload_runtime_config = lambda updated: reload_runtime_config(
         app.state, updated
@@ -643,7 +641,6 @@ def reload_runtime_config(app_state: object, config: object) -> dict[str, object
     query_engine = getattr(app_state, "kg_query_engine", None)
     if query_engine is not None:
         query_engine.model = model
-    app_state.mineru_client = MinerUClient(config.mineru)
     retired = getattr(app_state, "retired_runtime_resources", None)
     if retired is None:
         retired = []

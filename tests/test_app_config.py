@@ -11,7 +11,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 from config.manager import load_config, resolve_data_dir, save_config
-from config.schema import AppConfig, EmbeddingConfig, MinerUConfig, OpenAIClientConfig, StorageConfig
+from config.schema import AppConfig, EmbeddingConfig, OpenAIClientConfig, StorageConfig
 from config.web import _is_local_request
 from gateway.app import app
 
@@ -30,10 +30,6 @@ class ConfigManagerTests(unittest.TestCase):
                     model_name="qwen3-embedding",
                     base_url="https://embedding.example.test/v1",
                     api_key="embedding-secret",
-                ),
-                mineru=MinerUConfig(
-                    base_url="https://mineru.example.test/file_parse",
-                    api_key="mineru-secret",
                 ),
                 storage=StorageConfig(data_dir=str(Path(directory) / "data")),
             )
@@ -149,9 +145,8 @@ class ConfigWebTests(unittest.TestCase):
         self.assertIn('id="embedding-model-name"', settings_html)
         self.assertIn('id="embedding-base-url"', settings_html)
         self.assertIn('id="embedding-api-key"', settings_html)
-        self.assertIn('id="mineru-base-url"', settings_html)
-        self.assertIn('id="mineru-api-key"', settings_html)
-        self.assertEqual(settings_html.count('class="optional-config"'), 2)
+        self.assertNotIn("MinerU", settings_html + settings_script)
+        self.assertEqual(settings_html.count('class="optional-config"'), 1)
         self.assertLess(settings_html.index('id="embedding-base-url"'), settings_html.index('id="embedding-api-key"'))
         self.assertLess(settings_html.index('id="embedding-api-key"'), settings_html.index('id="embedding-model-name"'))
         self.assertNotIn("配置文件：", settings_html)

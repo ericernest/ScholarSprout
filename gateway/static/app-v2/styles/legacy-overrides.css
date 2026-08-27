@@ -30,6 +30,7 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 /* Keep every legacy header mark on the same optical baseline as its name. */
 .chat-header .brand,
 .topbar .brand,
+.library-shell .brand,
 .pr-brand {
   display: inline-flex;
   align-items: center;
@@ -37,6 +38,7 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
   line-height: 1.15;
 }
 .chat-header .brand::before,
+.library-shell .brand::before,
 .topbar .brand-mark,
 .pr-brand .brand-mark {
   align-self: center;

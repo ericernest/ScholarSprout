@@ -56,6 +56,8 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         script = (STATIC_DIR / "domain-onboarding" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="topbar-retry-button"', html)
+        self.assertIn('id="progress-stage-copy"', html)
+        self.assertIn("任务仍在后台运行，完成的板块会自动出现", script)
         self.assertIn("new EventSource", script)
         self.assertIn("/domain_onboarding/jobs/", script)
         self.assertIn('"llm_delta"', script)
@@ -169,6 +171,13 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
 
         self.assertIn("function paperPdfUrl", script)
         self.assertIn("async function downloadDomainPaper", script)
+        self.assertIn('const IMPORTED_PAPERS_KEY = "domain_onboarding_imported_papers_v1"', script)
+        self.assertIn("function importedPaperId", script)
+        self.assertIn("function rememberImportedPaper", script)
+        self.assertIn('cachedId) return cachedId', script)
+        self.assertIn('>开始论文精读</button>', script)
+        self.assertIn('disabled>暂未找到 PDF</button>', script)
+        self.assertNotIn("下载并开始论文精读", script)
         self.assertIn('abstract: paper.abstract || ""', script)
         self.assertIn('source_url: paper.url || pdfUrl', script)
         self.assertIn("查看 PDF 原文", script)

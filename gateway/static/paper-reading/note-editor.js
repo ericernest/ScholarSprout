@@ -452,7 +452,8 @@
       node.contentEditable = "false";
       node.title = "双击切换到源码编辑公式";
       if (window.katex?.render) {
-        window.katex.render(latex, node, { displayMode, throwOnError: false, strict: "ignore", trust: false });
+        node.setAttribute("aria-label", latex);
+        window.katex.render(latex, node, { displayMode, throwOnError: false, strict: "ignore", trust: false, output: "html" });
       } else {
         node.textContent = displayMode ? `$$${latex}$$` : `$${latex}$`;
       }

@@ -32,12 +32,9 @@ class ConfigUpdate(BaseModel):
     embedding_api_key: str | None = None
     clear_embedding_api_key: bool = False
     embedding_model_name: str | None = None
-    mineru_base_url: str | None = None
-    mineru_api_key: str | None = None
-    clear_mineru_api_key: bool = False
     data_dir: str | None = None
 
-    @field_validator("base_url", "embedding_base_url", "mineru_base_url")
+    @field_validator("base_url", "embedding_base_url")
     @classmethod
     def validate_base_url(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -103,11 +100,6 @@ def _public_config(config: object) -> dict[str, object]:
             "api_key_configured": bool(config.embedding.api_key.strip()),
             "uses_client_api_key": not bool(config.embedding.api_key.strip()),
         },
-        "mineru": {
-            "base_url": config.mineru.base_url or "",
-            "api_key_configured": bool(config.mineru.api_key.strip()),
-            "enabled": bool(config.mineru.base_url and config.mineru.api_key.strip()),
-        },
         "storage": {
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
             "effective_data_dir": str(resolve_data_dir(config)),
@@ -139,8 +131,6 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.base_url = payload.embedding_base_url
         if "embedding_model_name" in payload.model_fields_set:
             config.embedding.model_name = payload.embedding_model_name or ""
-        if "mineru_base_url" in payload.model_fields_set:
-            config.mineru.base_url = payload.mineru_base_url
         if payload.clear_api_key:
             config.client.api_key = ""
         elif payload.api_key is not None and payload.api_key.strip():
@@ -149,10 +139,6 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.api_key = ""
         elif payload.embedding_api_key is not None and payload.embedding_api_key.strip():
             config.embedding.api_key = payload.embedding_api_key.strip()
-        if payload.clear_mineru_api_key:
-            config.mineru.api_key = ""
-        elif payload.mineru_api_key is not None and payload.mineru_api_key.strip():
-            config.mineru.api_key = payload.mineru_api_key.strip()
         old_data_dir = resolve_data_dir(config)
         if payload.data_dir is not None:
             target = Path(payload.data_dir).expanduser()

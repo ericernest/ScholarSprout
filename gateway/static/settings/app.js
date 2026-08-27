@@ -5,8 +5,6 @@ const modelName = document.querySelector("#model-name");
 const embeddingModelName = document.querySelector("#embedding-model-name");
 const embeddingBaseUrl = document.querySelector("#embedding-base-url");
 const embeddingApiKey = document.querySelector("#embedding-api-key");
-const mineruBaseUrl = document.querySelector("#mineru-base-url");
-const mineruApiKey = document.querySelector("#mineru-api-key");
 const dataDir = document.querySelector("#data-dir");
 const saveButton = document.querySelector("#save-button");
 const message = document.querySelector("#message");
@@ -14,7 +12,6 @@ const setupBadge = document.querySelector("#setup-badge");
 const apiKeyState = document.querySelector("#api-key-state");
 const dataDirHelp = document.querySelector("#data-dir-help");
 const embeddingApiKeyState = document.querySelector("#embedding-api-key-state");
-const mineruApiKeyState = document.querySelector("#mineru-api-key-state");
 const guideTitle = document.querySelector("#guide-title");
 
 if (form) loadConfig();
@@ -42,13 +39,10 @@ form?.addEventListener("submit", async (event) => {
     embedding_model_name: embeddingModelName.value.trim(),
     embedding_base_url: embeddingBaseUrl.value.trim(),
     clear_embedding_api_key: !embeddingApiKey.value.trim(),
-    mineru_base_url: mineruBaseUrl.value.trim(),
-    clear_mineru_api_key: !mineruApiKey.value.trim(),
     data_dir: dataDir.value.trim(),
   };
   if (apiKey.value.trim()) payload.api_key = apiKey.value.trim();
   if (embeddingApiKey.value.trim()) payload.embedding_api_key = embeddingApiKey.value.trim();
-  if (mineruApiKey.value.trim()) payload.mineru_api_key = mineruApiKey.value.trim();
 
   try {
     const response = await fetch("/api/config", {
@@ -61,7 +55,6 @@ form?.addEventListener("submit", async (event) => {
     applyConfig(result);
     apiKey.value = "";
     embeddingApiKey.value = "";
-    mineruApiKey.value = "";
     showMessage(
       result.restart_required
         ? "配置已保存；数据目录或运行时未能热更新，请重启服务后生效。"
@@ -93,7 +86,6 @@ function applyConfig(config) {
   setValue(modelName, config.client?.model_name || "");
   setValue(embeddingModelName, config.embedding?.model_name || "qwen3-embedding");
   setValue(embeddingBaseUrl, config.embedding?.base_url || "");
-  setValue(mineruBaseUrl, config.mineru?.base_url || "");
   setValue(dataDir, config.storage?.data_dir || "~/.novicesynapse");
   setText(apiKeyState, config.client?.api_key_configured
     ? "API Key 已配置；留空保存会保留原密钥。"
@@ -101,9 +93,6 @@ function applyConfig(config) {
   setText(embeddingApiKeyState, config.embedding?.uses_client_api_key
     ? "当前复用基础模型 API Key；输入后可改用独立 Key。"
     : "已配置独立 Key；留空保存会改为复用基础模型 API Key。");
-  setText(mineruApiKeyState, config.mineru?.api_key_configured
-    ? "MinerU API Key 已配置；留空保存会关闭 MinerU。"
-    : "尚未配置；MinerU 当前不启用。");
   setText(setupBadge, config.setup_complete ? "已配置" : "首次配置");
   setText(guideTitle, config.setup_complete ? "模型数据配置" : "三步完成配置");
   if (config.storage?.environment_override) {

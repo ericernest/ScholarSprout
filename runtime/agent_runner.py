@@ -441,6 +441,10 @@ def run_agent_detailed(
             "<active_discussion>\n"
             + safe_request_context
             + "\n</active_discussion>\n"
+            "这是用户明确选定的唯一当前讨论。你只能回答该对象范围内的信息，"
+            "只能使用工具访问这个 active_discussion 中完全相同的 kind 和 id；"
+            "不得切换、猜测或调用其他领域入门/论文精读记录。若当前对象的信息不足，"
+            "应明确说明不足并请用户补充，不能从其他研究对象拼接答案。"
             "用户当前讨论为领域入门时，调用 get_domain_onboarding_result 获取相关信息；"
             "用户当前讨论为论文精读时，根据问题调用 get_paper_reading_context "
             "或 search_paper_reading_dialogue 获取相关信息。"

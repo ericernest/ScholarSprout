@@ -27,15 +27,6 @@ class EmbeddingConfig:
     api_key: str = ""
 
 
-@dataclass(slots=True)
-class MinerUConfig:
-    """Optional MinerU endpoint. Blank endpoint or key keeps it disabled."""
-
-    base_url: str | None = None
-    api_key: str = ""
-    timeout: float = 180.0
-
-
 # 描述本地持久化数据的目录配置。
 @dataclass(slots=True)
 class StorageConfig:
@@ -47,7 +38,6 @@ class StorageConfig:
 class AppConfig:
     client: OpenAIClientConfig = field(default_factory=OpenAIClientConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    mineru: MinerUConfig = field(default_factory=MinerUConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
 
 

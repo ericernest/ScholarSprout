@@ -360,11 +360,9 @@ class SkillLoaderRegistryTests(unittest.TestCase):
             paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
         self.assertEqual(chat_profile["default_skill"], "chat.default")
-        self.assertEqual(
-            chat_profile["system_prompt"],
-            "你是 NoviceSynapse 的默认科研聊天助手。NoviceSynapse 提供领域入门和论文精读功能。"
-            "用户当前讨论为领域入门或论文精读时，调用相应工具获取信息。",
-        )
+        self.assertIn("研见 · SeeFurther", chat_profile["system_prompt"])
+        self.assertIn("唯一允许访问的研究范围", chat_profile["system_prompt"])
+        self.assertIn("不得查看或引用其他领域、论文或会话的数据", chat_profile["system_prompt"])
         self.assertNotIn("不要假装", chat_profile["system_prompt"])
         self.assertEqual(chat_skill_ids, ["chat.research_discussion"])
         self.assertEqual(

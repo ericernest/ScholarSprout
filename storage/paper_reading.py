@@ -26,7 +26,7 @@ class PaperReadingStorage:
             self.base_dir.parent / "research.sqlite3"
         )
         self.research_store.initialize()
-        for subdir in ("uploads", "figures", "mineru"):
+        for subdir in ("uploads", "figures"):
             (self.base_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     def save_session(self, session_id: str, data: dict[str, Any]) -> None:
@@ -140,40 +140,17 @@ class PaperReadingStorage:
         path = self.base_dir / "figures" / safe_paper_id / safe_name
         return path if path.is_file() else None
 
-    def save_mineru_artifact(self, paper_id: str, artifact_name: str, data: bytes) -> Path:
-        """Persist raw MinerU diagnostics separately from the normalized paper document."""
-        safe_paper_id = self._safe_component(paper_id)
-        safe_name = self._safe_component(artifact_name)
-        directory = self.base_dir / "mineru" / safe_paper_id
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / safe_name
-        path.write_bytes(data)
-        return path
-
-    def get_mineru_artifact_path(self, paper_id: str, artifact_name: str) -> Path | None:
-        try:
-            safe_paper_id = self._safe_component(paper_id)
-            safe_name = self._safe_component(artifact_name)
-        except ValueError:
-            return None
-        path = self.base_dir / "mineru" / safe_paper_id / safe_name
-        return path if path.is_file() else None
-
     def get_storage_stats(self) -> dict[str, Any]:
         sessions = self.research_store.list_reading_session_snapshots()
         papers = self.research_store.list_paper_documents()
         uploads = list((self.base_dir / "uploads").glob("*.pdf"))
         figures = list((self.base_dir / "figures").glob("*/*"))
-        mineru_artifacts = list((self.base_dir / "mineru").glob("*/*"))
-        total_size = sum(
-            path.stat().st_size for path in [*uploads, *figures, *mineru_artifacts] if path.is_file()
-        )
+        total_size = sum(path.stat().st_size for path in [*uploads, *figures] if path.is_file())
         return {
             "sessions": len(sessions),
             "papers": len(papers),
             "uploads": len(uploads),
             "figures": len(figures),
-            "mineru_artifacts": len(mineru_artifacts),
             "total_size_bytes": total_size,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "base_dir": str(self.base_dir),

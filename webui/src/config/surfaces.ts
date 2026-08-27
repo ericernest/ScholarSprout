@@ -65,6 +65,6 @@ export const surfaces: Record<SurfaceId, SurfaceDefinition> = {
     sourcePath: "/static/settings/index.html",
     title: "配置 · 研见 · SeeFurther",
     guideTitle: "本地优先的模型配置",
-    guideSteps: ["配置主模型接口", "按需配置嵌入与 MinerU", "确认本地数据目录后保存"]
+    guideSteps: ["配置主模型接口", "按需配置嵌入模型", "确认本地数据目录后保存"]
   }
 };
