@@ -32,6 +32,11 @@ MANIFEST
 *.manifest
 *.spec
 
+# Local one-file Windows build output (the reproducible build sources are tracked).
+packaging/windows-onefile/output/
+packaging/windows-onefile/work/
+packaging/windows-onefile/.venv/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt

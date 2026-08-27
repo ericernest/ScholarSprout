@@ -136,6 +136,36 @@ class MinerUParserTests(unittest.TestCase):
         self.assertIn("accomplish", content)
         self.assertIn("state-of-the-art", content)
 
+    def test_reflow_preserves_markdown_table_and_display_equation_lines(self) -> None:
+        document = reflow_document(
+            "# Paper\n\n## Results\n\n"
+            "| Method | Score |\n| --- | --- |\n| Ours | 0.91 |\n\n"
+            "$$\n\\mathcal{L} = \\sum_i x_i\n$$"
+        )
+
+        content = document["sections"][0]["content"]
+        self.assertIn("| Method | Score |\n| --- | --- |\n| Ours | 0.91 |", content)
+        self.assertIn("$$\n\\mathcal{L} = \\sum_i x_i\n$$", content)
+
+    def test_encoded_and_nested_image_paths_resolve_to_persisted_assets(self) -> None:
+        result = parse_mineru_response(httpx.Response(
+            200,
+            json={
+                "md_content": "# Paper\n\n" + "Body. " * 20,
+                "images": [{
+                    "path": "assets/figure one.png",
+                    "base64": base64.b64encode(b"image-data").decode("ascii"),
+                }],
+            },
+        ))
+        urls = image_url_map("paper-2", result.images)
+        document = reflow_document(
+            "# Paper\n\n## Method\n\n" + "Description. " * 12 + "\n\n![](assets/figure%20one.png)",
+            image_urls=urls,
+        )
+
+        self.assertIn("/paper_reading/figures/paper-2/mineru-", document["full_text"])
+
 
 if __name__ == "__main__":
     unittest.main()

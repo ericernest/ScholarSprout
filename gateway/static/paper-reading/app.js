@@ -1286,6 +1286,10 @@ function renderMineruImage(source) {
   image.alt = match[1].trim() || "论文图表";
   image.loading = "lazy";
   image.decoding = "async";
+  image.addEventListener("error", () => {
+    const fallback = create("div", "mineru-image-fallback", "图片资源暂时不可用，请切换到 PDF 原文查看对应图表。");
+    image.replaceWith(fallback);
+  }, { once: true });
   figure.append(image);
   if (match[1].trim()) figure.append(create("figcaption", "", match[1].trim()));
   return figure;
@@ -2184,7 +2188,10 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
   let reasoning = "";
   let streaming = true;
   let mergedSkillOutputs = [];
+  let renderFrame = 0;
   const render = () => {
+    renderFrame = 0;
+    const stickToBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
     const inline = window.splitVisibleThinking?.(text) || { reasoning: "", answer: text };
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
     body.replaceChildren();
@@ -2203,11 +2210,20 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
     } else if (inline.answer) {
       body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
     }
-    target.scrollTop = target.scrollHeight;
+    if (stickToBottom) target.scrollTop = target.scrollHeight;
+  };
+  const scheduleRender = () => {
+    if (renderFrame) return;
+    renderFrame = window.requestAnimationFrame(render);
+  };
+  const renderNow = () => {
+    if (renderFrame) window.cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    render();
   };
   return {
-    append(delta) { text += String(delta || ""); render(); },
-    appendReasoning(delta) { reasoning += String(delta || ""); render(); },
+    append(delta) { text += String(delta || ""); scheduleRender(); },
+    appendReasoning(delta) { reasoning += String(delta || ""); scheduleRender(); },
     finish(finalText, finalReasoning = "", skillOutputs = []) {
       text = String(finalText || text || "后端没有返回内容。");
       reasoning = String(finalReasoning || reasoning || "");
@@ -2215,7 +2231,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       streaming = false;
       card.classList.remove("streaming-analysis-card");
       header.lastElementChild.textContent = options.preferSkillOutput ? "章节分析" : "Agent";
-      render();
+      renderNow();
       requestAnimationFrame(() => scrollAnalysisCardToTop(target, card));
     },
     interrupt() {
@@ -2223,7 +2239,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       streaming = false;
       card.classList.remove("streaming-analysis-card");
       header.lastElementChild.textContent = "已中断";
-      render();
+      renderNow();
     },
     remove() { card.remove(); },
   };

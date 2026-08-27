@@ -69,6 +69,18 @@ class ConfigManagerTests(unittest.TestCase):
 
 
 class ConfigWebTests(unittest.TestCase):
+    def test_generation_snapshot_requires_matching_session(self) -> None:
+        client = TestClient(app)
+
+        missing_session = client.get("/chat/generations/example")
+        self.assertEqual(missing_session.status_code, 422)
+
+        with patch("gateway.app.get_stream_generation", return_value=None) as get_snapshot:
+            not_found = client.get("/chat/generations/example?session_id=session-a")
+
+        self.assertEqual(not_found.status_code, 404)
+        get_snapshot.assert_called_once_with("example", session_id="session-a")
+
     def test_api_masks_secret_and_reports_effective_data_dir(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = AppConfig(
