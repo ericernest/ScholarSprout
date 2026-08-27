@@ -13,6 +13,7 @@ $StaticDir = Join-Path $RepoRoot "gateway\static"
 $BuiltinSkillsDir = Join-Path $RepoRoot "skills\builtin"
 $AgentProfiles = Join-Path $RepoRoot "agents\profiles.json"
 $Launcher = Join-Path $PackageDir "launcher.py"
+$AppIcon = Join-Path $PackageDir "seefurther.ico"
 
 Push-Location $RepoRoot
 try {
@@ -21,16 +22,16 @@ try {
             python -m venv $BuildVenv
         }
         & $BuildPython -m pip install --upgrade pip
-        & $BuildPython -m pip install -e . "pyinstaller>=6.11,<7"
+        & $BuildPython -m pip install -e . "pyinstaller>=6.11,<7" "Pillow>=10,<13" "pystray>=0.19,<1"
     }
 
     if (-not (Test-Path -LiteralPath $BuildPython)) {
         throw "没有隔离打包环境。请先运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
     }
 
-    & $BuildPython -c "import PyInstaller" 2>$null
+    & $BuildPython -c "import PyInstaller, PIL, pystray" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "隔离环境中没有 PyInstaller。请运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
+        throw "隔离环境中缺少 PyInstaller、Pillow 或 pystray。请运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
     }
 
     & $BuildPython -m PyInstaller `
@@ -39,16 +40,19 @@ try {
         --onefile `
         --windowed `
         --name SeeFurther `
+        --icon $AppIcon `
         --distpath $OutputDir `
         --workpath $WorkDir `
         --specpath $WorkDir `
         --add-data "$StaticDir;gateway\static" `
         --add-data "$BuiltinSkillsDir;skills\builtin" `
         --add-data "$AgentProfiles;agents" `
+        --add-data "$AppIcon;packaging\windows-onefile" `
         --collect-all fitz `
         --collect-all pymupdf `
         --collect-submodules handlers `
         --collect-submodules skills `
+        --hidden-import pystray._win32 `
         $Launcher
 
     if ($LASTEXITCODE -ne 0) {

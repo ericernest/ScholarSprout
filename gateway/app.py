@@ -6,6 +6,7 @@ import asyncio
 import json
 import mimetypes
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -506,7 +507,12 @@ def close_domain_onboarding_resources() -> None:
 
 
 # 启动 gateway 服务。
-def start_gateway_server(host: str, port: int) -> None:
+def start_gateway_server(
+    host: str,
+    port: int,
+    *,
+    on_server_created: Callable[[uvicorn.Server], None] | None = None,
+) -> None:
     config = load_config()
     model, embedding_model, setup_complete = create_runtime_models(config)
     chat_agent = create_agent(model, "chat")
@@ -576,7 +582,13 @@ def start_gateway_server(host: str, port: int) -> None:
     if setup_complete:
         resume_pending_reading_map_generations(app.state)
 
-    uvicorn.run(app, host=host, port=port)
+    if on_server_created is None:
+        uvicorn.run(app, host=host, port=port)
+        return
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
+    on_server_created(server)
+    server.run()
 
 
 def create_runtime_models(config: object) -> tuple[object, object, bool]:
