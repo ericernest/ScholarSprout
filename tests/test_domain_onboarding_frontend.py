@@ -152,6 +152,12 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
         self.assertIn("window.setInterval(reloadWhenEnteringChat, 2500)", script)
         self.assertIn('cache: "no-store"', script)
         self.assertIn("conversationHistorySignature", script)
+        self.assertIn("CHAT_PENDING_GENERATION_KEY", script)
+        self.assertIn("restorePendingChatGeneration", script)
+        self.assertIn("watchChatGeneration", script)
+        self.assertIn("/chat/generations/", script)
+        self.assertIn("streaming.setContent", script)
+        self.assertIn("window.requestAnimationFrame(render)", script)
 
     def test_paper_actions_download_pdf_without_opening_metadata_page(self) -> None:
         html = (STATIC_DIR / "domain-onboarding" / "index.html").read_text(

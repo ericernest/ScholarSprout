@@ -154,6 +154,9 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertNotIn(".pdf-mode-hint", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('/paper_reading/figures/', javascript)
         self.assertIn(".mineru-figure img", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
+        self.assertIn("mineru-image-fallback", javascript)
+        self.assertIn(".ai-reflow-content .markdown-table-wrap table", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
+        self.assertIn(".ai-reflow-content .response-math-block", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
         self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
 
     def test_ai_reflow_shares_annotations_and_selection_questions_with_pdf(self) -> None:
@@ -359,6 +362,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("scrollMessageToTop(item)", shared_javascript)
         self.assertIn("scrollAnalysisCardToTop(target, card)", javascript)
         self.assertIn("loadCachedPdfSource", javascript)
+        self.assertIn("window.requestAnimationFrame(render)", javascript)
+        self.assertIn("const stickToBottom = target.scrollHeight", javascript)
         self.assertIn("pdf-page-placeholder", javascript)
         self.assertIn("updateCurrentSectionFromPdfScroll", javascript)
         self.assertIn("function renderPaperFigure(figure)", javascript)

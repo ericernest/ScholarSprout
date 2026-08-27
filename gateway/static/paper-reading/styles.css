@@ -601,6 +601,31 @@ select option { color: #07120f; }
   font: 400 clamp(.96rem,1.1vw,1.04rem)/1.82 Georgia,"Noto Serif CJK SC",serif;
 }
 .ai-reflow-content .markdown-content table { width: 100%; overflow-wrap: anywhere; }
+.ai-reflow-content .markdown-table-wrap,
+.ai-reflow-content .mineru-table-wrap {
+  border-color: rgba(35,75,64,.2); background: #fffefa; box-shadow: 0 8px 24px rgba(38,62,54,.06);
+}
+.ai-reflow-content .markdown-table-wrap table,
+.ai-reflow-content .mineru-table { color: #263b35; }
+.ai-reflow-content .markdown-table-wrap th,
+.ai-reflow-content .mineru-table th {
+  color: #173d34; background: #dff3ec; border-color: rgba(35,75,64,.18);
+}
+.ai-reflow-content .markdown-table-wrap td,
+.ai-reflow-content .mineru-table td { color: #344a43; border-color: rgba(35,75,64,.14); }
+.ai-reflow-content .markdown-table-wrap tbody tr:nth-child(even),
+.ai-reflow-content .mineru-table tbody tr:nth-child(even) { background: #f2f8f5; }
+.ai-reflow-content .response-math-block {
+  box-sizing: border-box; width: 100%; margin: 1rem 0; padding: .55rem .75rem;
+  color: #1d352e; background: rgba(223,243,236,.42); border-radius: 8px;
+  overflow-x: auto; overflow-y: hidden; text-align: center;
+}
+.ai-reflow-content .response-math-block > .katex-display { margin: 0; }
+.ai-reflow-content .response-math-inline { color: #1d352e; vertical-align: -.08em; }
+.ai-reflow-content .markdown-content strong { color: #173d34; }
+.ai-reflow-content .markdown-content em { color: #45655b; }
+.ai-reflow-content .markdown-content code { color: #075d4b; background: #e7f4ef; }
+.ai-reflow-content .markdown-content a { color: #096f88; }
 .reflow-reader { background: #fbfaf6; }
 .reflow-reader .ai-reflow-section { max-width: 860px; }
 .reflow-annotation {
@@ -624,6 +649,10 @@ select option { color: #07120f; }
 }
 .mineru-figure { margin: 1rem auto; display: grid; justify-items: center; gap: .45rem; }
 .mineru-figure img { display: block; max-width: 100%; height: auto; border-radius: 10px; }
+.mineru-image-fallback {
+  width: min(100%,680px); padding: .9rem 1rem; border: 1px dashed rgba(35,75,64,.28);
+  border-radius: 10px; color: #526760; background: #f4f7f5; font-size: .8rem; line-height: 1.6;
+}
 .mineru-figure figcaption { max-width: 72ch; color: #65716d; font-size: .78rem; line-height: 1.55; text-align: center; }
 .mineru-table-wrap { margin: 1rem 0; overflow: auto; border: 1px solid rgba(35,75,64,.14); border-radius: 12px; background: #fff; }
 .mineru-table { width: 100%; border-collapse: collapse; font-size: .76rem; line-height: 1.45; }

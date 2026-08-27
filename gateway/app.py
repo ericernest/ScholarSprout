@@ -42,6 +42,7 @@ from handlers.paper_reading_handler import (
 )
 from gateway.message_flow import (
     cancel_stream_generation,
+    get_stream_generation,
     process_channel_input,
     process_channel_stream,
 )
@@ -208,6 +209,14 @@ def cancel_chat_generation(generation_id: str) -> dict[str, object]:
         "generation_id": generation_id,
         "cancelled": cancel_stream_generation(generation_id),
     }
+
+
+@app.get("/chat/generations/{generation_id}")
+def get_chat_generation(generation_id: str, session_id: str) -> dict[str, object]:
+    snapshot = get_stream_generation(generation_id, session_id=session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    return snapshot
 
 
 # paper_reading 功能入口。

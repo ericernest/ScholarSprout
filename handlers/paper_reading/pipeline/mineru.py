@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
@@ -186,6 +187,16 @@ def _named_value(value: Any, names: tuple[str, ...]) -> Any:
 
 
 def _json_images(value: Any) -> list[MinerUImageAsset]:
+    if isinstance(value, list):
+        normalized: dict[str, Any] = {}
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("path") or item.get("name") or item.get("img_path") or item.get("image_path")
+            encoded = item.get("data") or item.get("base64") or item.get("content")
+            if source and encoded:
+                normalized[str(source)] = encoded
+        value = normalized
     if not isinstance(value, dict):
         return []
     assets: list[MinerUImageAsset] = []
@@ -301,10 +312,12 @@ def reflow_document(
 
     sections: list[dict[str, Any]] = []
     for index, (level, section_title, body_lines) in enumerate(headings, start=1):
+        # Preserve line structure inside Markdown blocks. Collapsing all
+        # whitespace here destroys tables, display equations and fenced code.
         paragraphs = [
-            re.sub(r"\s+", " ", block).strip()
+            block.strip()
             for block in re.split(r"\n\s*\n", "\n".join(body_lines))
-            if re.sub(r"\s+", " ", block).strip()
+            if block.strip()
         ]
         sections.append({
             "section_id": f"mineru:{index}",
@@ -371,7 +384,13 @@ def _content_list_to_markdown(
         elif kind in {"equation", "interline_equation"}:
             equation = str(item.get("text") or item.get("latex") or item.get("content") or "").strip()
             if equation:
-                blocks.append(f"$$\n{equation}\n$$")
+                if (
+                    (equation.startswith("$$") and equation.endswith("$$"))
+                    or (equation.startswith("\\[") and equation.endswith("\\]"))
+                ):
+                    blocks.append(equation)
+                else:
+                    blocks.append(f"$$\n{equation}\n$$")
         elif kind == "code":
             code = str(item.get("code_body") or item.get("text") or item.get("content") or "").strip()
             if code:
@@ -423,7 +442,7 @@ def image_url_map(paper_id: str, images: list[MinerUImageAsset]) -> dict[str, st
     mapping: dict[str, str] = {}
     for image in images:
         url = f"/paper_reading/figures/{paper_id}/{image.asset_name}"
-        source = image.source_path.replace("\\", "/").lstrip("./")
+        source = _normalize_image_source(image.source_path)
         mapping[source] = url
         mapping[PurePosixPath(source).name] = url
         if "images/" in source.lower():
@@ -433,8 +452,13 @@ def image_url_map(paper_id: str, images: list[MinerUImageAsset]) -> dict[str, st
 
 
 def _resolve_image_url(source: str, image_urls: dict[str, str]) -> str:
-    normalized = source.replace("\\", "/").lstrip("./")
+    normalized = _normalize_image_source(source)
     return image_urls.get(normalized) or image_urls.get(PurePosixPath(normalized).name) or ""
+
+
+def _normalize_image_source(source: str) -> str:
+    value = unquote(str(source or "").strip().strip("<>").strip('"\''))
+    return value.replace("\\", "/").lstrip("./")
 
 
 def _clean_reflow_markdown(markdown: str, *, image_urls: dict[str, str] | None = None) -> str:
@@ -449,10 +473,15 @@ def _clean_reflow_markdown(markdown: str, *, image_urls: dict[str, str] | None =
 
     def replace_image(match: re.Match[str]) -> str:
         label, source = match.group(1), match.group(2)
+        normalized_source = str(source or "").strip().strip("<>")
+        if normalized_source.startswith("/paper_reading/figures/"):
+            return f"![{label}]({normalized_source})"
         url = _resolve_image_url(source, image_urls or {})
         return f"![{label}]({url})" if url else ""
 
-    text = re.sub(r"!\[([^\]]*)\]\((?:\./)?(images/[^)]+)\)", replace_image, text, flags=re.IGNORECASE)
+    # MinerU releases use images/, assets/, nested and URL-encoded paths.
+    # Only persisted assets are rewritten; unknown paths are removed.
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace_image, text, flags=re.IGNORECASE)
     text = re.sub(r"^Received\s+month\s+dd,\s*yyyy;.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
     text = re.sub(r"^E-?mail\s*:.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
     text = re.sub(

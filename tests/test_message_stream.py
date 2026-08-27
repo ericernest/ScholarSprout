@@ -13,6 +13,7 @@ from channels.base import ChannelMessage
 from gateway.message_flow import (
     _BACKGROUND_STREAM_TASKS,
     cancel_stream_generation,
+    get_stream_generation,
     process_channel_stream,
 )
 from storage.local_store import LocalResearchStore
@@ -82,11 +83,14 @@ class MessageStreamTests(unittest.IsolatedAsyncioTestCase):
             state = SimpleNamespace(
                 research_storage=store,
                 default_channel_name="web",
-                channels={"web": _Channel()},
+                channels={"web": _Channel("detached-generation")},
             )
 
-            def handler(_message, _state):
-                time.sleep(0.25)
+            def handler(message, _state):
+                message.metadata["_stream_text_delta"]("这是")
+                time.sleep(0.15)
+                message.metadata["_stream_text_delta"]("后台完成的正常回复。")
+                time.sleep(0.1)
                 return {"text": "这是后台完成的正常回复。", "status": "ok"}
 
             response = await process_channel_stream(
@@ -94,8 +98,20 @@ class MessageStreamTests(unittest.IsolatedAsyncioTestCase):
             )
             events = response.body_iterator
             self.assertIn("event: ready", await anext(events))
-            with self.assertRaises(StopAsyncIteration):
-                await anext(events)
+            running_snapshot = None
+            for _ in range(20):
+                candidate = get_stream_generation(
+                    "detached-generation", session_id="detached-chat"
+                )
+                if candidate and candidate["status"] == "running" and candidate["text"]:
+                    running_snapshot = candidate
+                    break
+                await asyncio.sleep(0.01)
+            self.assertIsNone(
+                get_stream_generation("detached-generation", session_id="other-chat")
+            )
+            detached_events = [event async for event in events]
+            self.assertFalse(any("event: result" in event for event in detached_events))
 
             for _ in range(20):
                 await asyncio.sleep(0.05)
@@ -118,6 +134,14 @@ class MessageStreamTests(unittest.IsolatedAsyncioTestCase):
                     ("assistant", "这是后台完成的正常回复。"),
                 ],
             )
+            self.assertIsNotNone(running_snapshot)
+            self.assertTrue(running_snapshot["text"].startswith("这是"))
+            snapshot = get_stream_generation(
+                "detached-generation", session_id="detached-chat"
+            )
+            self.assertEqual(snapshot["status"], "completed")
+            self.assertEqual(snapshot["text"], "这是后台完成的正常回复。")
+            self.assertEqual(snapshot["result"]["text"], "这是后台完成的正常回复。")
 
 
 if __name__ == "__main__":
