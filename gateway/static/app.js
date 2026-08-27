@@ -1446,22 +1446,27 @@ function appendStreamingMessage() {
   let reasoning = "";
   let streaming = true;
   let renderFrame = 0;
+  const status = document.createElement("p");
+  status.className = "thinking-status";
+  const plainAnswer = document.createElement("div");
+  plainAnswer.className = "streaming-plain-text";
   const render = () => {
     renderFrame = 0;
     const stickToBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120;
     const inline = splitVisibleThinking(text);
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
     const answer = inline.answer;
-    bubble.replaceChildren();
-    if (visibleReasoning) {
-      bubble.append(createThinkingDetails(visibleReasoning, streaming));
-    } else if (streaming && !answer) {
-      const status = document.createElement("p");
-      status.className = "thinking-status";
-      status.textContent = "正在思考…";
-      bubble.append(status);
+    if (streaming) {
+      status.textContent = visibleReasoning ? `正在思考…（${visibleReasoning.length} 字）` : "正在思考…";
+      status.hidden = Boolean(answer);
+      plainAnswer.textContent = answer;
+      plainAnswer.hidden = !answer;
+      if (!status.isConnected || !plainAnswer.isConnected) bubble.replaceChildren(status, plainAnswer);
+    } else {
+      bubble.replaceChildren();
+      if (visibleReasoning) bubble.append(createThinkingDetails(visibleReasoning, false));
+      if (answer) bubble.append(renderSafeMarkdown(answer));
     }
-    if (answer) bubble.append(renderSafeMarkdown(answer));
     if (stickToBottom) messages.scrollTop = messages.scrollHeight;
   };
   const scheduleRender = () => {

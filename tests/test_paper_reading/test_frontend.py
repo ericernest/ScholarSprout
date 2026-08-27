@@ -119,6 +119,10 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('`正在并行生成${taskLabel}，请稍候。`', javascript)
         self.assertIn('title: "研究问题"', javascript)
         self.assertIn('title: "核心方法"', javascript)
+        self.assertIn('research_problem: [["一句话问题"', javascript)
+        self.assertIn('method_steps: [["目标"', javascript)
+        self.assertIn('experimental_support: [["支撑结论"', javascript)
+        self.assertIn("toggleReadingMapPanel(false)", javascript)
         self.assertNotIn("function missingRequiredSurveyMapGroups", javascript)
         self.assertNotIn("旧版生成结果缺少固定分区", javascript)
         self.assertNotIn("该固定分区生成失败", javascript)
@@ -135,44 +139,34 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('toolbar.dataset.side = useRight ? "right" : "left"', javascript)
         self.assertIn('textLayer.style.setProperty("--scale-factor", String(viewport.scale))', javascript)
 
-    def test_mineru_result_opens_in_a_separate_ai_reflow_page(self) -> None:
+    def test_reader_keeps_pdf_and_synchronized_smart_index_only(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('data-reader-mode="structured"', html)
-        self.assertIn('data-reader-mode="reflow"', html)
-        self.assertIn('id="reflow-reader"', html)
+        self.assertIn('data-reader-mode="pdf"', html)
+        self.assertNotIn('data-reader-mode="reflow"', html)
+        self.assertNotIn('id="reflow-reader"', html)
         self.assertIn('indexTab.textContent = "智能索引"', javascript)
-        self.assertIn('reflowTab.textContent = "AI 论文重排"', javascript)
-        self.assertIn('state.readerMode = usesMineruReflow() ? "reflow" : "pdf"', javascript)
-        self.assertIn("function renderReflowSections", javascript)
-        self.assertIn("function cleanMineruMarkdown", javascript)
-        self.assertIn("function renderMineruImage", javascript)
-        self.assertIn('create("header", "reflow-document-header")', javascript)
-        self.assertIn('create("h1", "", paperTitle)', javascript)
+        self.assertIn('const normalizedMode = ["pdf", "structured"].includes(mode)', javascript)
+        self.assertIn('if (state.readerMode === "pdf") syncPdfToSection(sectionId)', javascript)
+        self.assertIn("function updateCurrentSectionFromPdfScroll", javascript)
+        self.assertNotIn("renderReflow", javascript)
+        self.assertNotIn("MinerU", javascript)
         self.assertNotIn('id="pdf-mode-hint"', html)
         self.assertNotIn(".pdf-mode-hint", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
-        self.assertIn('/paper_reading/figures/', javascript)
-        self.assertIn(".mineru-figure img", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
-        self.assertIn("mineru-image-fallback", javascript)
-        self.assertIn(".ai-reflow-content .markdown-table-wrap table", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
-        self.assertIn(".ai-reflow-content .response-math-block", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
-        self.assertNotIn('renderMarkdown(section.content)', javascript.split("function renderSections()", 1)[1].split("function renderReflowSections()", 1)[0])
+        self.assertNotIn(".ai-reflow-content", (FRONTEND / "styles.css").read_text(encoding="utf-8"))
 
-    def test_ai_reflow_shares_annotations_and_selection_questions_with_pdf(self) -> None:
+    def test_pdf_keeps_annotations_and_selection_questions(self) -> None:
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
-        styles = (FRONTEND / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn('data-selection-action="ask"', html)
-        self.assertIn('closest("#structured-reader, #reflow-reader")', javascript)
-        self.assertIn('state.sourceView = pdfPage ? "pdf" : (reflow ? "reflow" : "index")', javascript)
+        self.assertIn('closest("#structured-reader")', javascript)
+        self.assertIn('state.sourceView = pdfPage ? "pdf" : "index"', javascript)
         self.assertIn("function addMarkFromSelection", javascript)
-        self.assertIn("function renderReflowAnnotations", javascript)
         self.assertIn("function resolveTextOnlyPdfMarks", javascript)
-        self.assertIn("renderReflowAnnotations();", javascript)
-        self.assertIn(".reflow-annotation", styles)
-        self.assertNotIn("高亮和注释目前只支持 PDF 原文选区", javascript)
+        self.assertIn("高亮和注释仅支持 PDF 原文", javascript)
 
     def test_pdf_native_fallback_is_not_covered_by_pdfjs_host(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -209,6 +203,17 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("function scrollRestoredConversation", javascript)
         self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto", styles)
         self.assertIn(".discussion-context-button", styles)
+        self.assertIn("z-index: 10022", styles)
+
+    def test_long_streams_update_plain_text_and_render_markdown_once_at_finish(self) -> None:
+        chat = (STATIC / "app.js").read_text(encoding="utf-8")
+        reader = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('plainAnswer.className = "streaming-plain-text"', chat)
+        self.assertIn("plainAnswer.textContent = answer", chat)
+        self.assertIn("if (streaming)", chat)
+        self.assertIn('const plainAnswer = create("div", "streaming-plain-text")', reader)
+        self.assertIn("plainAnswer.textContent = inline.answer", reader)
 
     def test_completed_index_does_not_show_generating_copy_for_reference_sections(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -339,13 +344,13 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertEqual(response.media_type, "image/png")
         self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
 
-    def test_mineru_jpeg_is_served_with_its_actual_media_type(self) -> None:
+    def test_jpeg_figure_is_served_with_its_actual_media_type(self) -> None:
         with TemporaryDirectory() as directory:
             storage = PaperReadingStorage(Path(directory))
-            storage.save_figure("paper-1", "mineru-image.jpg", b"jpeg")
+            storage.save_figure("paper-1", "figure-image.jpg", b"jpeg")
             request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper_storage=storage)))
 
-            response = paper_reading_figure("paper-1", "mineru-image.jpg", request)
+            response = paper_reading_figure("paper-1", "figure-image.jpg", request)
 
         self.assertEqual(response.media_type, "image/jpeg")
 
@@ -386,6 +391,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertIn("function typesetResponseMath", javascript)
         self.assertIn("window.katex.render", javascript)
+        self.assertIn('output: "html"', javascript)
         self.assertIn('closest("code,pre,script,style,textarea,.katex")', javascript)
         self.assertNotIn('id="copilot-narrow-button"', html)
         self.assertNotIn('id="copilot-wide-button"', html)
@@ -393,6 +399,7 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn('id="navigator-resize-handle"', html)
         self.assertIn("function setCopilotWidth", javascript)
         self.assertIn(".response-math-block", styles)
+        self.assertIn(".response-math-inline { display: inline; max-width: none; overflow: visible", styles)
 
     def test_structured_agent_answers_do_not_render_raw_json(self) -> None:
         javascript = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -435,6 +442,8 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertIn("document.scrollingElement", javascript)
         self.assertIn("document.fullscreenElement", javascript)
         self.assertIn('jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "")', javascript)
+        self.assertIn('setReaderMode("pdf", { targetPage })', javascript)
+        self.assertIn('scrollPdfToPage(targetPage, false)', javascript)
         self.assertNotIn('id="ready-nodes"', html)
         self.assertNotIn('id="ready-edges"', html)
         self.assertIn("智能索引自动生成", html)

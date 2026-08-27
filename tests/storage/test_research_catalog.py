@@ -64,8 +64,40 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(detail["reading_session_id"], self.reading_id)
         self.assertEqual(detail["paper_id"], self.paper_id)
 
+    def test_user_facing_counts_and_lists_hide_internal_or_duplicate_records(self) -> None:
+        latest_reading = self.store.create_reading_session(
+            title="Reliable Quantum Control 再次精读",
+            paper_id=self.paper_id,
+            conversation_id=self.conversation_id,
+        )
+        self.store.ensure_conversation("empty-internal", title="Internal")
+        first_domain = self.store.persist_domain_onboarding_result(
+            query="  Quantum   Control ",
+            conversation_id=self.conversation_id,
+            response={"status": "ok", "domain": "Quantum Control", "text": "first"},
+        )
+        second_domain = self.store.persist_domain_onboarding_result(
+            query="quantum control",
+            conversation_id=self.conversation_id,
+            response={"status": "ok", "domain": "Quantum Control", "text": "second"},
+        )
+
+        counts = self.catalog.counts()
+        readings = self.catalog.list_paper_readings()
+        domains = self.catalog.list_domain_onboardings()
+
+        self.assertEqual(counts["conversations"], 1)
+        self.assertEqual(counts["paper_readings"], 1)
+        self.assertEqual(len(readings), 1)
+        self.assertEqual(readings[0]["reading_session_id"], latest_reading)
+        self.assertEqual(counts["domain_onboardings"], 1)
+        self.assertEqual(len(domains), 1)
+        self.assertEqual(domains[0]["artifact_id"], second_domain)
+        self.assertNotEqual(first_domain, second_domain)
+
     def test_conversation_titles_hide_paper_reading_prefix(self) -> None:
         conversation_id = self.store.create_conversation("论文精读：AMEM：Agentic Memory")
+        self.store.append_message(conversation_id, role="user", content="开始讨论", mode="chat")
 
         listed = next(item for item in self.catalog.list_conversations() if item["conversation_id"] == conversation_id)
         detail = self.catalog.get_conversation(conversation_id)
@@ -531,7 +563,7 @@ class ResearchLibraryApiTests(unittest.TestCase):
                 json={
                     "annotation_type": "highlight",
                     "page_number": 1,
-                    "section_id": "mineru:2",
+                    "section_id": "section:2",
                     "selected_text": "shared text anchor",
                     "rects": [],
                 },

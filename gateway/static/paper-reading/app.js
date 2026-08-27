@@ -158,7 +158,6 @@ function bindReader() {
     renderPdf(true, { preserveViewport: true });
   });
   $("structured-reader").addEventListener("mouseup", captureSelection);
-  $("reflow-reader").addEventListener("mouseup", captureSelection);
   $("pdf-reader").addEventListener("mouseup", captureSelection);
   bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
@@ -166,7 +165,7 @@ function bindReader() {
   $("note-close-button").addEventListener("click", closePdfNoteModal);
   document.querySelectorAll("[data-note-close]").forEach((element) => element.addEventListener("click", closePdfNoteModal));
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#reflow-reader") && !event.target.closest("#pdf-reader")) {
+    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#pdf-reader")) {
       $("selection-toolbar").hidden = true;
     }
   });
@@ -175,16 +174,11 @@ function bindReader() {
 function setupPdfFirstReaderDom() {
   const pdfTab = document.querySelector('[data-reader-mode="pdf"]');
   const indexTab = document.querySelector('[data-reader-mode="structured"]');
-  const reflowTab = document.querySelector('[data-reader-mode="reflow"]');
   if (pdfTab) {
     pdfTab.textContent = "PDF 原文";
   }
   if (indexTab) {
     indexTab.textContent = "智能索引";
-  }
-  if (reflowTab) {
-    reflowTab.textContent = "AI 论文重排";
-    reflowTab.hidden = !usesMineruReflow();
   }
   const reader = $("pdf-reader");
   if (reader && !$("pdf-document")) {
@@ -204,18 +198,11 @@ function setupPdfFirstReaderDom() {
   const selectionToolbar = $("selection-toolbar");
   if (selectionToolbar && selectionToolbar.parentElement !== document.body) document.body.append(selectionToolbar);
   const isPdf = state.readerMode === "pdf";
-  const isReflow = state.readerMode === "reflow" && usesMineruReflow();
-  $("structured-reader").hidden = isPdf || isReflow;
-  $("reflow-reader").hidden = !isReflow;
+  $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.readerMode === state.readerMode);
   });
-}
-
-function usesMineruReflow() {
-  return state.sectionExtractionSource === "mineru_markdown"
-    || state.paper?.section_extraction_source === "mineru_markdown";
 }
 
 function createPdfToolbar() {
@@ -546,9 +533,7 @@ async function loadPaperDetail() {
   state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
-  if (!state.readerModeChosen) {
-    state.readerMode = usesMineruReflow() ? "reflow" : "pdf";
-  }
+  if (!state.readerModeChosen) state.readerMode = "pdf";
   setupPdfFirstReaderDom();
   await loadPdfMarks();
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
@@ -616,7 +601,6 @@ function startParsePolling() {
         renderPaperMetadata();
         renderOutline();
         renderSections();
-        renderReflowSections();
         renderProgress();
         renderReadingMap();
         if (!state.currentSection) {
@@ -955,7 +939,6 @@ function renderPaperWorkspace() {
   [...(paper.categories || []).slice(0, 3), paper.venue].filter(Boolean).forEach((tag) => tags.append(create("span", "", tag)));
   renderOutline();
   renderSections();
-  renderReflowSections();
   renderProgress();
   syncSkillControls();
   setReaderMode(state.readerMode || "pdf");
@@ -1207,129 +1190,6 @@ function renderSections() {
   });
   restoreReaderPosition(reader);
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
-}
-
-function renderReflowSections() {
-  const reader = $("reflow-reader");
-  reader.replaceChildren();
-  if (!usesMineruReflow()) {
-    reader.append(create("div", "empty-state", "当前论文没有可用的 MinerU AI 重排结果。"));
-    return;
-  }
-  const sections = (state.paper?.sections || []).filter((section) => !isReferenceSection(section));
-  const contentSections = sections.filter((section) => strHasContent(section.content));
-  if (!contentSections.length) {
-    reader.append(create("div", "empty-state", "MinerU 已返回章节索引，但没有可展示的重排正文。"));
-    return;
-  }
-  const paperTitle = String(state.paper?.title || "").trim();
-  if (paperTitle) {
-    const header = create("header", "reflow-document-header");
-    header.append(create("p", "panel-label", "AI 论文重排"), create("h1", "", paperTitle));
-    reader.append(header);
-  }
-  contentSections.forEach((section, index) => {
-    const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
-    const article = create("section", `paper-section ai-reflow-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
-    article.dataset.sectionId = section.section_id;
-    const meta = create("div", "section-meta");
-    meta.append(create("span", "", `AI 重排 ${String(index + 1).padStart(2, "0")}`));
-    article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
-    const body = create("div", "paper-section-body ai-reflow-content");
-    body.append(renderMineruMarkdown(section.content));
-    article.append(body);
-    reader.append(article);
-  });
-  renderReflowAnnotations();
-  restoreReaderPosition(reader);
-}
-
-function renderMineruMarkdown(source) {
-  const root = create("div", "mineru-markdown");
-  const cleaned = cleanMineruMarkdown(source);
-  const segments = cleaned
-    .split(/(<table\b[\s\S]*?<\/table>|!\[[^\]]*\]\([^)]+\))/giu)
-    .filter(Boolean);
-  segments.forEach((segment) => {
-    const trimmed = segment.trim();
-    if (/^<table\b/iu.test(trimmed)) {
-      const table = renderSafeHtmlTable(segment);
-      if (table) root.append(table);
-      return;
-    }
-    if (/^!\[[^\]]*\]\([^)]+\)$/u.test(trimmed)) {
-      const image = renderMineruImage(trimmed);
-      if (image) root.append(image);
-      return;
-    }
-    const rendered = renderMarkdown(segment);
-    if (rendered.textContent?.trim() || rendered.querySelector("img,table")) root.append(rendered);
-  });
-  return root;
-}
-
-function renderMineruImage(source) {
-  const match = source.match(/^!\[([^\]]*)\]\(([^)]+)\)$/u);
-  if (!match) return null;
-  let url;
-  try {
-    url = new URL(match[2], window.location.origin);
-  } catch (_) {
-    return null;
-  }
-  if (url.origin !== window.location.origin || !url.pathname.startsWith("/paper_reading/figures/")) {
-    return null;
-  }
-  const figure = create("figure", "mineru-figure");
-  const image = create("img");
-  image.src = `${url.pathname}${url.search}`;
-  image.alt = match[1].trim() || "论文图表";
-  image.loading = "lazy";
-  image.decoding = "async";
-  image.addEventListener("error", () => {
-    const fallback = create("div", "mineru-image-fallback", "图片资源暂时不可用，请切换到 PDF 原文查看对应图表。");
-    image.replaceWith(fallback);
-  }, { once: true });
-  figure.append(image);
-  if (match[1].trim()) figure.append(create("figcaption", "", match[1].trim()));
-  return figure;
-}
-
-function cleanMineruMarkdown(source) {
-  return String(source || "")
-    .replace(/<details>\s*<summary>line<\/summary>[\s\S]*?<\/details>/giu, "")
-    .replace(/!\[[^\]]*\]\(images\/[^)]+\)/giu, "\n\n> 该图的图片资源未随 MinerU Markdown 返回，请切换到 PDF 原文查看。\n\n")
-    .replace(/^Received\s+month\s+dd,\s*yyyy;.*$/gimu, "")
-    .replace(/^E-?mail\s*:.*$/gimu, "")
-    .replace(/^\\?\*?Both authors contribute equally to this paper\.?$/gimu, "")
-    .replace(/\b([A-Za-z]{2,4})-[ \t]*\n+[ \t]*([a-z]{2,})(?![-A-Za-z])/gu, "$1$2")
-    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(?=[a-z])/gu, "$1-")
-    .replace(/\n{3,}/gu, "\n\n")
-    .trim();
-}
-
-function renderSafeHtmlTable(source) {
-  const parsed = new DOMParser().parseFromString(source, "text/html");
-  const original = parsed.querySelector("table");
-  if (!original) return null;
-  const wrapper = create("div", "markdown-table-wrap mineru-table-wrap");
-  const table = create("table", "mineru-table");
-  original.querySelectorAll("tr").forEach((row) => {
-    const safeRow = document.createElement("tr");
-    row.querySelectorAll(":scope > th, :scope > td").forEach((cell) => {
-      const safeCell = document.createElement(cell.tagName.toLowerCase() === "th" ? "th" : "td");
-      safeCell.textContent = cell.textContent?.trim() || "";
-      ["rowspan", "colspan"].forEach((attribute) => {
-        const value = Number(cell.getAttribute(attribute) || 0);
-        if (value > 1 && value <= 50) safeCell.setAttribute(attribute, String(value));
-      });
-      safeRow.append(safeCell);
-    });
-    if (safeRow.childElementCount) table.append(safeRow);
-  });
-  if (!table.childElementCount) return null;
-  wrapper.append(table);
-  return wrapper;
 }
 
 function sectionSummaryText(section, indexed = {}, guide = null) {
@@ -1684,23 +1544,6 @@ function restoreReaderPosition(reader) {
   });
 }
 
-function renderReflowParagraph(text) {
-  const paragraph = create("p", "reflow-paragraph");
-  const value = String(text || "").trim();
-  let displayValue = value;
-  if (/^[•·]\s*/.test(value)) {
-    paragraph.classList.add("is-bullet");
-    displayValue = value.replace(/^[•·]\s*/, "");
-  }
-  const lead = displayValue.match(/^([A-Z][A-Za-z -]{2,48}\.)\s+(.+)$/);
-  if (lead) {
-    paragraph.append(create("strong", "paragraph-lead", lead[1]), document.createTextNode(` ${lead[2]}`));
-  } else {
-    paragraph.textContent = displayValue;
-  }
-  return paragraph;
-}
-
 function renderPaperFigure(figure) {
   const card = create("figure", "paper-figure");
   card.id = `paper-${String(figure.figure_id || figure.asset_name || "figure").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -1935,20 +1778,21 @@ function syncPdfToSection(sectionId) {
 }
 
 function setReaderMode(mode, options = {}) {
-  const requestedMode = mode === "reflow" ? (usesMineruReflow() ? "reflow" : "structured") : mode;
-  const normalizedMode = ["pdf", "structured", "reflow"].includes(requestedMode) ? requestedMode : "structured";
+  const normalizedMode = ["pdf", "structured"].includes(mode) ? mode : "structured";
   const isPdf = normalizedMode === "pdf";
-  const isReflow = normalizedMode === "reflow";
   if (options.userInitiated) state.readerModeChosen = true;
   state.readerMode = normalizedMode;
-  $("structured-reader").hidden = isPdf || isReflow;
-  $("reflow-reader").hidden = !isReflow;
+  $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === normalizedMode));
   if (isPdf) {
-    renderPdf();
-    syncPdfToSection(state.currentSection);
+    const targetPage = Number(options.targetPage || 0);
+    if (targetPage) state.pendingPdfPage = targetPage;
+    renderPdf().then(() => {
+      if (targetPage) scrollPdfToPage(targetPage, false);
+      else syncPdfToSection(state.currentSection);
+    });
   } else {
     requestAnimationFrame(() => scrollReaderToSection(state.currentSection, false));
   }
@@ -2037,15 +1881,18 @@ function scrollPdfToPage(page, smooth = true) {
 
 function jumpToPdfPage(page, sectionId = "") {
   if (sectionId) state.currentSection = sectionId;
-  state.pendingPdfPage = Number(page) || currentPdfPage();
-  setReaderMode("pdf");
+  const targetPage = Number(page) || currentPdfPage();
+  state.pendingPdfPage = targetPage;
+  setReaderMode("pdf", { targetPage });
   renderOutline();
   syncComposerContext();
   scrollPageToPdfReader();
   requestAnimationFrame(() => {
     scrollPageToPdfReader();
-    scrollPdfToPage(state.pendingPdfPage || currentPdfPage());
+    scrollPdfToPage(targetPage);
   });
+  window.setTimeout(() => scrollPdfToPage(targetPage, false), 80);
+  window.setTimeout(() => scrollPdfToPage(targetPage, false), 260);
   window.setTimeout(scrollPageToPdfReader, 120);
   window.setTimeout(scrollPageToPdfReader, 360);
 }
@@ -2189,16 +2036,24 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
   let streaming = true;
   let mergedSkillOutputs = [];
   let renderFrame = 0;
+  const status = create("p", "thinking-status", "正在思考…");
+  const plainAnswer = create("div", "streaming-plain-text");
   const render = () => {
     renderFrame = 0;
     const stickToBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
     const inline = window.splitVisibleThinking?.(text) || { reasoning: "", answer: text };
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
-    body.replaceChildren();
-    if (visibleReasoning && typeof window.createThinkingDetails === "function") {
-      body.append(window.createThinkingDetails(visibleReasoning, streaming));
-    } else if (streaming && !inline.answer) {
-      body.append(create("p", "thinking-status", detail || "正在思考…"));
+    if (streaming) {
+      status.textContent = visibleReasoning ? `正在思考…（${visibleReasoning.length} 字）` : (detail || "正在思考…");
+      status.hidden = Boolean(inline.answer);
+      plainAnswer.textContent = inline.answer;
+      plainAnswer.hidden = !inline.answer;
+      if (!status.isConnected || !plainAnswer.isConnected) body.replaceChildren(status, plainAnswer);
+    } else {
+      body.replaceChildren();
+      if (visibleReasoning && typeof window.createThinkingDetails === "function") {
+        body.append(window.createThinkingDetails(visibleReasoning, false));
+      }
     }
     if (options.preferSkillOutput && !streaming) {
       const methodOutput = mergedSkillOutputs.find((output) => output.skill_id === "reading.method_analyst");
@@ -2207,7 +2062,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       } else if (methodOutput?.rendered) {
         body.append(renderMarkdown(methodOutput.rendered));
       }
-    } else if (inline.answer) {
+    } else if (!streaming && inline.answer) {
       body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
     }
     if (stickToBottom) target.scrollTop = target.scrollHeight;
@@ -2613,7 +2468,8 @@ function typesetResponseMath(root) {
       const displayMode = Boolean(match[2] != null || match[3] != null);
       const latex = match[2] ?? match[3] ?? match[4] ?? match[5] ?? "";
       const span = create("span", displayMode ? "response-math-block" : "response-math-inline");
-      window.katex.render(latex.trim(), span, { displayMode, throwOnError: false, strict: "ignore", trust: false });
+      span.setAttribute("aria-label", latex.trim());
+      window.katex.render(latex.trim(), span, { displayMode, throwOnError: false, strict: "ignore", trust: false, output: "html" });
       fragment.append(span);
       cursor = pattern.lastIndex;
     }
@@ -2855,12 +2711,11 @@ function captureSelection(event) {
     return;
   }
   const anchor = selection.anchorNode?.parentElement;
-  const textReader = anchor?.closest("#structured-reader, #reflow-reader");
-  const reflow = anchor?.closest("#reflow-reader");
+  const textReader = anchor?.closest("#structured-reader");
   const pdfPage = anchor?.closest(".pdf-page");
   if (!textReader && !pdfPage) return;
   state.selectedText = text.slice(0, 6000);
-  state.sourceView = pdfPage ? "pdf" : (reflow ? "reflow" : "index");
+  state.sourceView = pdfPage ? "pdf" : "index";
   state.selectedPage = pdfPage ? Number(pdfPage.dataset.pageNumber || 0) : null;
   state.selectedRect = selectionRectForMetadata(selection, pdfPage);
   const section = anchor.closest(".paper-section");
@@ -2918,24 +2773,20 @@ function addMarkFromSelection(type) {
   const selection = window.getSelection();
   if (!selection?.rangeCount || !state.selectedText) return toast("请先在论文正文中划选内容。", true);
   const page = selection.anchorNode?.parentElement?.closest(".pdf-page");
-  const reflowSection = selection.anchorNode?.parentElement?.closest("#reflow-reader .paper-section");
-  if (!page && !reflowSection) return toast("高亮和注释支持 PDF 原文与 AI 论文重排。", true);
-  const sectionId = reflowSection?.dataset.sectionId || state.currentSection;
-  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
-  const rects = page
-    ? normalizePdfMarkRects(selection.getRangeAt(0), page.getBoundingClientRect())
-    : [];
-  if (page && !rects.length) return;
+  if (!page) return toast("高亮和注释仅支持 PDF 原文。", true);
+  const sectionId = state.currentSection;
+  const rects = normalizePdfMarkRects(selection.getRangeAt(0), page.getBoundingClientRect());
+  if (!rects.length) return;
   const mark = {
     id: `mark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type,
     color: state.pdfMarkColor || "yellow",
-    page: page ? Number(page.dataset.pageNumber || 1) : Number(section?.start_page || 1),
+    page: Number(page.dataset.pageNumber || 1),
     rects,
     text: state.selectedText,
     note: "",
     section_id: sectionId,
-    source_view: page ? "pdf" : "reflow",
+    source_view: "pdf",
     created_at: new Date().toISOString(),
   };
 
@@ -3003,7 +2854,6 @@ function commitPdfMark(mark, editingId = "") {
   void savePdfMarkRemote(mark);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
   renderPdfMarks(page, mark.page);
-  renderReflowAnnotations();
   window.getSelection()?.removeAllRanges();
   toast(mark.type === "note" ? (editingId ? "注释已更新。" : "注释已添加。") : "高亮已添加。");
 }
@@ -3054,27 +2904,7 @@ function undoLastPdfMark() {
   void deletePdfMarkRemote(removed.id);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
   if (page) renderPdfMarks(page, removed.page);
-  renderReflowAnnotations();
   toast("已撤销最近一次标注。");
-}
-
-function renderReflowAnnotations() {
-  const reader = $("reflow-reader");
-  if (!reader) return;
-  reader.querySelectorAll(".reflow-annotation").forEach((wrapper) => {
-    const parent = wrapper.parentNode;
-    wrapper.replaceWith(document.createTextNode(wrapper.textContent || ""));
-    parent?.normalize();
-  });
-  state.pdfMarks.forEach((mark) => {
-    if (!mark?.text) return;
-    const section = mark.section_id
-      ? reader.querySelector(`[data-section-id="${cssEscape(mark.section_id)}"] .paper-section-body`)
-      : null;
-    const root = section || reader;
-    const match = findTextMatch(root, mark.text);
-    if (match) wrapReflowTextMatch(match, mark);
-  });
 }
 
 function normalizeAnchorText(value) {
@@ -3090,7 +2920,7 @@ function findTextMatch(root, query) {
   const nodes = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
-      if (!node.nodeValue || node.parentElement?.closest(".reflow-annotation,script,style,button")) {
+      if (!node.nodeValue || node.parentElement?.closest("script,style,button")) {
         return NodeFilter.FILTER_REJECT;
       }
       return NodeFilter.FILTER_ACCEPT;
@@ -3128,35 +2958,6 @@ function findTextMatch(root, query) {
   const start = normalized.join("").indexOf(needle);
   if (start < 0) return null;
   return positions.slice(start, start + needle.length);
-}
-
-function wrapReflowTextMatch(positions, mark) {
-  const groups = [];
-  positions.forEach((position) => {
-    const previous = groups.at(-1);
-    if (previous?.node === position.node && previous.end === position.offset) {
-      previous.end += 1;
-    } else {
-      groups.push({ node: position.node, start: position.offset, end: position.offset + 1 });
-    }
-  });
-  groups.reverse().forEach((group) => {
-    if (!group.node.isConnected || group.end > group.node.length) return;
-    const tail = group.node.splitText(group.end);
-    const selected = group.node.splitText(group.start);
-    const wrapper = create("mark", `reflow-annotation pdf-mark-${mark.type} pdf-mark-${mark.color || "yellow"}`);
-    wrapper.dataset.annotationId = mark.id;
-    wrapper.title = mark.note || (mark.type === "note" ? "查看注释" : "论文高亮");
-    wrapper.append(selected);
-    tail.parentNode?.insertBefore(wrapper, tail);
-    if (mark.type === "note") {
-      wrapper.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openPdfNoteModal(mark, true);
-      });
-    }
-  });
 }
 
 function resolveTextOnlyPdfMarks(pageShell, pageNumber) {
@@ -3232,7 +3033,6 @@ async function loadPdfMarks() {
     state.pdfMarks = cached;
   }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
-  renderReflowAnnotations();
 }
 
 function appendUserQuestion(text, target = $("analysis-feed")) {
@@ -3760,6 +3560,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   ask.type = "button";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;
+    toggleReadingMapPanel(false);
     startReading(`请面向科研新手解释阅读地图中的“${title}”：说明它是什么、为什么重要、和论文主线的关系。`);
   });
   actions.append(jump, ask);
@@ -3806,6 +3607,11 @@ function isRenderableReadingMapItem(item, groupKey) {
 
 function readingMapCardFields(item, groupKey, title) {
   const specs = {
+    research_problem: [["一句话问题", ["one_sentence"]], ["研究价值", ["why_it_matters"]], ["新手结论", ["novice_takeaway"]]],
+    core_method: [["一句话方法", ["one_sentence"]], ["主要思想", ["main_idea"]], ["技术路线", ["technical_route"]]],
+    method_steps: [["目标", ["goal"]], ["输入", ["input"]], ["操作", ["operation"]], ["输出", ["output"]], ["必要性", ["why_needed"]]],
+    experimental_support: [["支撑结论", ["claim"]], ["证据", ["evidence"]], ["数据集", ["datasets"]], ["数据格式", ["dataset_format"]], ["实验设置", ["experiment_setting"]], ["对比方法", ["baselines"]], ["指标", ["metrics"]], ["实验协议", ["protocol"]], ["图表", ["figures_or_tables"]]],
+    limitations_and_questions: [["局限", ["limitation"]], ["影响", ["why_it_matters"]], ["新手追问", ["novice_question"]]],
     field_overview: [["领域范围", ["field_scope", "field"]], ["核心任务", ["core_tasks", "core_task"]], ["当前价值", ["why_now"]], ["新手结论", ["novice_takeaway"]], ["常见误解", ["common_misunderstanding"]]],
     development_timeline: [["时间范围", ["time_range"]], ["关键变化", ["key_change"]], ["代表工作", ["representative_work", "representative_works"]], ["阶段意义", ["why_important", "why_it_matters"]]],
     pain_points: [["为什么难", ["why_hard"]], ["实际影响", ["impact"]], ["已有尝试", ["existing_attempts"]], ["未解决部分", ["unresolved_part"]]],
@@ -3975,7 +3781,7 @@ function scrollReaderToSection(sectionId, smooth = true) {
 }
 
 function bindScrollSpy() {
-  [$("structured-reader"), $("reflow-reader")].forEach((reader) => {
+  [$("structured-reader")].forEach((reader) => {
     let ticking = false;
     reader.addEventListener("scroll", () => {
       if (ticking) return;
@@ -4000,7 +3806,7 @@ function bindScrollSpy() {
 }
 
 function activeTextReader() {
-  return state.readerMode === "reflow" ? $("reflow-reader") : $("structured-reader");
+  return $("structured-reader");
 }
 
 function updateCurrentSectionFromScroll(reader = activeTextReader()) {

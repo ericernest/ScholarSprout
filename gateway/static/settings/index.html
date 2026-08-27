@@ -30,7 +30,7 @@
             </li>
             <li>
               <span>3</span>
-              <div><strong>保存并生效</strong><p>模型、Embedding 和 MinerU 配置会立即用于新请求。</p></div>
+              <div><strong>保存并生效</strong><p>模型与 Embedding 配置会立即用于新请求。</p></div>
             </li>
           </ol>
           <div class="privacy-note">API Key 不会在页面加载时回传；这里只显示是否已经配置。</div>
@@ -87,25 +87,6 @@
                   <span>Embedding 模型</span>
                   <input id="embedding-model-name" name="embedding_model_name" type="text" placeholder="例如 qwen3-embedding" />
                   <small>可选；用于论文排序与证据匹配，调用失败时自动降级。</small>
-                </label>
-              </div>
-            </details>
-
-            <details class="optional-config">
-              <summary><span>MinerU 配置</span><small>可选 · 点击展开</small></summary>
-              <div class="optional-config-fields">
-                <label>
-                  <span>MinerU URL</span>
-                  <input id="mineru-base-url" name="mineru_base_url" type="url" placeholder="https://api.llm.ustc.edu.cn/mineru/file_parse" />
-                  <small>可选；与本地 PDF 解析并行，留空时不启用。</small>
-                </label>
-                <label>
-                  <span>MinerU API Key</span>
-                  <div class="secret-field">
-                    <input id="mineru-api-key" name="mineru_api_key" type="password" autocomplete="new-password" placeholder="留空时不启用 MinerU" />
-                    <button class="toggle-secret" data-secret-target="mineru-api-key" type="button">显示</button>
-                  </div>
-                  <small id="mineru-api-key-state">可选；仅用于 MinerU 文件解析请求。</small>
                 </label>
               </div>
             </details>

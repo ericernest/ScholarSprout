@@ -25,6 +25,13 @@ class ResearchContextToolTests(unittest.TestCase):
             "state": "active",
             "progress": {"current_position": {"section_id": "method"}},
         })
+        self.store.save_paper_document("paper-1", {
+            "paper_id": "paper-1",
+            "title": "Paper One",
+            "full_text": "Abstract text. Method details.",
+            "sections": [{"section_id": "method", "title": "Method", "start_page": 2, "content": "Method details."}],
+            "reading_map": {"research_map": {"core_method": {"name": "Test"}}, "section_guides": [{"section_id": "method"}]},
+        })
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -57,6 +64,9 @@ class ResearchContextToolTests(unittest.TestCase):
 
         self.assertEqual(len(result["messages"]), 2)
         self.assertEqual(context["paper"]["title"], "Paper One")
+        self.assertEqual(context["paper_index"][0]["start_page"], 2)
+        self.assertEqual(context["smart_index"][0]["section_id"], "method")
+        self.assertEqual(context["research_overview"]["research_map"]["core_method"]["name"], "Test")
         self.assertEqual(main["messages"], [])
 
     def test_domain_result_requires_link_to_current_conversation(self) -> None:
@@ -78,11 +88,11 @@ class ResearchContextToolTests(unittest.TestCase):
         )
         result = GetDomainOnboardingResultTool(self.store).run({
             "id": artifact_id,
-            "_runtime_context": {"conversation_id": "main", "active_context": {}},
+            "_runtime_context": {"conversation_id": "main", "active_context": {"kind": "domain_onboarding", "id": artifact_id}},
         })
         denied = GetDomainOnboardingResultTool(self.store).run({
             "id": artifact_id,
-            "_runtime_context": {"conversation_id": "other", "active_context": {}},
+            "_runtime_context": {"conversation_id": "other", "active_context": {"kind": "domain_onboarding", "id": artifact_id}},
         })
 
         self.assertEqual(result["query"], "图神经网络")
@@ -97,6 +107,12 @@ class ResearchContextToolTests(unittest.TestCase):
                 row["name"] for row in connection.execute("PRAGMA table_info(domain_onboardings)")
             }
         self.assertNotIn("quality_json", columns)
+
+    def test_explicit_id_cannot_escape_selected_discussion(self) -> None:
+        result = GetPaperReadingContextTool(self.store).run(
+            self.arguments(reading_session_id="reading-other")
+        )
+        self.assertIn("当前讨论之外", result["error"])
 
     def test_legacy_paper_messages_migrate_to_hidden_dialogue(self) -> None:
         message_id = self.store.append_message(

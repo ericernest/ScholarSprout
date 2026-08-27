@@ -24,7 +24,6 @@ from skills.models import CapabilitySelection
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
 from handlers.paper_reading.pipeline.parser import PDFParser
-from handlers.paper_reading.pipeline.mineru import image_url_map, reflow_document
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
 
@@ -533,62 +532,12 @@ def _run_background_parse(app_state: Any, paper_id: str, pdf_bytes: bytes) -> No
     paper["parse_status"] = "parsing"
     storage.save_paper(paper_id, paper)
     try:
-        mineru_client = getattr(app_state, "mineru_client", None)
-        mineru_future = None
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="paper-parser") as executor:
-            local_future = executor.submit(pipeline.parse_pdf_bytes, pdf_bytes)
-            if mineru_client is not None and getattr(mineru_client, "configured", False):
-                mineru_future = executor.submit(mineru_client.parse_pdf, pdf_bytes)
-            metadata = local_future.result()
-            mineru_result = None
-            mineru_error = ""
-            if mineru_future is not None:
-                try:
-                    mineru_result = mineru_future.result()
-                except Exception as error:
-                    mineru_error = str(error)
-                    logger.warning("MinerU parse unavailable for %s: %s", paper_id, error)
+        metadata = pipeline.parse_pdf_bytes(pdf_bytes)
         metadata.paper_id = paper_id
         payload = _preserve_imported_paper_metadata(
             metadata.model_dump(mode="json"), paper
         )
-        if mineru_result is not None:
-            _persist_mineru_images(storage, paper_id, mineru_result.images)
-            reflow = reflow_document(
-                mineru_result.markdown,
-                content_list=mineru_result.content_list,
-                image_urls=image_url_map(paper_id, mineru_result.images),
-            )
-            if reflow.get("sections"):
-                for field in (
-                    "sections", "full_text", "section_extraction_source",
-                    "section_extraction_status", "section_extraction_message",
-                    "outline_entries_count",
-                ):
-                    payload[field] = reflow[field]
-                if reflow.get("title"):
-                    payload["title"] = reflow["title"]
-                if reflow.get("abstract"):
-                    payload["abstract"] = reflow["abstract"]
-                payload["parse_backend"] = "mineru"
-                payload["mineru_status"] = "done"
-                payload["mineru_response_format"] = mineru_result.response_format
-                payload["mineru_images_count"] = len(mineru_result.images)
-                payload["mineru_content_list_available"] = bool(mineru_result.content_list)
-                payload["mineru_middle_json_available"] = mineru_result.middle_json is not None
-                payload["mineru_artifacts"] = _persist_mineru_artifacts(
-                    storage,
-                    paper_id,
-                    mineru_result,
-                    normalized_markdown=str(reflow.get("full_text") or ""),
-                )
-        elif mineru_future is not None:
-            payload["parse_backend"] = "local"
-            payload["mineru_status"] = "unavailable"
-            payload["mineru_error"] = mineru_error[:500]
-        else:
-            payload["parse_backend"] = "local"
-            payload["mineru_status"] = "disabled"
+        payload["parse_backend"] = "local"
         payload["paper_id"] = paper_id
         payload["stored_at"] = paper.get("stored_at") or datetime.now(timezone.utc).isoformat()
         payload["page_count"] = paper.get("page_count", 0)
@@ -1333,23 +1282,14 @@ def _handle_reparse_paper(request: PaperReadingRequest, app_state: Any) -> dict:
             "parse_status": "parsing",
             "message": "论文正在重新解析，无需重复提交。",
         })
-    mineru_client = getattr(app_state, "mineru_client", None)
-    mineru_enabled = bool(mineru_client is not None and getattr(mineru_client, "configured", False))
     paper["parse_status"] = "parsing"
     paper["parse_error"] = ""
-    paper["mineru_status"] = "parsing" if mineru_enabled else "disabled"
-    paper["mineru_error"] = ""
     storage.save_paper(paper_id, paper)
     _schedule_background_parse(app_state, paper_id, upload_path.read_bytes())
     return _ok("reparse_paper", {
         "paper_id": paper_id,
         "parse_status": "parsing",
-        "mineru_enabled": mineru_enabled,
-        "message": (
-            "已重新提交本地解析与 MinerU 完整产物解析。"
-            if mineru_enabled
-            else "已重新提交本地解析；当前未配置 MinerU。"
-        ),
+        "message": "已重新提交本地 PDF 解析。",
     })
 
 
@@ -1442,13 +1382,8 @@ def _load_paper_data(storage: Any, paper_id: str) -> dict[str, Any] | None:
             and PDFParser.sections_need_repair(paper.get("sections"))
         ):
             parser = PDFParser()
-            if paper.get("section_extraction_source") == "mineru_markdown":
-                mineru_reflow = reflow_document(full_text)
-                repaired_sections = mineru_reflow.get("sections") or []
-                repaired = None
-            else:
-                repaired_sections = []
-                repaired = parser.extract_sections(full_text)
+            repaired_sections = []
+            repaired = parser.extract_sections(full_text)
             if repaired:
                 paper = dict(paper)
                 paper["sections"] = [section.model_dump(mode="json") for section in repaired]
@@ -5040,13 +4975,6 @@ def _paper_detail_for_response(paper: dict[str, Any]) -> dict[str, Any]:
         "parse_status": paper.get("parse_status", ""),
         "parse_error": paper.get("parse_error", ""),
         "parse_backend": paper.get("parse_backend", ""),
-        "mineru_status": paper.get("mineru_status", ""),
-        "mineru_error": paper.get("mineru_error", ""),
-        "mineru_response_format": paper.get("mineru_response_format", ""),
-        "mineru_images_count": paper.get("mineru_images_count", 0),
-        "mineru_content_list_available": bool(paper.get("mineru_content_list_available")),
-        "mineru_middle_json_available": bool(paper.get("mineru_middle_json_available")),
-        "mineru_artifacts": paper.get("mineru_artifacts", {}),
         "page_count": paper.get("page_count", 0),
         "reading_map": paper.get("reading_map") or _empty_reading_map(paper.get("parse_status", "pending")),
         "reading_map_status": paper.get("reading_map_status", ""),
@@ -5072,47 +5000,6 @@ def _persist_figure_assets(
         asset_name = getattr(figure, "asset_name", "")
         if image_data and asset_name:
             storage.save_figure(paper_id, asset_name, image_data)
-
-
-def _persist_mineru_images(storage: Any, paper_id: str, images: list[Any]) -> None:
-    for image in images:
-        data = getattr(image, "data", b"")
-        asset_name = getattr(image, "asset_name", "")
-        if data and asset_name:
-            storage.save_figure(paper_id, asset_name, data)
-
-
-def _persist_mineru_artifacts(
-    storage: Any,
-    paper_id: str,
-    result: Any,
-    *,
-    normalized_markdown: str,
-) -> dict[str, Any]:
-    artifacts: list[str] = []
-
-    def save(name: str, data: bytes) -> None:
-        if not data:
-            return
-        try:
-            storage.save_mineru_artifact(paper_id, name, data)
-            artifacts.append(name)
-        except Exception as error:
-            logger.warning("Unable to persist MinerU artifact %s for %s: %s", name, paper_id, error)
-
-    save("raw.md", str(getattr(result, "raw_markdown", "") or "").encode("utf-8"))
-    save("normalized.md", normalized_markdown.encode("utf-8"))
-    content_list = getattr(result, "content_list", None)
-    if content_list:
-        save("content_list.json", json.dumps(content_list, ensure_ascii=False).encode("utf-8"))
-    middle_json = getattr(result, "middle_json", None)
-    if middle_json is not None:
-        save("middle.json", json.dumps(middle_json, ensure_ascii=False).encode("utf-8"))
-    return {
-        "files": artifacts,
-        "raw_preserved": "raw.md" in artifacts,
-        "normalized_preserved": "normalized.md" in artifacts,
-    }
 
 
 def _persist_table_assets(

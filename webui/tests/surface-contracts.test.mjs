@@ -12,7 +12,7 @@ const contracts = {
   "domain-onboarding/index.html": ["section-nav", "topbar-retry-button", "cancel-button", "sidebar-resizer", "/static/domain-onboarding/app.js"],
   "library/index.html": ["library-nav", "paper-import", "folder-tree", "paper-note-dialog", "/static/library/app.js"],
   "paper-reading/index.html": ["paper-intake", "paper-workbench", "reading-chat-form", "fork-create-button", "paper-note-button", "/static/paper-reading/app.js"],
-  "settings/index.html": ["settings-form", "embedding-model-name", "mineru-base-url", "data-dir", "/static/settings/app.js"]
+  "settings/index.html": ["settings-form", "embedding-model-name", "data-dir", "/static/settings/app.js"]
 };
 
 test("every Vue surface maps to a preserved v1 functional contract", () => {
@@ -49,5 +49,7 @@ test("Vue compatibility layer preserves the previous surface design", () => {
   assert.ok(!overrides.includes(".chat-page { max-width"));
   assert.ok(!overrides.includes("focus-within"));
   assert.ok(!overrides.includes("outline: 3px"));
+  assert.ok(overrides.includes(".library-shell .brand,"));
+  assert.ok(overrides.includes(".library-shell .brand::before,"));
   assert.ok(!guide.includes("本地版不会额外启动前端服务"));
 });

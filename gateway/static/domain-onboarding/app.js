@@ -2,6 +2,7 @@ const STORAGE_KEY = "domain_onboarding_workspace_v1_9";
 const LEGACY_STORAGE_KEYS = ["domain_onboarding_workspace_v1_5"];
 const PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const PANEL_WIDTHS_KEY = "domain_onboarding_panel_widths_v1";
+const IMPORTED_PAPERS_KEY = "domain_onboarding_imported_papers_v1";
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const EVENT_NAMES = [
   "accepted",
@@ -452,6 +453,8 @@ function renderStatus() {
   $("status-label").textContent = status;
   $("progress-label").textContent = `${Math.round(progress * 100)}%`;
   $("progress-fill").style.transform = `scaleX(${progress})`;
+  $("progress-stage-copy").hidden = terminal;
+  $("progress-stage-text").textContent = `${status} · 任务仍在后台运行，完成的板块会自动出现。`;
   $("status-dot").className = `status-dot${
     ["failed", "interrupted"].includes(snapshot.state)
       ? " is-error"
@@ -875,6 +878,7 @@ function renderPaperDetail(paper) {
     (paper.publication_types || []).length ? `类型：${paper.publication_types.join("、")}` : "",
   ].filter(Boolean);
   const pdfUrl = paperPdfUrl(paper);
+  const importedId = importedPaperId(paper);
   state.selected = { kind: "paper", id: String(paper.paper_id) };
   $("inspector-title").textContent = paper.title || "论文详情";
   $("inspector-subtitle").textContent = `${paper.year || "年份未知"} · ${paper.paper_role || "论文"}`;
@@ -891,10 +895,10 @@ function renderPaperDetail(paper) {
       </div>
       ${metadata.length ? detailList("论文元数据", metadata) : ""}
       ${pdfUrl ? `<a class="source-link" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">查看 PDF 原文 ↗</a>` : ""}
-      <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}">加入论文管理</button>
-      <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}" ${pdfUrl ? "" : "disabled"}>
-        ${pdfUrl ? "下载并开始论文精读" : "暂未找到 PDF"}
-      </button>
+      ${pdfUrl ? `
+        <button class="detail-action" type="button" data-add-paper-library="${escapeHtml(paper.paper_id)}" ${importedId ? "disabled" : ""}>${importedId ? "已加入" : "加入论文管理"}</button>
+        <button class="detail-action" type="button" data-import-paper="${escapeHtml(paper.paper_id)}">开始论文精读</button>
+      ` : '<button class="detail-action" type="button" disabled>暂未找到 PDF</button>'}
     </div>
   `;
 }
@@ -905,9 +909,11 @@ async function addPaperToLibrary(paperId, button) {
   button.disabled = true;
   try {
     if (paperPdfUrl(paper)) {
-      await downloadDomainPaper(paper);
-      button.textContent = "已下载并加入论文管理";
-      toast("PDF 已保存到论文管理。可稍后从资料库开始精读。");
+      const importedId = await downloadDomainPaper(paper);
+      rememberImportedPaper(paper, importedId);
+      button.textContent = "已加入";
+      renderPaperDetail(paper);
+      toast("PDF 已加入论文管理。可随时开始精读。");
       return;
     }
     const response = await fetch(`/api/research/papers/${encodeURIComponent(paperId)}/library`, {
@@ -916,7 +922,7 @@ async function addPaperToLibrary(paperId, button) {
       body: JSON.stringify({ reading_status: "unread", note: "" }),
     });
     if (!response.ok) throw new Error(await response.text());
-    button.textContent = "已加入论文管理";
+    button.textContent = "已加入";
     toast("论文信息已加入资料库；当前来源没有可下载的 PDF。")
   } catch (error) {
     button.disabled = false;
@@ -930,6 +936,7 @@ async function importPaper(paperId) {
   try {
     toast("正在下载 PDF 并导入论文精读…");
     const importedId = await downloadDomainPaper(paper);
+    rememberImportedPaper(paper, importedId);
     localStorage.setItem("paper_reading_paper_id", importedId);
     localStorage.removeItem("paper_reading_session_id");
     window.location.href = "/app/paper-reading";
@@ -943,13 +950,15 @@ function paperPdfUrl(paper) {
   if (explicit) return explicit;
   const arxivId = String(paper?.arxiv_id || "").trim();
   if (arxivId) return `https://arxiv.org/pdf/${encodeURIComponent(arxivId)}.pdf`;
-  const source = String(paper?.url || "").trim();
+  const source = String(paper?.url || paper?.source_url || "").trim();
   const arxivMatch = source.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/i);
   if (arxivMatch) return `https://arxiv.org/pdf/${encodeURIComponent(arxivMatch[1])}.pdf`;
   return /\.pdf(?:$|[?#])/i.test(source) ? source : "";
 }
 
 async function downloadDomainPaper(paper) {
+  const cachedId = importedPaperId(paper);
+  if (cachedId) return cachedId;
   const pdfUrl = paperPdfUrl(paper);
   if (!pdfUrl) throw new Error("当前论文没有可下载的 PDF 地址。");
   const response = await fetch("/paper_reading", {
@@ -982,6 +991,30 @@ async function downloadDomainPaper(paper) {
   const importedId = payload?.data?.paper_id;
   if (!importedId) throw new Error("导入响应缺少 paper_id。");
   return importedId;
+}
+
+function paperImportKey(paper) {
+  return String(paper?.paper_id || paper?.arxiv_id || paperPdfUrl(paper) || paper?.title || "").trim();
+}
+
+function importedPaperId(paper) {
+  const key = paperImportKey(paper);
+  if (!key) return "";
+  try {
+    const items = JSON.parse(localStorage.getItem(IMPORTED_PAPERS_KEY) || "{}");
+    return String(items[key] || "").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+function rememberImportedPaper(paper, importedId) {
+  const key = paperImportKey(paper);
+  if (!key || !importedId) return;
+  let items = {};
+  try { items = JSON.parse(localStorage.getItem(IMPORTED_PAPERS_KEY) || "{}"); } catch (_) { items = {}; }
+  items[key] = String(importedId);
+  localStorage.setItem(IMPORTED_PAPERS_KEY, JSON.stringify(items));
 }
 
 async function cancelTask() {

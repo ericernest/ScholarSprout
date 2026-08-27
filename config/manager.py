@@ -9,7 +9,6 @@ from pathlib import Path
 from .schema import (
     AppConfig,
     EmbeddingConfig,
-    MinerUConfig,
     OpenAIClientConfig,
     StorageConfig,
     dump_app_config,
@@ -42,8 +41,6 @@ def load_config(config_file: Path | None = None) -> AppConfig:
     client_data = data.get("client", {})
     embedding_data = data.get("embedding", {})
     storage_data = data.get("storage", {})
-    mineru_data = data.get("mineru", {})
-
     return AppConfig(
         client=OpenAIClientConfig(
             api_key=client_data.get("api_key", ""),
@@ -64,11 +61,6 @@ def load_config(config_file: Path | None = None) -> AppConfig:
             ).strip(),
             base_url=embedding_data.get("base_url") or None,
             api_key=str(embedding_data.get("api_key") or ""),
-        ),
-        mineru=MinerUConfig(
-            base_url=mineru_data.get("base_url") or None,
-            api_key=str(mineru_data.get("api_key") or ""),
-            timeout=float(mineru_data.get("timeout", 180.0)),
         ),
         storage=StorageConfig(
             data_dir=str(storage_data.get("data_dir") or DEFAULT_DATA_DIR),
