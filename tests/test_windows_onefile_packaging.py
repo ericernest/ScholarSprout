@@ -14,19 +14,24 @@ def test_onefile_packaging_sources_are_complete() -> None:
 
     assert "start_gateway_server" in launcher
     assert "SEEFURTHER_SKIP_BROWSER" in launcher
-    assert "--onefile" in build_script
+    assert 'ValidateSet("OneDir", "OneFile", "Both")' in build_script
+    assert '[string]$Mode = "OneDir"' in build_script
+    assert '"--onedir"' in build_script
+    assert '"--onefile"' in build_script
     assert '"$StaticDir;gateway\\static"' in build_script
     assert '"$BuiltinSkillsDir;skills\\builtin"' in build_script
     assert '"$AgentProfiles;agents"' in build_script
-    assert "--collect-all fitz" in build_script
+    assert '"--collect-all", "fitz"' in build_script
     assert 'if ($LASTEXITCODE -ne 0)' in build_script
     assert "PyInstaller 打包失败" in build_script
     assert '"Pillow>=10,<13"' in build_script
     assert '"pystray>=0.19,<1"' in build_script
     assert "import PyInstaller, PIL, pystray, lark_oapi" in build_script
-    assert "--collect-all lark_oapi" in build_script
-    assert "--icon $AppIcon" in build_script
-    assert "--hidden-import pystray._win32" in build_script
+    assert '"--collect-all", "lark_oapi"' in build_script
+    assert '"--icon", $AppIcon' in build_script
+    assert '"--hidden-import", "pystray._win32"' in build_script
+    assert 'SeeFurther-windows-x64.zip' in build_script
+    assert 'Compress-Archive -LiteralPath $OneDirPath' in build_script
     assert icon_bytes[:4] == b"\x00\x00\x01\x00"
     assert int.from_bytes(icon_bytes[4:6], "little") >= 8
 

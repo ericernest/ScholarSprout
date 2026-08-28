@@ -129,6 +129,18 @@
                   <span>清除已保存的 App Secret</span>
                 </label>
                 <div id="feishu-config-state" class="channel-state">正在读取飞书配置…</div>
+                <section class="channel-setup-guide" aria-labelledby="feishu-setup-title">
+                  <p class="eyebrow">SETUP GUIDE</p>
+                  <h4 id="feishu-setup-title">飞书开放平台配置</h4>
+                  <ol>
+                    <li>在飞书开放平台创建企业自建应用。</li>
+                    <li>在“应用能力”中启用机器人能力。</li>
+                    <li>在“事件与回调”中选择“使用长连接接收事件”，并添加事件 <code>im.message.receive_v1</code>。</li>
+                    <li>在“权限管理”中开通“获取与发送单聊、群组消息” <code>im:message</code>，以及“读取用户发给机器人的单聊消息” <code>im:message.p2p_msg:readonly</code>。</li>
+                    <li>创建版本并发布最新版本。</li>
+                    <li>在“凭证与基础信息”中获取 App ID 和 App Secret，填入上方并启用飞书机器人。</li>
+                  </ol>
+                </section>
               </article>
             </section>
 

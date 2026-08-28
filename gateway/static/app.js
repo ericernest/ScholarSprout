@@ -26,6 +26,9 @@ let activeDiscussion = null;
 let conversationContexts = [];
 let conversationHistoryReload = null;
 let conversationHistorySignature = "";
+let conversationContextSignature = "";
+let conversationHistoryRendered = false;
+const persistedMessageContents = new Map();
 let activeGenerationWatcher = null;
 let explicitStopRequested = false;
 const sessionId = getSessionId();
@@ -192,7 +195,7 @@ function bindChatPage() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") reloadWhenEnteringChat();
   });
-  window.setInterval(reloadWhenEnteringChat, 2500);
+  window.setInterval(reloadWhenEnteringChat, 650);
 }
 
 async function restoreConversationHistory() {
@@ -212,17 +215,31 @@ async function reloadConversationHistory() {
     const conversation = await response.json();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
     const contexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    const contextSignature = JSON.stringify(
+      contexts.map((context) => [context.kind, context.id, context.linked_at]),
+    );
     const signature = JSON.stringify({
       updatedAt: conversation.updated_at || "",
       messages: history.map((message) => [message.message_id, message.created_at, message.content]),
       contexts: contexts.map((context) => [context.kind, context.id, context.linked_at]),
     });
     if (signature === conversationHistorySignature) return;
+    if (
+      conversationHistoryRendered
+      && contextSignature === conversationContextSignature
+      && patchPersistedMessages(history)
+    ) {
+      conversationHistorySignature = signature;
+      scrollRestoredConversation();
+      return;
+    }
     conversationHistorySignature = signature;
+    conversationContextSignature = contextSignature;
     conversationContexts = contexts;
     restoreDiscussionSelector();
     if (!history.length && !conversationContexts.length) return;
     messages.replaceChildren();
+    persistedMessageContents.clear();
     const timeline = [
       ...history.map((message) => ({ type: "message", time: message.created_at || "", value: message })),
       ...conversationContexts.map((context) => ({ type: "context", time: context.linked_at || "", value: context })),
@@ -235,12 +252,50 @@ async function reloadConversationHistory() {
       }
       const message = entry.value;
       if (message.role === "assistant" && message.mode === "domain_onboarding") continue;
-      if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
+      if (["user", "assistant"].includes(message.role)) {
+        appendMessage(message.role, message.content, message.message_id);
+      }
     }
+    conversationHistoryRendered = true;
     scrollRestoredConversation();
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
+}
+
+function visiblePersistedMessages(history) {
+  return history.filter((message) => (
+    ["user", "assistant"].includes(message.role)
+    && !(message.role === "assistant" && message.mode === "domain_onboarding")
+  ));
+}
+
+function patchPersistedMessages(history) {
+  const expected = visiblePersistedMessages(history);
+  const existing = [...messages.querySelectorAll("[data-persisted-message-id]")];
+  if (existing.length > expected.length || expected.length - existing.length > 1) return false;
+  for (let index = 0; index < existing.length; index += 1) {
+    if (existing[index].dataset.persistedMessageId !== String(expected[index].message_id || "")) {
+      return false;
+    }
+  }
+  for (let index = 0; index < expected.length; index += 1) {
+    const message = expected[index];
+    const messageId = String(message.message_id || "");
+    const content = String(message.content || "");
+    const item = existing[index];
+    if (!item) {
+      appendMessage(message.role, content, messageId);
+      continue;
+    }
+    if (persistedMessageContents.get(messageId) === content) continue;
+    const bubble = item.querySelector(".bubble");
+    if (!bubble) return false;
+    if (message.role === "assistant") bubble.replaceChildren(renderSafeMarkdown(content));
+    else bubble.textContent = content;
+    persistedMessageContents.set(messageId, content);
+  }
+  return true;
 }
 
 async function restorePaperReadingCard(context) {
@@ -1464,9 +1519,13 @@ function extractReply(response) {
 }
 
 // Append one visible message.
-function appendMessage(role, content) {
+function appendMessage(role, content, messageId = "") {
   const item = document.createElement("article");
   item.className = `message ${role}`;
+  if (messageId) {
+    item.dataset.persistedMessageId = messageId;
+    persistedMessageContents.set(messageId, String(content || ""));
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";

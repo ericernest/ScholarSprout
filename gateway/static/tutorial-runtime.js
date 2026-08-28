@@ -39,7 +39,7 @@
       { prerequisite_id: "p2", name: "工具调用与环境交互", why_needed: "理解智能体如何把决策转化为行动。", key_points: ["Function Calling", "状态反馈", "任务闭环"] }
     ],
     development_stages: [
-      { stage_id: "s1", sequence: 1, historical_period: "2022 以前", name: "任务型智能体", summary: "围绕固定流程与工具链完成单一任务。", core_concepts: ["任务规划", "环境反馈"] },
+      { stage_id: "s1", sequence: 1, historical_period: "2022 以前", name: "任务型智能体", summary: "围绕明确流程与工具链完成单一任务。", core_concepts: ["任务规划", "环境反馈"] },
       { stage_id: "s2", sequence: 2, historical_period: "2023—2024", name: "LLM 自主智能体", summary: "语言模型开始统一承担规划、记忆与工具选择。", transition_from_previous: "通用语言模型提升了开放任务中的迁移能力。", core_concepts: ["ReAct", "长期记忆", "工具使用"] },
       { stage_id: "s3", sequence: 3, historical_period: "2024 至今", name: "多智能体与可验证执行", summary: "研究重点转向协作、评测、安全和长期可靠运行。", transition_from_previous: "复杂任务暴露出单智能体的上下文与可靠性边界。", core_concepts: ["协作协议", "验证反馈", "Agent Harness"] }
     ],
@@ -164,6 +164,7 @@
     { id: "reading-explain", page: "reading", route: "/app/paper-reading?tutorial=1", target: "[data-tour-anchor='reading-map-explain']", title: "智能体解释", copy: "从总览卡片发起解释时，会收起总览并进入右侧研究对话。" },
     { id: "reading-analyze", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#analyze-section-button", title: "分析本节", copy: "围绕当前章节分析核心内容、论证结构和关键证据。" },
     { id: "reading-selection", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#structured-reader .guide-card p", companion: "#selection-toolbar", title: "选区提问、高亮与注释", copy: "划选正文后，可以围绕选区提问、解释、深入探索，并添加高亮或注释。" },
+    { id: "reading-note", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#paper-note-button", companion: "#paper-note-drawer", title: "论文笔记", copy: "阅读时可以随时记录 Markdown 笔记，在普通编辑与源码编辑间切换，笔记会关联当前论文。" },
     { id: "domain-mode", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#mode-button", title: "选择领域入门", copy: "完成单篇精读介绍后，再从研究模式进入一个领域的系统学习。" },
     { id: "domain-query", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#message-input", title: "提出一个领域", copy: "示例领域：智能体 Agent。" },
     { id: "domain-submit", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#send-button", title: "生成领域地图", copy: "研见会梳理领域基础、发展路径、概念全景和核心论文。" },
@@ -247,6 +248,12 @@
     }
     if (step.id === "reading-selection") {
       selectTutorialReaderText();
+    }
+    if (pageName() === "reading" && step.id === "reading-note") {
+      const drawer = document.querySelector("#paper-note-drawer");
+      if (drawer?.getAttribute("aria-hidden") !== "false") {
+        document.querySelector("#paper-note-button")?.click();
+      }
     }
     if (pageName() === "return-chat") {
       const bar = document.querySelector("#discussion-context-bar");

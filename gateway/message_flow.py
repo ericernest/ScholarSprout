@@ -166,7 +166,7 @@ def _track_stream_task(task: asyncio.Task[Any]) -> None:
 
 # 将 handler 输出包装成 outbound message。
 def build_channel_output(message: ChannelMessage, content: Any) -> ChannelMessage:
-    return ChannelMessage(
+    outbound = ChannelMessage(
         session_id=message.session_id,
         channel=message.channel,
         direction=OUTBOUND,
@@ -174,6 +174,57 @@ def build_channel_output(message: ChannelMessage, content: Any) -> ChannelMessag
         content=content,
         user_id=message.user_id,
     )
+    outbound_id = str(message.metadata.get("_outbound_message_id") or "").strip()
+    if outbound_id:
+        outbound.message_id = outbound_id
+        outbound.metadata["_upsert_outbound"] = True
+    return outbound
+
+
+def _install_external_stream_persistence(message: ChannelMessage, app_state: Any) -> None:
+    """Expose external-channel deltas to the web UI through one live DB row."""
+    if (
+        message.mode != "chat"
+        or message.channel == "web"
+        or callable(message.metadata.get("_stream_text_delta"))
+    ):
+        return
+    store = getattr(app_state, "research_storage", None)
+    if store is None or not callable(getattr(store, "upsert_message", None)):
+        return
+
+    outbound_id = f"{message.message_id}:assistant"
+    message.metadata["_outbound_message_id"] = outbound_id
+    text_parts: list[str] = []
+    write_lock = Lock()
+    last_write = 0.0
+
+    def persist_delta(delta: str) -> None:
+        nonlocal last_write
+        if not delta:
+            return
+        with write_lock:
+            text_parts.append(str(delta))
+            now = time.monotonic()
+            # Persist the first visible fragment immediately, then limit SQLite
+            # writes while still keeping the browser update cadence responsive.
+            if last_write and now - last_write < 0.12:
+                return
+            visible_text = "".join(text_parts)
+            last_write = now
+        try:
+            store.upsert_message(
+                message.session_id,
+                role="assistant",
+                content=visible_text,
+                mode=message.mode,
+                channel=message.channel,
+                message_id=outbound_id,
+            )
+        except Exception:
+            logger.exception("Failed to persist live %s response", message.channel)
+
+    message.metadata["_stream_text_delta"] = persist_delta
 
 
 # 执行 channel inbound、handler 处理、channel outbound 的标准流程。
@@ -185,6 +236,7 @@ def process_channel_message(
 ) -> ChannelMessage:
     channel.publish_inbound(message)
     record_inbound(app_state, message)
+    _install_external_stream_persistence(message, app_state)
     content = handler(message, app_state)
     outbound_message = build_channel_output(message, content)
     record_outbound(app_state, outbound_message)
