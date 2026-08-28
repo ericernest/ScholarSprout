@@ -23,6 +23,10 @@ from skills.models import CapabilitySelection
 
 from handlers.paper_reading.schemas.request import PaperReadingRequest
 from handlers.paper_reading.harness.progress import format_progress_message
+from handlers.paper_reading.pdf_download import (
+    PDFDownloadError,
+    download_pdf_bytes,
+)
 from handlers.paper_reading.pipeline.parser import PDFParser
 from handlers.paper_reading.postprocessors.common import extract_json_object, repair_json_object
 from handlers.paper_reading.postprocessors.postprocess import postprocess_agent_output
@@ -313,32 +317,50 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     if storage is None:
         return _error("Paper storage 未初始化", action="upload_paper")
 
+    matched_by_identity = (
+        research_store.find_paper_by_identity(
+            arxiv_id=_arxiv_id_from_url(request.pdf_url) or None,
+            source_url=request.pdf_url or None,
+        )
+        if research_store is not None and request.pdf_url and not request.paper_id
+        else None
+    )
+    reusable_paper_id = request.paper_id or matched_by_identity
+    if request.pdf_url and reusable_paper_id:
+        existing = storage.load_paper(reusable_paper_id)
+        if (
+            existing
+            and existing.get("parse_status") != "failed"
+            and storage.get_upload_path(reusable_paper_id) is not None
+        ):
+            if research_store is not None:
+                research_store.ensure_library_item(
+                    reusable_paper_id,
+                    reading_status="unread",
+                )
+            return _ok(
+                "upload_paper",
+                _upload_response_data(reusable_paper_id, existing, deduplicated=True),
+            )
+
     try:
         if request.pdf_data:
             import base64
             pdf_bytes = base64.b64decode(request.pdf_data)
         elif request.pdf_url:
-            import httpx
-            resp = httpx.get(request.pdf_url, follow_redirects=True, timeout=60.0)
-            resp.raise_for_status()
-            pdf_bytes = resp.content
+            pdf_bytes = download_pdf_bytes(request.pdf_url)
         else:
             return _error("请提供 pdf_url 或 pdf_data", action="upload_paper")
+    except PDFDownloadError as e:
+        return _error(f"PDF 获取失败: {e}", action="upload_paper")
     except Exception as e:
+        logger.exception("Unexpected PDF import failure")
         return _error(f"PDF 获取失败: {e}", action="upload_paper")
 
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
     matched_by_hash = (
         research_store.find_paper_by_file_hash(file_hash)
         if research_store is not None and not request.paper_id
-        else None
-    )
-    matched_by_identity = (
-        research_store.find_paper_by_identity(
-            arxiv_id=_arxiv_id_from_url(request.pdf_url) or None,
-            source_url=request.pdf_url or None,
-        )
-        if research_store is not None and not request.paper_id and not matched_by_hash
         else None
     )
     # Explicit attachments win; otherwise reuse a binary/identity match.
