@@ -65,6 +65,21 @@ class ConfigManagerTests(unittest.TestCase):
 
 
 class ConfigWebTests(unittest.TestCase):
+    def test_tutorial_completion_is_persisted_once_per_local_user_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_file = Path(directory) / "config.json"
+            with patch.dict(os.environ, {"NOVICESYNAPSE_CONFIG_FILE": str(config_file)}):
+                client = TestClient(app)
+                before = client.get("/api/tutorial/status")
+                completed = client.post("/api/tutorial/complete")
+                after = client.get("/api/tutorial/status")
+
+            self.assertEqual(before.status_code, 200)
+            self.assertFalse(before.json()["completed"])
+            self.assertEqual(completed.status_code, 200)
+            self.assertTrue(after.json()["completed"])
+            self.assertTrue((Path(directory) / ".seefurther-tutorial-v2-complete").is_file())
+
     def test_generation_snapshot_requires_matching_session(self) -> None:
         client = TestClient(app)
 

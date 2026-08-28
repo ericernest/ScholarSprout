@@ -24,8 +24,8 @@ const SKILLS = [
   { id: "reading.cross_paper_linker", label: "Cross Paper Linker", short: "跨论文连接", prompt: "请联系相关论文，指出继承、互补、冲突和潜在研究路线。" },
 ];
 
-const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const PDFJS_SRC = "/static/vendor/pdfjs/pdf.min.js";
+const PDFJS_WORKER_SRC = "/static/vendor/pdfjs/pdf.worker.min.js";
 const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
 const READING_MAP_STALE_AFTER_MS = 180000;
 
@@ -436,6 +436,7 @@ async function importLocalPdf(file) {
     toast("请选择 PDF 文件。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   $("upload-file-label").textContent = `${file.name} · ${formatBytes(file.size)}`;
   setBusy(true, "正在解析 PDF", "上传、章节重排与阅读地图生成可能需要一些时间…");
   try {
@@ -461,6 +462,7 @@ async function importPdfUrl(rawUrl) {
     toast("请输入有效的 PDF 或 arXiv 链接。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   setBusy(true, "正在导入在线论文", "下载 PDF、解析章节并生成阅读地图…");
   try {
     const { payload } = await callPaperReading({
@@ -545,6 +547,7 @@ async function regenerateReadingMap() {
     toast("请先上传或打开一篇论文。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const button = $("regenerate-reading-map-button");
   if (button) button.disabled = true;
   state.readingMapStatus = "llm_running";
@@ -663,6 +666,7 @@ async function reparsePaper() {
     toast("请先上传或打开一篇论文。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const button = $("reparse-paper-button");
   if (button) button.disabled = true;
   try {
@@ -1220,7 +1224,14 @@ function sectionGuide(sectionId) {
 function renderSectionGuide(guide, indexed = {}) {
   if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null;
   const wrap = create("div", "section-guide");
-  guide.cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
+  const cards = guide.cards.slice(0, 6);
+  cards.forEach((card, index) => {
+    const rendered = renderGuideCard(card);
+    rendered.dataset.cardIndex = String(index + 1).padStart(2, "0");
+    rendered.classList.toggle("is-featured", index === 0);
+    rendered.classList.toggle("is-wide-tail", index === cards.length - 1 && cards.length % 2 === 0);
+    wrap.append(rendered);
+  });
   return wrap;
 }
 
@@ -1571,7 +1582,15 @@ function appendSourceButton(container, page) {
 
 function pdfFragment(page, fit) {
   const view = { width: "view=FitH", page: "view=Fit", 100: "zoom=100" }[fit] || "view=FitH";
-  return `page=${page || 1}&${view}`;
+  return `page=${normalizePdfPage(page)}&${view}`;
+}
+
+function normalizePdfPage(value, fallback = 1) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric);
+  const match = String(value || "").match(/\d+/);
+  if (match) return Math.max(1, Number(match[0]));
+  return Math.max(1, Number(fallback) || 1);
 }
 
 function currentPdfPage() {
@@ -1594,6 +1613,7 @@ async function renderPdf(force = false, options = {}) {
   }
   host.hidden = false;
   frame.hidden = true;
+  const requestedPage = normalizePdfPage(state.pendingPdfPage || anchor?.page || currentPdfPage());
   const renderKey = `${baseUrl}::${fit}::${host.clientWidth}`;
   if (!force && state.pdfRenderedKey === renderKey && host.childElementCount) {
     if (state.pendingPdfPage) scrollPdfToPage(state.pendingPdfPage, false);
@@ -1629,7 +1649,7 @@ async function renderPdf(force = false, options = {}) {
       placeholders.push(placeholder);
     }
     host.replaceChildren(...placeholders);
-    const targetPage = Number(state.pendingPdfPage || anchor?.page || currentPdfPage()) || 1;
+    const targetPage = Math.min(state.pdfDoc.numPages, requestedPage);
     scrollPdfToPage(targetPage, false);
     const pageOrder = Array.from({ length: state.pdfDoc.numPages }, (_, index) => index + 1)
       .sort((left, right) => Math.abs(left - targetPage) - Math.abs(right - targetPage));
@@ -1649,10 +1669,11 @@ async function renderPdf(force = false, options = {}) {
     if (generation !== state.pdfRenderGeneration) return;
     state.pdfRenderingKey = "";
     console.warn("PDF.js render failed, fallback to iframe.", error);
-    const nextUrl = `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}`;
+    const nextUrl = `${baseUrl}#${pdfFragment(requestedPage, fit)}`;
     if (frame.getAttribute("src") !== nextUrl) frame.src = nextUrl;
     host.hidden = true;
     frame.hidden = false;
+    state.pendingPdfPage = null;
     toast("PDF.js 加载失败，已切换到浏览器原生 PDF 预览。", true);
   }
 }
@@ -1765,8 +1786,8 @@ function downloadCurrentPdf() {
 function syncPdfToSection(sectionId) {
   if (!state.hasPdf) return;
   const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
-  const page = section?.start_page;
-  if (!page) return;
+  if (!section?.start_page) return;
+  const page = normalizePdfPage(section.start_page);
   state.pendingPdfPage = page;
   scrollPdfToPage(page);
   if (!$("pdf-frame").hidden) {
@@ -1873,16 +1894,22 @@ async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, app
 
 function scrollPdfToPage(page, smooth = true) {
   const host = $("pdf-document");
-  const target = host?.querySelector(`[data-page-number="${Number(page) || 1}"]`);
-  if (!host || !target) return;
-  const top = target.getBoundingClientRect().top - host.getBoundingClientRect().top + host.scrollTop - 10;
+  const targetPage = normalizePdfPage(page);
+  const target = host?.querySelector(`[data-page-number="${targetPage}"]`);
+  if (!host || !target) {
+    state.pendingPdfPage = targetPage;
+    return false;
+  }
+  const top = target.offsetTop - 10;
   host.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+  return true;
 }
 
 function jumpToPdfPage(page, sectionId = "") {
   if (sectionId) state.currentSection = sectionId;
-  const targetPage = Number(page) || currentPdfPage();
+  const targetPage = normalizePdfPage(page, currentPdfPage());
   state.pendingPdfPage = targetPage;
+  toggleReadingMapPanel(false);
   setReaderMode("pdf", { targetPage });
   renderOutline();
   syncComposerContext();
@@ -1918,6 +1945,8 @@ function scrollPageToPdfReader() {
 async function selectSection(sectionId, analyze) {
   state.currentSection = sectionId;
   state.sourceView = state.readerMode || "pdf";
+  const selectedSection = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  state.pendingPdfPage = normalizePdfPage(selectedSection?.start_page, currentPdfPage());
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
@@ -1944,6 +1973,7 @@ function moveSection(offset) {
 
 async function startReading(content, sessionId = state.sessionId, options = {}) {
   if (!state.paperId || state.busy) return;
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   state.busy = true;
   const interactionType = options.sectionAnalysis ? "section_analysis" : "";
   const detail = options.sectionAnalysis
@@ -3157,6 +3187,7 @@ function closeFork() {
 }
 
 async function createFork() {
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
   closeFork();
@@ -3197,6 +3228,7 @@ async function createFork() {
 
 async function runForkTurn(fork, question) {
   if (!fork.sessionId) return toast("分支会话尚未就绪，请稍候再试。", true);
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const payload = await streamPaperTurn({
     action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
     target_section: state.currentSection, content: question,
@@ -3525,7 +3557,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   const whyCandidate = readingMapCardWhy(item, groupKey, summary);
   const why = sameMapText(whyCandidate, title) || sameMapText(whyCandidate, summary) ? "" : whyCandidate;
   const sources = Array.isArray(item.source_sections) ? item.source_sections : [];
-  const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
+  const source = resolveReadingMapSource(sources);
   const card = create("article", `reading-map-card reading-map-${groupKey}`);
   card.append(create("strong", "", title));
   const fields = readingMapCardFields(item, groupKey, title);
@@ -3553,11 +3585,11 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   jump.type = "button";
   jump.disabled = !source.page && !source.section_id;
   jump.addEventListener("click", () => {
-    const section = state.paper?.sections?.find((item) => item.section_id === source.section_id);
-    jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "");
+    jumpToPdfPage(source.page, source.section_id);
   });
   const ask = create("button", "mini-button is-accent", "让智能体解释");
   ask.type = "button";
+  ask.dataset.tourAnchor = "reading-map-explain";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;
     toggleReadingMapPanel(false);
@@ -3574,6 +3606,18 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
     if (sourceText) card.append(create("small", "reading-map-source", sourceText));
   }
   return card;
+}
+
+function resolveReadingMapSource(sources = []) {
+  const entries = Array.isArray(sources) ? sources : [];
+  const candidate = entries.find((entry) => entry?.page || entry?.start_page || entry?.page_number)
+    || entries.find((entry) => entry?.section_id)
+    || {};
+  const sectionId = String(candidate.section_id || "");
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  const rawPage = candidate.page ?? candidate.start_page ?? candidate.page_number ?? section?.start_page;
+  const page = rawPage ? normalizePdfPage(rawPage) : 0;
+  return { ...candidate, section_id: sectionId, page };
 }
 
 function prepareSurveyMapItems(groupKey, rawItems) {
@@ -3821,6 +3865,8 @@ function updateCurrentSectionFromScroll(reader = activeTextReader()) {
   }
   if (current === state.currentSection) return;
   state.currentSection = current;
+  const section = state.paper?.sections?.find((item) => item.section_id === current);
+  state.pendingPdfPage = normalizePdfPage(section?.start_page, state.pendingPdfPage || 1);
   persistState();
   document.querySelectorAll(".outline-item").forEach((item, index) => {
     item.classList.toggle("is-active", (state.paper?.sections?.[index]?.section_id) === current);
@@ -3853,6 +3899,10 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
+  if (window.SeeFurtherTutorial?.active) {
+    initializeTutorialPaper();
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const requestedPaper = params.get("paper_id");
   const requestedSession = params.get("session_id");
@@ -3894,7 +3944,39 @@ async function restoreLocalState() {
   }
 }
 
+function initializeTutorialPaper() {
+  const paper = window.SeeFurtherTutorial.demoReadingPaper;
+  state.paperId = paper.paper_id;
+  state.sessionId = "tutorial-reading-session";
+  state.conversationId = "tutorial-reading-conversation";
+  state.paper = paper;
+  state.readingMap = paper.reading_map;
+  state.readingMapStatus = "llm_done";
+  state.readingMapPhase = "llm_done";
+  state.readingMapProgress = 100;
+  state.parseStatus = "completed";
+  state.currentSection = paper.sections[0].section_id;
+  state.paperIndex = { sections: paper.sections.map((section) => ({ section_id: section.section_id, summary: section.content })) };
+  state.progress = {
+    percentage: 25,
+    section_statuses: Object.fromEntries(paper.sections.map((section) => [section.section_id, "completed"])),
+  };
+  state.readerMode = "structured";
+  state.readerModeChosen = true;
+  state.restored = true;
+  state.hasPdf = false;
+  $("paper-intake").hidden = true;
+  $("paper-workbench").hidden = false;
+  $("workspace-status").textContent = "论文精读 · 教程演示";
+  $("paper-note-button").hidden = false;
+  $("paper-boot").hidden = true;
+  document.body.classList.remove("is-booting");
+  renderPaperWorkspace();
+  window.SeeFurtherTutorial.openReadingMap = () => toggleReadingMapPanel(true);
+}
+
 function persistState() {
+  if (window.SeeFurtherTutorial?.active) return;
   syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);

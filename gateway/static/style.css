@@ -155,6 +155,7 @@ h1 {
 .primary-button,
 .secondary-button,
 .send-button,
+.stop-button,
 .icon-button,
 .mode-menu button {
   border: 0;
@@ -264,9 +265,10 @@ h1 {
 }
 
 .messages {
-  width: min(920px, 100%);
+  width: calc(100% - clamp(24px, 3.2vw, 52px));
+  max-width: none;
   margin: 0 auto;
-  padding: 2rem 1rem 8rem;
+  padding: 2rem 0 8rem;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(102, 245, 214, 0.36) transparent;
@@ -461,7 +463,7 @@ h1 {
 }
 
 .bubble {
-  max-width: min(680px, 84%);
+  max-width: min(1240px, 94%);
   padding: 0.95rem 1rem;
   border: 1px solid var(--line);
   border-radius: 22px;
@@ -695,9 +697,10 @@ h1 {
   right: 50%;
   bottom: 1rem;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 0.6rem;
-  width: min(920px, calc(100% - 2rem));
+  width: calc(100% - clamp(24px, 3.2vw, 52px));
+  max-width: none;
   padding: 0.72rem;
   border: 1px solid rgba(102, 245, 214, 0.28);
   border-radius: 26px;
@@ -833,6 +836,7 @@ textarea::placeholder {
 }
 
 .icon-button,
+.stop-button,
 .send-button {
   align-self: end;
   height: 44px;
@@ -857,6 +861,19 @@ textarea::placeholder {
   background: linear-gradient(135deg, var(--accent), #b8fff1);
   box-shadow: 0 0 20px rgba(102, 245, 214, 0.18);
 }
+
+.stop-button {
+  padding: 0 1rem;
+  border: 1px solid rgba(255, 127, 136, 0.48);
+  color: #fff4f4;
+  background: linear-gradient(135deg, rgba(173, 52, 71, 0.94), rgba(230, 91, 105, 0.92));
+  box-shadow: 0 0 22px rgba(255, 127, 136, 0.2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.stop-button:hover { transform: translateY(-1px); box-shadow: 0 0 28px rgba(255, 127, 136, 0.3); }
+.stop-button:disabled { cursor: wait; opacity: .72; }
 
 .icon-button:hover,
 .send-button:hover {
@@ -964,5 +981,14 @@ textarea::placeholder {
 
   .paper-file-button {
     justify-content: center;
+  }
+
+  .composer {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .stop-button {
+    grid-column: 2 / -1;
+    width: 100%;
   }
 }

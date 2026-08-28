@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 
 from .manager import (
     DEFAULT_DATA_DIR,
+    get_config_file,
     is_setup_complete,
     load_config,
     resolve_data_dir,
@@ -107,6 +108,35 @@ def _public_config(config: object) -> dict[str, object]:
         },
         "setup_complete": is_setup_complete(config),
     }
+
+
+def _tutorial_marker() -> Path:
+    """Store the one-time tutorial flag beside this OS user's config file."""
+    return get_config_file().parent / ".seefurther-tutorial-v2-complete"
+
+
+@router.get("/api/tutorial/status")
+def read_tutorial_status(request: Request) -> dict[str, bool]:
+    _require_local_request(request)
+    return {"completed": _tutorial_marker().is_file()}
+
+
+@router.post("/api/tutorial/complete")
+def complete_tutorial(request: Request) -> dict[str, bool]:
+    _require_local_request(request)
+    marker = _tutorial_marker()
+    temporary = marker.with_name(f".{marker.name}.tmp")
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text("completed\n", encoding="utf-8")
+        temporary.replace(marker)
+    except OSError as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="无法保存教程完成状态。") from error
+    return {"completed": True}
 
 
 @router.get("/api/config")

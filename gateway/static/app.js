@@ -14,6 +14,8 @@ const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
 const DOMAIN_PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const CHAT_PENDING_GENERATION_KEY = "seefurther_pending_chat_generation_v1";
+const tutorialParams = new URLSearchParams(window.location.search);
+const tutorialActive = tutorialParams.get("tutorial") === "1";
 
 let currentMode = "chat";
 let isGenerating = false;
@@ -37,6 +39,7 @@ const modeButton = document.querySelector("#mode-button");
 const modeMenu = document.querySelector("#mode-menu");
 const modePill = document.querySelector("#mode-pill");
 const sendButton = document.querySelector("#send-button");
+const stopButton = document.querySelector("#stop-button");
 const cursorGlow = document.querySelector("#cursor-glow");
 const selectedModeChip = document.querySelector("#selected-mode-chip");
 const selectedModeLabel = document.querySelector("#selected-mode-label");
@@ -50,6 +53,25 @@ const discussionBar = document.querySelector("#discussion-context-bar");
 const discussionButton = document.querySelector("#discussion-context-button");
 const discussionValue = document.querySelector("#discussion-context-value");
 const discussionMenu = document.querySelector("#discussion-context-menu");
+const startExperienceLink = document.querySelector("#start-experience");
+
+if (startExperienceLink) {
+  startExperienceLink.href = "/app?new=1";
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: false })
+    .then((status) => {
+      if (!status.completed) window.location.replace("/app?tutorial=1");
+    })
+    .catch(() => {});
+}
+if (document.body.classList.contains("chat-body") && !tutorialActive && tutorialParams.get("tutorial") !== "skip") {
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: true })
+    .then((status) => {
+      if (!status.completed) window.location.replace("/app?tutorial=1");
+    })
+    .catch(() => {});
+}
 
 bindChatPage();
 startParticleField();
@@ -116,6 +138,10 @@ function bindChatPage() {
     await sendMessage();
   });
 
+  stopButton?.addEventListener("click", () => {
+    void stopActiveGeneration();
+  });
+
   discussionButton?.addEventListener("click", (event) => {
     event.stopPropagation();
     setDiscussionMenuOpen(discussionMenu.hidden);
@@ -151,6 +177,7 @@ function bindChatPage() {
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
+  if (tutorialActive) return;
   void restoreConversationHistory().finally(() => {
     restoreDomainOnboardingCard();
     void restorePendingChatGeneration();
@@ -376,21 +403,15 @@ function setMode(mode) {
   input.hidden = isPaperReading;
   input.required = !isPaperReading;
   paperModeInput.hidden = !isPaperReading;
-  sendButton.textContent = isPaperReading ? "解析论文" : "发送";
+  if (!isGenerating) sendButton.textContent = isPaperReading ? "解析论文" : "发送";
   closeModeMenu();
 }
 
 // Send user message to current backend endpoint.
 async function sendMessage() {
+  if (tutorialActive) return;
   if (isGenerating) {
-    if (activeGenerationId) {
-      explicitStopRequested = true;
-      fetch(`/chat/generations/${encodeURIComponent(activeGenerationId)}/cancel`, {
-        method: "POST",
-        keepalive: true,
-      }).catch(() => {});
-    }
-    activeResponseController?.abort();
+    await stopActiveGeneration();
     return;
   }
 
@@ -406,6 +427,7 @@ async function sendMessage() {
 
   const requestMode = currentMode;
   const endpoint = modeEndpoints[requestMode];
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
 
   appendMessage("user", content);
   input.value = "";
@@ -486,6 +508,30 @@ async function sendMessage() {
       activeGenerationId = "";
       explicitStopRequested = false;
       setLoading(false);
+    }
+  }
+}
+
+async function stopActiveGeneration() {
+  if (!isGenerating) return;
+  explicitStopRequested = true;
+  const generationId = activeGenerationId;
+  if (stopButton) {
+    stopButton.disabled = true;
+    stopButton.textContent = "正在中断…";
+  }
+  activeResponseController?.abort();
+  if (!generationId) return;
+  try {
+    const response = await fetch(`/chat/generations/${encodeURIComponent(generationId)}/cancel`, {
+      method: "POST",
+      keepalive: true,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    if (isGenerating && stopButton) {
+      stopButton.disabled = false;
+      stopButton.textContent = "重试中断";
     }
   }
 }
@@ -758,6 +804,7 @@ async function retryDomainOnboardingFromCard(item, query, accessToken) {
   const retry = item?.querySelector(".domain-card-retry");
   const stateNode = item?.querySelector("[data-domain-state]");
   if (!taskId) return;
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   try {
     const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}/retry`, {
       method: "POST",
@@ -929,6 +976,8 @@ async function submitPaper() {
     appendMessage("assistant", "一次请选择一种导入方式：本地 PDF 或在线链接。");
     return;
   }
+
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
 
   setLoading(true);
   try {
@@ -1595,11 +1644,17 @@ window.streamSseJson = streamSseJson;
 // Toggle request state.
 function setLoading(isLoading, interruptible = false) {
   isGenerating = isLoading;
-  sendButton.disabled = isLoading && !interruptible;
-  sendButton.classList.toggle("is-stop", isLoading && interruptible);
+  const canInterrupt = isLoading && interruptible;
+  sendButton.disabled = isLoading;
+  sendButton.classList.remove("is-stop");
   sendButton.textContent = isLoading
-    ? (interruptible ? "中断" : (currentMode === "paper_reading" ? "解析中" : "生成中"))
+    ? (currentMode === "paper_reading" ? "解析中" : "生成中")
     : (currentMode === "paper_reading" ? "解析论文" : "发送");
+  if (stopButton) {
+    stopButton.hidden = !canInterrupt;
+    stopButton.disabled = false;
+    stopButton.textContent = "中断";
+  }
 }
 
 // Get persistent local session id.

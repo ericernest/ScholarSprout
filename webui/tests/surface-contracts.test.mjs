@@ -7,7 +7,7 @@ const root = resolve(import.meta.dirname, "../..");
 const staticRoot = join(root, "gateway", "static");
 
 const contracts = {
-  "index.html": ["hero-card", "开始体验", "/library", "/settings"],
+  "index.html": ["hero-card", "开始体验", "/library", "进入教程", "/app?tutorial=1"],
   "chat.html": ["chat-form", "mode-menu", "paper-mode-input", "discussion-context-bar", "/static/app.js"],
   "domain-onboarding/index.html": ["section-nav", "topbar-retry-button", "cancel-button", "sidebar-resizer", "/static/domain-onboarding/app.js"],
   "library/index.html": ["library-nav", "paper-import", "folder-tree", "paper-note-dialog", "/static/library/app.js"],
@@ -38,6 +38,83 @@ test("gateway keeps stable API routes while serving the Vue build", () => {
   }
   assert.ok(app.includes('FRONTEND_DIR = STATIC_DIR / "app-v2"'));
   assert.ok(app.includes("legacy_path"), "source-checkout fallback was removed");
+});
+
+test("first-use tutorial overlays the real surfaces with synchronized detail context", () => {
+  const tutorial = readFileSync(join(staticRoot, "tutorial-runtime.js"), "utf8");
+  const paperApp = readFileSync(join(staticRoot, "paper-reading", "app.js"), "utf8");
+  const chat = readFileSync(join(staticRoot, "app.js"), "utf8");
+  const home = readFileSync(join(staticRoot, "index.html"), "utf8");
+  assert.ok(!tutorial.includes("预生成"));
+  assert.ok(!tutorial.includes("不会写入业务数据库"));
+  assert.ok(tutorial.includes("跳过教程"));
+  assert.ok(tutorial.includes("智能体 Agent"));
+  assert.ok(tutorial.includes("这个综述认为的未来可做的有哪些"));
+  assert.ok(tutorial.includes("sf-tour-spotlight"));
+  assert.ok(tutorial.includes("demoDomainSnapshot"));
+  assert.ok(tutorial.includes("demoReadingPaper"));
+  assert.ok(tutorial.includes('companion: ".inspector"'));
+  assert.ok(tutorial.includes("selectTutorialReaderText"));
+  assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
+  assert.ok(tutorial.includes("openReadingMap?.()"));
+  assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
+  assert.ok(chat.includes('fetch("/api/tutorial/status"'));
+  assert.ok(chat.includes('window.location.replace("/app?tutorial=1")'));
+  assert.ok(home.includes('id="start-experience"'));
+  assert.ok(home.includes('id="open-tutorial"'));
+  assert.ok(home.includes('href="/app?new=1"'));
+  assert.ok(home.includes('/app?tutorial=1'));
+  for (const retiredLabel of ["Domain Onboarding", "Paper Reading", "Research Chat", "配置向导"]) {
+    assert.ok(!home.includes(retiredLabel));
+  }
+  assert.ok(!readFileSync(join(root, "webui", "vite.config.ts"), "utf8").includes('tutorial: page("tutorial")'));
+});
+
+test("model operations share the local configuration guard", () => {
+  const guard = readFileSync(join(staticRoot, "model-guard.js"), "utf8");
+  const chat = readFileSync(join(staticRoot, "chat.html"), "utf8");
+  const paper = readFileSync(join(staticRoot, "paper-reading", "index.html"), "utf8");
+  const domain = readFileSync(join(staticRoot, "domain-onboarding", "index.html"), "utf8");
+  assert.ok(guard.includes('fetch("/api/config"'));
+  assert.ok(guard.includes("setup_complete"));
+  assert.ok(guard.includes("先完成模型配置"));
+  for (const html of [chat, paper, domain]) assert.ok(html.includes("/static/model-guard.js"));
+});
+
+test("every guided surface loads the same tutorial runtime before its app", () => {
+  for (const relativePath of ["chat.html", "domain-onboarding/index.html", "library/index.html", "paper-reading/index.html", "settings/index.html"]) {
+    const html = readFileSync(join(staticRoot, ...relativePath.split("/")), "utf8");
+    const tutorialAt = html.indexOf("/static/tutorial-runtime.js");
+    assert.ok(tutorialAt >= 0, `${relativePath} does not load the real-page tutorial runtime`);
+    const ownAppAt = html.lastIndexOf("app.js");
+    assert.ok(tutorialAt < ownAppAt, `${relativePath} initializes the app before tutorial isolation`);
+  }
+});
+
+test("chat exposes a dedicated interrupt control and uses the wide workspace", () => {
+  const html = readFileSync(join(staticRoot, "chat.html"), "utf8");
+  const javascript = readFileSync(join(staticRoot, "app.js"), "utf8");
+  const styles = readFileSync(join(staticRoot, "style.css"), "utf8");
+  assert.ok(html.includes('id="stop-button"'));
+  assert.ok(javascript.includes("async function stopActiveGeneration"));
+  assert.ok(javascript.includes("/cancel"));
+  assert.ok(styles.includes("width: calc(100% - clamp(24px, 3.2vw, 52px))"));
+  assert.ok(styles.includes("max-width: none"));
+});
+
+test("smart index uses an asymmetric twelve-column card rhythm", () => {
+  const javascript = readFileSync(join(staticRoot, "paper-reading", "app.js"), "utf8");
+  const styles = readFileSync(join(staticRoot, "paper-reading", "styles.css"), "utf8");
+  assert.ok(javascript.includes('classList.toggle("is-featured", index === 0)'));
+  assert.ok(javascript.includes('classList.toggle("is-wide-tail"'));
+  assert.ok(styles.includes("grid-template-columns: repeat(12,minmax(0,1fr))"));
+  assert.ok(styles.includes(".section-guide-item.is-featured"));
+});
+
+test("settings explains API key storage concisely", () => {
+  const html = readFileSync(join(staticRoot, "settings", "index.html"), "utf8");
+  assert.ok(html.includes("API Key 仅保存在本地后端。"));
+  assert.ok(!html.includes("API Key 不会在页面加载时回传"));
 });
 
 test("Vue compatibility layer preserves the previous surface design", () => {

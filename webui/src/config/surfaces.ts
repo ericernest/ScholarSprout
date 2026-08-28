@@ -22,7 +22,7 @@ export const surfaces: Record<SurfaceId, SurfaceDefinition> = {
     title: "研见 · SeeFurther",
     guideTitle: "See Further into Research.",
     guideSteps: ["进入研究对话", "选择论文精读或领域入门", "在资料库继续已有工作"],
-    autoOpenGuide: true
+    autoOpenGuide: false
   },
   chat: {
     id: "chat",
