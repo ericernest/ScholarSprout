@@ -13,6 +13,9 @@ const modeEndpoints = {
 const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
 const DOMAIN_PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+const CHAT_PENDING_GENERATION_KEY = "seefurther_pending_chat_generation_v1";
+const tutorialParams = new URLSearchParams(window.location.search);
+const tutorialActive = tutorialParams.get("tutorial") === "1";
 
 let currentMode = "chat";
 let isGenerating = false;
@@ -23,6 +26,11 @@ let activeDiscussion = null;
 let conversationContexts = [];
 let conversationHistoryReload = null;
 let conversationHistorySignature = "";
+let conversationContextSignature = "";
+let conversationHistoryRendered = false;
+const persistedMessageContents = new Map();
+let activeGenerationWatcher = null;
+let explicitStopRequested = false;
 const sessionId = getSessionId();
 
 const homePage = document.querySelector("#home-page");
@@ -34,6 +42,7 @@ const modeButton = document.querySelector("#mode-button");
 const modeMenu = document.querySelector("#mode-menu");
 const modePill = document.querySelector("#mode-pill");
 const sendButton = document.querySelector("#send-button");
+const stopButton = document.querySelector("#stop-button");
 const cursorGlow = document.querySelector("#cursor-glow");
 const selectedModeChip = document.querySelector("#selected-mode-chip");
 const selectedModeLabel = document.querySelector("#selected-mode-label");
@@ -47,6 +56,25 @@ const discussionBar = document.querySelector("#discussion-context-bar");
 const discussionButton = document.querySelector("#discussion-context-button");
 const discussionValue = document.querySelector("#discussion-context-value");
 const discussionMenu = document.querySelector("#discussion-context-menu");
+const startExperienceLink = document.querySelector("#start-experience");
+
+if (startExperienceLink) {
+  startExperienceLink.href = "/app?new=1";
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: false })
+    .then((status) => {
+      if (!status.completed) window.location.replace("/app?tutorial=1");
+    })
+    .catch(() => {});
+}
+if (document.body.classList.contains("chat-body") && !tutorialActive && tutorialParams.get("tutorial") !== "skip") {
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: true })
+    .then((status) => {
+      if (!status.completed) window.location.replace("/app?tutorial=1");
+    })
+    .catch(() => {});
+}
 
 bindChatPage();
 startParticleField();
@@ -113,6 +141,10 @@ function bindChatPage() {
     await sendMessage();
   });
 
+  stopButton?.addEventListener("click", () => {
+    void stopActiveGeneration();
+  });
+
   discussionButton?.addEventListener("click", (event) => {
     event.stopPropagation();
     setDiscussionMenuOpen(discussionMenu.hidden);
@@ -148,16 +180,22 @@ function bindChatPage() {
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
-  void restoreConversationHistory().finally(restoreDomainOnboardingCard);
+  if (tutorialActive) return;
+  void restoreConversationHistory().finally(() => {
+    restoreDomainOnboardingCard();
+    void restorePendingChatGeneration();
+  });
   const reloadWhenEnteringChat = () => {
-    if (!isGenerating) void restoreConversationHistory();
+    if (!isGenerating) {
+      void restoreConversationHistory().finally(() => restorePendingChatGeneration());
+    }
   };
   window.addEventListener("pageshow", reloadWhenEnteringChat);
   window.addEventListener("focus", reloadWhenEnteringChat);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") reloadWhenEnteringChat();
   });
-  window.setInterval(reloadWhenEnteringChat, 2500);
+  window.setInterval(reloadWhenEnteringChat, 650);
 }
 
 async function restoreConversationHistory() {
@@ -177,17 +215,31 @@ async function reloadConversationHistory() {
     const conversation = await response.json();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
     const contexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    const contextSignature = JSON.stringify(
+      contexts.map((context) => [context.kind, context.id, context.linked_at]),
+    );
     const signature = JSON.stringify({
       updatedAt: conversation.updated_at || "",
       messages: history.map((message) => [message.message_id, message.created_at, message.content]),
       contexts: contexts.map((context) => [context.kind, context.id, context.linked_at]),
     });
     if (signature === conversationHistorySignature) return;
+    if (
+      conversationHistoryRendered
+      && contextSignature === conversationContextSignature
+      && patchPersistedMessages(history)
+    ) {
+      conversationHistorySignature = signature;
+      scrollRestoredConversation();
+      return;
+    }
     conversationHistorySignature = signature;
+    conversationContextSignature = contextSignature;
     conversationContexts = contexts;
     restoreDiscussionSelector();
     if (!history.length && !conversationContexts.length) return;
     messages.replaceChildren();
+    persistedMessageContents.clear();
     const timeline = [
       ...history.map((message) => ({ type: "message", time: message.created_at || "", value: message })),
       ...conversationContexts.map((context) => ({ type: "context", time: context.linked_at || "", value: context })),
@@ -200,12 +252,50 @@ async function reloadConversationHistory() {
       }
       const message = entry.value;
       if (message.role === "assistant" && message.mode === "domain_onboarding") continue;
-      if (["user", "assistant"].includes(message.role)) appendMessage(message.role, message.content);
+      if (["user", "assistant"].includes(message.role)) {
+        appendMessage(message.role, message.content, message.message_id);
+      }
     }
+    conversationHistoryRendered = true;
     scrollRestoredConversation();
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
+}
+
+function visiblePersistedMessages(history) {
+  return history.filter((message) => (
+    ["user", "assistant"].includes(message.role)
+    && !(message.role === "assistant" && message.mode === "domain_onboarding")
+  ));
+}
+
+function patchPersistedMessages(history) {
+  const expected = visiblePersistedMessages(history);
+  const existing = [...messages.querySelectorAll("[data-persisted-message-id]")];
+  if (existing.length > expected.length || expected.length - existing.length > 1) return false;
+  for (let index = 0; index < existing.length; index += 1) {
+    if (existing[index].dataset.persistedMessageId !== String(expected[index].message_id || "")) {
+      return false;
+    }
+  }
+  for (let index = 0; index < expected.length; index += 1) {
+    const message = expected[index];
+    const messageId = String(message.message_id || "");
+    const content = String(message.content || "");
+    const item = existing[index];
+    if (!item) {
+      appendMessage(message.role, content, messageId);
+      continue;
+    }
+    if (persistedMessageContents.get(messageId) === content) continue;
+    const bubble = item.querySelector(".bubble");
+    if (!bubble) return false;
+    if (message.role === "assistant") bubble.replaceChildren(renderSafeMarkdown(content));
+    else bubble.textContent = content;
+    persistedMessageContents.set(messageId, content);
+  }
+  return true;
 }
 
 async function restorePaperReadingCard(context) {
@@ -368,20 +458,15 @@ function setMode(mode) {
   input.hidden = isPaperReading;
   input.required = !isPaperReading;
   paperModeInput.hidden = !isPaperReading;
-  sendButton.textContent = isPaperReading ? "解析论文" : "发送";
+  if (!isGenerating) sendButton.textContent = isPaperReading ? "解析论文" : "发送";
   closeModeMenu();
 }
 
 // Send user message to current backend endpoint.
 async function sendMessage() {
+  if (tutorialActive) return;
   if (isGenerating) {
-    if (activeGenerationId) {
-      fetch(`/chat/generations/${encodeURIComponent(activeGenerationId)}/cancel`, {
-        method: "POST",
-        keepalive: true,
-      }).catch(() => {});
-    }
-    activeResponseController?.abort();
+    await stopActiveGeneration();
     return;
   }
 
@@ -397,6 +482,7 @@ async function sendMessage() {
 
   const requestMode = currentMode;
   const endpoint = modeEndpoints[requestMode];
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
 
   appendMessage("user", content);
   input.value = "";
@@ -418,8 +504,15 @@ async function sendMessage() {
     const controller = new AbortController();
     const generationId = globalThis.crypto?.randomUUID?.()
       || `generation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    explicitStopRequested = false;
     activeResponseController = controller;
     activeGenerationId = generationId;
+    savePendingChatGeneration({
+      generation_id: generationId,
+      session_id: sessionId,
+      question: content,
+      started_at: new Date().toISOString(),
+    });
     const streaming = appendStreamingMessage();
     const response = await fetch(`${endpoint}/stream`, {
       method: "POST",
@@ -450,18 +543,158 @@ async function sendMessage() {
       extractReply(data),
       data?.reasoning || "",
     );
+    clearPendingChatGeneration(generationId);
   } catch (error) {
-    if (error.name === "AbortError") {
+    const generationId = activeGenerationId;
+    if (error.name === "AbortError" && explicitStopRequested) {
       finishInterruptedMessage();
+      clearPendingChatGeneration(generationId);
     } else {
-      if (activeStreamingMessage) activeStreamingMessage.finish(`请求失败：${error.message}`);
-      else appendMessage("assistant", `请求失败：${error.message}`);
+      const streaming = activeStreamingMessage || appendStreamingMessage();
+      if (generationId) {
+        void watchChatGeneration(generationId, streaming);
+        return;
+      }
+      streaming.finish(`请求失败：${error.message}`);
     }
   } finally {
+    if (!activeGenerationWatcher) {
+      activeResponseController = null;
+      activeGenerationId = "";
+      explicitStopRequested = false;
+      setLoading(false);
+    }
+  }
+}
+
+async function stopActiveGeneration() {
+  if (!isGenerating) return;
+  explicitStopRequested = true;
+  const generationId = activeGenerationId;
+  if (stopButton) {
+    stopButton.disabled = true;
+    stopButton.textContent = "正在中断…";
+  }
+  activeResponseController?.abort();
+  if (!generationId) return;
+  try {
+    const response = await fetch(`/chat/generations/${encodeURIComponent(generationId)}/cancel`, {
+      method: "POST",
+      keepalive: true,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    if (isGenerating && stopButton) {
+      stopButton.disabled = false;
+      stopButton.textContent = "重试中断";
+    }
+  }
+}
+
+function savePendingChatGeneration(value) {
+  try {
+    window.localStorage.setItem(CHAT_PENDING_GENERATION_KEY, JSON.stringify(value));
+  } catch {
+    // A private browser context may deny storage; the live SSE still works.
+  }
+}
+
+function loadPendingChatGeneration() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(CHAT_PENDING_GENERATION_KEY) || "null");
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingChatGeneration(generationId = "") {
+  try {
+    const current = loadPendingChatGeneration();
+    if (!generationId || !current || current.generation_id === generationId) {
+      window.localStorage.removeItem(CHAT_PENDING_GENERATION_KEY);
+    }
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+async function restorePendingChatGeneration() {
+  const saved = loadPendingChatGeneration();
+  if (!saved?.generation_id || saved.session_id !== sessionId) return;
+  if (activeGenerationId === saved.generation_id || activeGenerationWatcher) return;
+  activeGenerationId = saved.generation_id;
+  explicitStopRequested = false;
+  setLoading(true, true);
+  const streaming = appendStreamingMessage();
+  await watchChatGeneration(saved.generation_id, streaming);
+}
+
+async function watchChatGeneration(generationId, streaming) {
+  if (!generationId) return false;
+  if (activeGenerationWatcher) return activeGenerationWatcher;
+  const watcher = (async () => {
+    let notFoundCount = 0;
+    while (true) {
+      let response;
+      try {
+        response = await fetch(
+          `/chat/generations/${encodeURIComponent(generationId)}?session_id=${encodeURIComponent(sessionId)}`,
+          { cache: "no-store" },
+        );
+      } catch {
+        await waitForGenerationPoll(500);
+        continue;
+      }
+      if (response.status === 404) {
+        notFoundCount += 1;
+        if (notFoundCount < 5) {
+          await waitForGenerationPoll(300);
+          continue;
+        }
+        streaming.finish("生成任务已失效，请重新发送问题。");
+        break;
+      }
+      if (!response.ok) {
+        await waitForGenerationPoll(500);
+        continue;
+      }
+      notFoundCount = 0;
+      const snapshot = await response.json();
+      streaming.setContent(snapshot.text || "", snapshot.reasoning || "");
+      if (snapshot.status === "running") {
+        await waitForGenerationPoll(document.visibilityState === "visible" ? 120 : 500);
+        continue;
+      }
+      if (snapshot.status === "completed") {
+        const finalText = snapshot.result == null ? snapshot.text : extractReply(snapshot.result);
+        streaming.finish(finalText || snapshot.text, snapshot.reasoning || "");
+      } else if (snapshot.status === "interrupted") {
+        streaming.interrupt();
+      } else {
+        streaming.finish(`请求失败：${snapshot.error || "生成任务未完成。"}`);
+      }
+      break;
+    }
+    clearPendingChatGeneration(generationId);
+    conversationHistorySignature = "";
     activeResponseController = null;
     activeGenerationId = "";
+    explicitStopRequested = false;
     setLoading(false);
+    window.setTimeout(() => void restoreConversationHistory(), 250);
+    return true;
+  })();
+  activeGenerationWatcher = watcher;
+  try {
+    return await watcher;
+  } finally {
+    if (activeGenerationWatcher === watcher) activeGenerationWatcher = null;
   }
+}
+
+function waitForGenerationPoll(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 // Submit domain onboarding as a background job so the chat request never times out.
@@ -626,6 +859,7 @@ async function retryDomainOnboardingFromCard(item, query, accessToken) {
   const retry = item?.querySelector(".domain-card-retry");
   const stateNode = item?.querySelector("[data-domain-state]");
   if (!taskId) return;
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   try {
     const response = await fetch(`/domain_onboarding/jobs/${encodeURIComponent(taskId)}/retry`, {
       method: "POST",
@@ -797,6 +1031,8 @@ async function submitPaper() {
     appendMessage("assistant", "一次请选择一种导入方式：本地 PDF 或在线链接。");
     return;
   }
+
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
 
   setLoading(true);
   try {
@@ -1283,9 +1519,13 @@ function extractReply(response) {
 }
 
 // Append one visible message.
-function appendMessage(role, content) {
+function appendMessage(role, content, messageId = "") {
   const item = document.createElement("article");
   item.className = `message ${role}`;
+  if (messageId) {
+    item.dataset.persistedMessageId = messageId;
+    persistedMessageContents.set(messageId, String(content || ""));
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -1313,38 +1553,60 @@ function appendStreamingMessage() {
   let text = "";
   let reasoning = "";
   let streaming = true;
+  let renderFrame = 0;
+  const status = document.createElement("p");
+  status.className = "thinking-status";
+  const plainAnswer = document.createElement("div");
+  plainAnswer.className = "streaming-plain-text";
   const render = () => {
+    renderFrame = 0;
+    const stickToBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120;
     const inline = splitVisibleThinking(text);
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
     const answer = inline.answer;
-    bubble.replaceChildren();
-    if (visibleReasoning) {
-      bubble.append(createThinkingDetails(visibleReasoning, streaming));
-    } else if (streaming && !answer) {
-      const status = document.createElement("p");
-      status.className = "thinking-status";
-      status.textContent = "正在思考…";
-      bubble.append(status);
+    if (streaming) {
+      status.textContent = visibleReasoning ? `正在思考…（${visibleReasoning.length} 字）` : "正在思考…";
+      status.hidden = Boolean(answer);
+      plainAnswer.textContent = answer;
+      plainAnswer.hidden = !answer;
+      if (!status.isConnected || !plainAnswer.isConnected) bubble.replaceChildren(status, plainAnswer);
+    } else {
+      bubble.replaceChildren();
+      if (visibleReasoning) bubble.append(createThinkingDetails(visibleReasoning, false));
+      if (answer) bubble.append(renderSafeMarkdown(answer));
     }
-    if (answer) bubble.append(renderSafeMarkdown(answer));
-    messages.scrollTop = messages.scrollHeight;
+    if (stickToBottom) messages.scrollTop = messages.scrollHeight;
   };
-  render();
+  const scheduleRender = () => {
+    if (renderFrame) return;
+    renderFrame = window.requestAnimationFrame(render);
+  };
+  const renderNow = () => {
+    if (renderFrame) window.cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    render();
+  };
+  renderNow();
   const api = {
     append(delta) {
       text += String(delta || "");
-      render();
+      scheduleRender();
     },
     appendReasoning(delta) {
       reasoning += String(delta || "");
-      render();
+      scheduleRender();
+    },
+    setContent(nextText, nextReasoning = "") {
+      text = String(nextText || "");
+      reasoning = String(nextReasoning || "");
+      scheduleRender();
     },
     finish(finalText, finalReasoning = "") {
       text = String(finalText || text || "后端没有返回内容。");
       reasoning = String(finalReasoning || reasoning || splitVisibleThinking(text).reasoning || "");
       streaming = false;
       bubble.classList.remove("streaming-bubble");
-      render();
+      renderNow();
       requestAnimationFrame(() => scrollMessageToTop(item));
       if (activeStreamingMessage === api) activeStreamingMessage = null;
     },
@@ -1352,7 +1614,7 @@ function appendStreamingMessage() {
       text = text ? `${text}\n\n_回答已中断。_` : "回答已中断。";
       streaming = false;
       bubble.classList.remove("streaming-bubble");
-      render();
+      renderNow();
       if (activeStreamingMessage === api) activeStreamingMessage = null;
     },
   };
@@ -1441,11 +1703,17 @@ window.streamSseJson = streamSseJson;
 // Toggle request state.
 function setLoading(isLoading, interruptible = false) {
   isGenerating = isLoading;
-  sendButton.disabled = isLoading && !interruptible;
-  sendButton.classList.toggle("is-stop", isLoading && interruptible);
+  const canInterrupt = isLoading && interruptible;
+  sendButton.disabled = isLoading;
+  sendButton.classList.remove("is-stop");
   sendButton.textContent = isLoading
-    ? (interruptible ? "中断" : (currentMode === "paper_reading" ? "解析中" : "生成中"))
+    ? (currentMode === "paper_reading" ? "解析中" : "生成中")
     : (currentMode === "paper_reading" ? "解析论文" : "发送");
+  if (stopButton) {
+    stopButton.hidden = !canInterrupt;
+    stopButton.disabled = false;
+    stopButton.textContent = "中断";
+  }
 }
 
 // Get persistent local session id.

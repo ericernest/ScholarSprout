@@ -442,6 +442,12 @@ class WeightedPaperRanker:
                     existing.citation_observed_at = paper.citation_observed_at
                 if not existing.abstract and paper.abstract:
                     existing.abstract = paper.abstract
+                if not existing.pdf_url and paper.pdf_url:
+                    existing.pdf_url = paper.pdf_url
+                if not existing.doi and paper.doi:
+                    existing.doi = paper.doi
+                if not existing.arxiv_id and paper.arxiv_id:
+                    existing.arxiv_id = paper.arxiv_id
             for key in keys:
                 aliases[key] = canonical
         return list(merged.values())

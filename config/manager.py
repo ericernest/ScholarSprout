@@ -8,8 +8,9 @@ from pathlib import Path
 
 from .schema import (
     AppConfig,
+    ChannelsConfig,
     EmbeddingConfig,
-    MinerUConfig,
+    FeishuConfig,
     OpenAIClientConfig,
     StorageConfig,
     dump_app_config,
@@ -42,8 +43,8 @@ def load_config(config_file: Path | None = None) -> AppConfig:
     client_data = data.get("client", {})
     embedding_data = data.get("embedding", {})
     storage_data = data.get("storage", {})
-    mineru_data = data.get("mineru", {})
-
+    channels_data = data.get("channels", {})
+    feishu_data = channels_data.get("feishu", {})
     return AppConfig(
         client=OpenAIClientConfig(
             api_key=client_data.get("api_key", ""),
@@ -65,13 +66,15 @@ def load_config(config_file: Path | None = None) -> AppConfig:
             base_url=embedding_data.get("base_url") or None,
             api_key=str(embedding_data.get("api_key") or ""),
         ),
-        mineru=MinerUConfig(
-            base_url=mineru_data.get("base_url") or None,
-            api_key=str(mineru_data.get("api_key") or ""),
-            timeout=float(mineru_data.get("timeout", 180.0)),
-        ),
         storage=StorageConfig(
             data_dir=str(storage_data.get("data_dir") or DEFAULT_DATA_DIR),
+        ),
+        channels=ChannelsConfig(
+            feishu=FeishuConfig(
+                enabled=bool(feishu_data.get("enabled", False)),
+                app_id=str(feishu_data.get("app_id") or "").strip(),
+                app_secret=str(feishu_data.get("app_secret") or "").strip(),
+            ),
         ),
     )
 

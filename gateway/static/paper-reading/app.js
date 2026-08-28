@@ -24,8 +24,8 @@ const SKILLS = [
   { id: "reading.cross_paper_linker", label: "Cross Paper Linker", short: "跨论文连接", prompt: "请联系相关论文，指出继承、互补、冲突和潜在研究路线。" },
 ];
 
-const PDFJS_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-const PDFJS_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const PDFJS_SRC = "/static/vendor/pdfjs/pdf.min.js";
+const PDFJS_WORKER_SRC = "/static/vendor/pdfjs/pdf.worker.min.js";
 const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
 const READING_MAP_STALE_AFTER_MS = 180000;
 
@@ -158,7 +158,6 @@ function bindReader() {
     renderPdf(true, { preserveViewport: true });
   });
   $("structured-reader").addEventListener("mouseup", captureSelection);
-  $("reflow-reader").addEventListener("mouseup", captureSelection);
   $("pdf-reader").addEventListener("mouseup", captureSelection);
   bindScrollSpy();
   $("selection-toolbar").addEventListener("click", handleSelectionAction);
@@ -166,7 +165,7 @@ function bindReader() {
   $("note-close-button").addEventListener("click", closePdfNoteModal);
   document.querySelectorAll("[data-note-close]").forEach((element) => element.addEventListener("click", closePdfNoteModal));
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#reflow-reader") && !event.target.closest("#pdf-reader")) {
+    if (!event.target.closest("#selection-toolbar") && !event.target.closest("#structured-reader") && !event.target.closest("#pdf-reader")) {
       $("selection-toolbar").hidden = true;
     }
   });
@@ -175,16 +174,11 @@ function bindReader() {
 function setupPdfFirstReaderDom() {
   const pdfTab = document.querySelector('[data-reader-mode="pdf"]');
   const indexTab = document.querySelector('[data-reader-mode="structured"]');
-  const reflowTab = document.querySelector('[data-reader-mode="reflow"]');
   if (pdfTab) {
     pdfTab.textContent = "PDF 原文";
   }
   if (indexTab) {
     indexTab.textContent = "智能索引";
-  }
-  if (reflowTab) {
-    reflowTab.textContent = "AI 论文重排";
-    reflowTab.hidden = !usesMineruReflow();
   }
   const reader = $("pdf-reader");
   if (reader && !$("pdf-document")) {
@@ -204,18 +198,11 @@ function setupPdfFirstReaderDom() {
   const selectionToolbar = $("selection-toolbar");
   if (selectionToolbar && selectionToolbar.parentElement !== document.body) document.body.append(selectionToolbar);
   const isPdf = state.readerMode === "pdf";
-  const isReflow = state.readerMode === "reflow" && usesMineruReflow();
-  $("structured-reader").hidden = isPdf || isReflow;
-  $("reflow-reader").hidden = !isReflow;
+  $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.readerMode === state.readerMode);
   });
-}
-
-function usesMineruReflow() {
-  return state.sectionExtractionSource === "mineru_markdown"
-    || state.paper?.section_extraction_source === "mineru_markdown";
 }
 
 function createPdfToolbar() {
@@ -449,6 +436,7 @@ async function importLocalPdf(file) {
     toast("请选择 PDF 文件。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   $("upload-file-label").textContent = `${file.name} · ${formatBytes(file.size)}`;
   setBusy(true, "正在解析 PDF", "上传、章节重排与阅读地图生成可能需要一些时间…");
   try {
@@ -474,6 +462,7 @@ async function importPdfUrl(rawUrl) {
     toast("请输入有效的 PDF 或 arXiv 链接。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   setBusy(true, "正在导入在线论文", "下载 PDF、解析章节并生成阅读地图…");
   try {
     const { payload } = await callPaperReading({
@@ -546,9 +535,7 @@ async function loadPaperDetail() {
   state.parseQuality = data.parse_quality || "";
   state.pdfUrl = data.pdf_url || "";
   state.hasPdf = Boolean(data.has_pdf && state.pdfUrl);
-  if (!state.readerModeChosen) {
-    state.readerMode = usesMineruReflow() ? "reflow" : "pdf";
-  }
+  if (!state.readerModeChosen) state.readerMode = "pdf";
   setupPdfFirstReaderDom();
   await loadPdfMarks();
   if (!state.currentSection) state.currentSection = state.paper?.sections?.[0]?.section_id || "";
@@ -560,6 +547,7 @@ async function regenerateReadingMap() {
     toast("请先上传或打开一篇论文。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const button = $("regenerate-reading-map-button");
   if (button) button.disabled = true;
   state.readingMapStatus = "llm_running";
@@ -616,7 +604,6 @@ function startParsePolling() {
         renderPaperMetadata();
         renderOutline();
         renderSections();
-        renderReflowSections();
         renderProgress();
         renderReadingMap();
         if (!state.currentSection) {
@@ -679,6 +666,7 @@ async function reparsePaper() {
     toast("请先上传或打开一篇论文。", true);
     return;
   }
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const button = $("reparse-paper-button");
   if (button) button.disabled = true;
   try {
@@ -955,7 +943,6 @@ function renderPaperWorkspace() {
   [...(paper.categories || []).slice(0, 3), paper.venue].filter(Boolean).forEach((tag) => tags.append(create("span", "", tag)));
   renderOutline();
   renderSections();
-  renderReflowSections();
   renderProgress();
   syncSkillControls();
   setReaderMode(state.readerMode || "pdf");
@@ -1209,125 +1196,6 @@ function renderSections() {
   reader.addEventListener("scroll", () => localStorage.setItem(STORAGE.scroll, String(reader.scrollTop)), { passive: true });
 }
 
-function renderReflowSections() {
-  const reader = $("reflow-reader");
-  reader.replaceChildren();
-  if (!usesMineruReflow()) {
-    reader.append(create("div", "empty-state", "当前论文没有可用的 MinerU AI 重排结果。"));
-    return;
-  }
-  const sections = (state.paper?.sections || []).filter((section) => !isReferenceSection(section));
-  const contentSections = sections.filter((section) => strHasContent(section.content));
-  if (!contentSections.length) {
-    reader.append(create("div", "empty-state", "MinerU 已返回章节索引，但没有可展示的重排正文。"));
-    return;
-  }
-  const paperTitle = String(state.paper?.title || "").trim();
-  if (paperTitle) {
-    const header = create("header", "reflow-document-header");
-    header.append(create("p", "panel-label", "AI 论文重排"), create("h1", "", paperTitle));
-    reader.append(header);
-  }
-  contentSections.forEach((section, index) => {
-    const level = Math.min(Math.max(Number(section.level) || 1, 1), 6);
-    const article = create("section", `paper-section ai-reflow-section level-${level}${section.section_id === state.currentSection ? " is-current" : ""}`);
-    article.dataset.sectionId = section.section_id;
-    const meta = create("div", "section-meta");
-    meta.append(create("span", "", `AI 重排 ${String(index + 1).padStart(2, "0")}`));
-    article.append(meta, create("h2", "", section.title || `Section ${index + 1}`));
-    const body = create("div", "paper-section-body ai-reflow-content");
-    body.append(renderMineruMarkdown(section.content));
-    article.append(body);
-    reader.append(article);
-  });
-  renderReflowAnnotations();
-  restoreReaderPosition(reader);
-}
-
-function renderMineruMarkdown(source) {
-  const root = create("div", "mineru-markdown");
-  const cleaned = cleanMineruMarkdown(source);
-  const segments = cleaned
-    .split(/(<table\b[\s\S]*?<\/table>|!\[[^\]]*\]\([^)]+\))/giu)
-    .filter(Boolean);
-  segments.forEach((segment) => {
-    const trimmed = segment.trim();
-    if (/^<table\b/iu.test(trimmed)) {
-      const table = renderSafeHtmlTable(segment);
-      if (table) root.append(table);
-      return;
-    }
-    if (/^!\[[^\]]*\]\([^)]+\)$/u.test(trimmed)) {
-      const image = renderMineruImage(trimmed);
-      if (image) root.append(image);
-      return;
-    }
-    const rendered = renderMarkdown(segment);
-    if (rendered.textContent?.trim() || rendered.querySelector("img,table")) root.append(rendered);
-  });
-  return root;
-}
-
-function renderMineruImage(source) {
-  const match = source.match(/^!\[([^\]]*)\]\(([^)]+)\)$/u);
-  if (!match) return null;
-  let url;
-  try {
-    url = new URL(match[2], window.location.origin);
-  } catch (_) {
-    return null;
-  }
-  if (url.origin !== window.location.origin || !url.pathname.startsWith("/paper_reading/figures/")) {
-    return null;
-  }
-  const figure = create("figure", "mineru-figure");
-  const image = create("img");
-  image.src = `${url.pathname}${url.search}`;
-  image.alt = match[1].trim() || "论文图表";
-  image.loading = "lazy";
-  image.decoding = "async";
-  figure.append(image);
-  if (match[1].trim()) figure.append(create("figcaption", "", match[1].trim()));
-  return figure;
-}
-
-function cleanMineruMarkdown(source) {
-  return String(source || "")
-    .replace(/<details>\s*<summary>line<\/summary>[\s\S]*?<\/details>/giu, "")
-    .replace(/!\[[^\]]*\]\(images\/[^)]+\)/giu, "\n\n> 该图的图片资源未随 MinerU Markdown 返回，请切换到 PDF 原文查看。\n\n")
-    .replace(/^Received\s+month\s+dd,\s*yyyy;.*$/gimu, "")
-    .replace(/^E-?mail\s*:.*$/gimu, "")
-    .replace(/^\\?\*?Both authors contribute equally to this paper\.?$/gimu, "")
-    .replace(/\b([A-Za-z]{2,4})-[ \t]*\n+[ \t]*([a-z]{2,})(?![-A-Za-z])/gu, "$1$2")
-    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(?=[a-z])/gu, "$1-")
-    .replace(/\n{3,}/gu, "\n\n")
-    .trim();
-}
-
-function renderSafeHtmlTable(source) {
-  const parsed = new DOMParser().parseFromString(source, "text/html");
-  const original = parsed.querySelector("table");
-  if (!original) return null;
-  const wrapper = create("div", "markdown-table-wrap mineru-table-wrap");
-  const table = create("table", "mineru-table");
-  original.querySelectorAll("tr").forEach((row) => {
-    const safeRow = document.createElement("tr");
-    row.querySelectorAll(":scope > th, :scope > td").forEach((cell) => {
-      const safeCell = document.createElement(cell.tagName.toLowerCase() === "th" ? "th" : "td");
-      safeCell.textContent = cell.textContent?.trim() || "";
-      ["rowspan", "colspan"].forEach((attribute) => {
-        const value = Number(cell.getAttribute(attribute) || 0);
-        if (value > 1 && value <= 50) safeCell.setAttribute(attribute, String(value));
-      });
-      safeRow.append(safeCell);
-    });
-    if (safeRow.childElementCount) table.append(safeRow);
-  });
-  if (!table.childElementCount) return null;
-  wrapper.append(table);
-  return wrapper;
-}
-
 function sectionSummaryText(section, indexed = {}, guide = null) {
   if (isReferenceSection(section)) {
     return "参考文献属于检索型补充内容，因此不单独生成导读，请直接查看 PDF 原文。";
@@ -1356,7 +1224,14 @@ function sectionGuide(sectionId) {
 function renderSectionGuide(guide, indexed = {}) {
   if (!guide || !Array.isArray(guide.cards) || !guide.cards.length) return null;
   const wrap = create("div", "section-guide");
-  guide.cards.slice(0, 6).forEach((card) => wrap.append(renderGuideCard(card)));
+  const cards = guide.cards.slice(0, 6);
+  cards.forEach((card, index) => {
+    const rendered = renderGuideCard(card);
+    rendered.dataset.cardIndex = String(index + 1).padStart(2, "0");
+    rendered.classList.toggle("is-featured", index === 0);
+    rendered.classList.toggle("is-wide-tail", index === cards.length - 1 && cards.length % 2 === 0);
+    wrap.append(rendered);
+  });
   return wrap;
 }
 
@@ -1680,23 +1555,6 @@ function restoreReaderPosition(reader) {
   });
 }
 
-function renderReflowParagraph(text) {
-  const paragraph = create("p", "reflow-paragraph");
-  const value = String(text || "").trim();
-  let displayValue = value;
-  if (/^[•·]\s*/.test(value)) {
-    paragraph.classList.add("is-bullet");
-    displayValue = value.replace(/^[•·]\s*/, "");
-  }
-  const lead = displayValue.match(/^([A-Z][A-Za-z -]{2,48}\.)\s+(.+)$/);
-  if (lead) {
-    paragraph.append(create("strong", "paragraph-lead", lead[1]), document.createTextNode(` ${lead[2]}`));
-  } else {
-    paragraph.textContent = displayValue;
-  }
-  return paragraph;
-}
-
 function renderPaperFigure(figure) {
   const card = create("figure", "paper-figure");
   card.id = `paper-${String(figure.figure_id || figure.asset_name || "figure").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -1724,7 +1582,15 @@ function appendSourceButton(container, page) {
 
 function pdfFragment(page, fit) {
   const view = { width: "view=FitH", page: "view=Fit", 100: "zoom=100" }[fit] || "view=FitH";
-  return `page=${page || 1}&${view}`;
+  return `page=${normalizePdfPage(page)}&${view}`;
+}
+
+function normalizePdfPage(value, fallback = 1) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric);
+  const match = String(value || "").match(/\d+/);
+  if (match) return Math.max(1, Number(match[0]));
+  return Math.max(1, Number(fallback) || 1);
 }
 
 function currentPdfPage() {
@@ -1747,6 +1613,7 @@ async function renderPdf(force = false, options = {}) {
   }
   host.hidden = false;
   frame.hidden = true;
+  const requestedPage = normalizePdfPage(state.pendingPdfPage || anchor?.page || currentPdfPage());
   const renderKey = `${baseUrl}::${fit}::${host.clientWidth}`;
   if (!force && state.pdfRenderedKey === renderKey && host.childElementCount) {
     if (state.pendingPdfPage) scrollPdfToPage(state.pendingPdfPage, false);
@@ -1782,7 +1649,7 @@ async function renderPdf(force = false, options = {}) {
       placeholders.push(placeholder);
     }
     host.replaceChildren(...placeholders);
-    const targetPage = Number(state.pendingPdfPage || anchor?.page || currentPdfPage()) || 1;
+    const targetPage = Math.min(state.pdfDoc.numPages, requestedPage);
     scrollPdfToPage(targetPage, false);
     const pageOrder = Array.from({ length: state.pdfDoc.numPages }, (_, index) => index + 1)
       .sort((left, right) => Math.abs(left - targetPage) - Math.abs(right - targetPage));
@@ -1802,10 +1669,11 @@ async function renderPdf(force = false, options = {}) {
     if (generation !== state.pdfRenderGeneration) return;
     state.pdfRenderingKey = "";
     console.warn("PDF.js render failed, fallback to iframe.", error);
-    const nextUrl = `${baseUrl}#${pdfFragment(currentPdfPage(), fit)}`;
+    const nextUrl = `${baseUrl}#${pdfFragment(requestedPage, fit)}`;
     if (frame.getAttribute("src") !== nextUrl) frame.src = nextUrl;
     host.hidden = true;
     frame.hidden = false;
+    state.pendingPdfPage = null;
     toast("PDF.js 加载失败，已切换到浏览器原生 PDF 预览。", true);
   }
 }
@@ -1918,8 +1786,8 @@ function downloadCurrentPdf() {
 function syncPdfToSection(sectionId) {
   if (!state.hasPdf) return;
   const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
-  const page = section?.start_page;
-  if (!page) return;
+  if (!section?.start_page) return;
+  const page = normalizePdfPage(section.start_page);
   state.pendingPdfPage = page;
   scrollPdfToPage(page);
   if (!$("pdf-frame").hidden) {
@@ -1931,20 +1799,21 @@ function syncPdfToSection(sectionId) {
 }
 
 function setReaderMode(mode, options = {}) {
-  const requestedMode = mode === "reflow" ? (usesMineruReflow() ? "reflow" : "structured") : mode;
-  const normalizedMode = ["pdf", "structured", "reflow"].includes(requestedMode) ? requestedMode : "structured";
+  const normalizedMode = ["pdf", "structured"].includes(mode) ? mode : "structured";
   const isPdf = normalizedMode === "pdf";
-  const isReflow = normalizedMode === "reflow";
   if (options.userInitiated) state.readerModeChosen = true;
   state.readerMode = normalizedMode;
-  $("structured-reader").hidden = isPdf || isReflow;
-  $("reflow-reader").hidden = !isReflow;
+  $("structured-reader").hidden = isPdf;
   $("pdf-reader").hidden = !isPdf;
   $("pdf-fit-control").hidden = !isPdf || !state.hasPdf;
   document.querySelectorAll("[data-reader-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.readerMode === normalizedMode));
   if (isPdf) {
-    renderPdf();
-    syncPdfToSection(state.currentSection);
+    const targetPage = Number(options.targetPage || 0);
+    if (targetPage) state.pendingPdfPage = targetPage;
+    renderPdf().then(() => {
+      if (targetPage) scrollPdfToPage(targetPage, false);
+      else syncPdfToSection(state.currentSection);
+    });
   } else {
     requestAnimationFrame(() => scrollReaderToSection(state.currentSection, false));
   }
@@ -2025,23 +1894,32 @@ async function renderPdfPage(pdfjsLib, pdfDoc, pageNumber, fit, measureHost, app
 
 function scrollPdfToPage(page, smooth = true) {
   const host = $("pdf-document");
-  const target = host?.querySelector(`[data-page-number="${Number(page) || 1}"]`);
-  if (!host || !target) return;
-  const top = target.getBoundingClientRect().top - host.getBoundingClientRect().top + host.scrollTop - 10;
+  const targetPage = normalizePdfPage(page);
+  const target = host?.querySelector(`[data-page-number="${targetPage}"]`);
+  if (!host || !target) {
+    state.pendingPdfPage = targetPage;
+    return false;
+  }
+  const top = target.offsetTop - 10;
   host.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+  return true;
 }
 
 function jumpToPdfPage(page, sectionId = "") {
   if (sectionId) state.currentSection = sectionId;
-  state.pendingPdfPage = Number(page) || currentPdfPage();
-  setReaderMode("pdf");
+  const targetPage = normalizePdfPage(page, currentPdfPage());
+  state.pendingPdfPage = targetPage;
+  toggleReadingMapPanel(false);
+  setReaderMode("pdf", { targetPage });
   renderOutline();
   syncComposerContext();
   scrollPageToPdfReader();
   requestAnimationFrame(() => {
     scrollPageToPdfReader();
-    scrollPdfToPage(state.pendingPdfPage || currentPdfPage());
+    scrollPdfToPage(targetPage);
   });
+  window.setTimeout(() => scrollPdfToPage(targetPage, false), 80);
+  window.setTimeout(() => scrollPdfToPage(targetPage, false), 260);
   window.setTimeout(scrollPageToPdfReader, 120);
   window.setTimeout(scrollPageToPdfReader, 360);
 }
@@ -2067,6 +1945,8 @@ function scrollPageToPdfReader() {
 async function selectSection(sectionId, analyze) {
   state.currentSection = sectionId;
   state.sourceView = state.readerMode || "pdf";
+  const selectedSection = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  state.pendingPdfPage = normalizePdfPage(selectedSection?.start_page, currentPdfPage());
   persistState();
   renderOutline();
   document.querySelectorAll(".paper-section").forEach((section) => section.classList.toggle("is-current", section.dataset.sectionId === sectionId));
@@ -2093,6 +1973,7 @@ function moveSection(offset) {
 
 async function startReading(content, sessionId = state.sessionId, options = {}) {
   if (!state.paperId || state.busy) return;
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   state.busy = true;
   const interactionType = options.sectionAnalysis ? "section_analysis" : "";
   const detail = options.sectionAnalysis
@@ -2184,14 +2065,25 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
   let reasoning = "";
   let streaming = true;
   let mergedSkillOutputs = [];
+  let renderFrame = 0;
+  const status = create("p", "thinking-status", "正在思考…");
+  const plainAnswer = create("div", "streaming-plain-text");
   const render = () => {
+    renderFrame = 0;
+    const stickToBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
     const inline = window.splitVisibleThinking?.(text) || { reasoning: "", answer: text };
     const visibleReasoning = [reasoning, inline.reasoning].filter(Boolean).join("\n\n");
-    body.replaceChildren();
-    if (visibleReasoning && typeof window.createThinkingDetails === "function") {
-      body.append(window.createThinkingDetails(visibleReasoning, streaming));
-    } else if (streaming && !inline.answer) {
-      body.append(create("p", "thinking-status", detail || "正在思考…"));
+    if (streaming) {
+      status.textContent = visibleReasoning ? `正在思考…（${visibleReasoning.length} 字）` : (detail || "正在思考…");
+      status.hidden = Boolean(inline.answer);
+      plainAnswer.textContent = inline.answer;
+      plainAnswer.hidden = !inline.answer;
+      if (!status.isConnected || !plainAnswer.isConnected) body.replaceChildren(status, plainAnswer);
+    } else {
+      body.replaceChildren();
+      if (visibleReasoning && typeof window.createThinkingDetails === "function") {
+        body.append(window.createThinkingDetails(visibleReasoning, false));
+      }
     }
     if (options.preferSkillOutput && !streaming) {
       const methodOutput = mergedSkillOutputs.find((output) => output.skill_id === "reading.method_analyst");
@@ -2200,14 +2092,23 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       } else if (methodOutput?.rendered) {
         body.append(renderMarkdown(methodOutput.rendered));
       }
-    } else if (inline.answer) {
+    } else if (!streaming && inline.answer) {
       body.append(renderAgentResponse(inline.answer, { allowStructured: !streaming }));
     }
-    target.scrollTop = target.scrollHeight;
+    if (stickToBottom) target.scrollTop = target.scrollHeight;
+  };
+  const scheduleRender = () => {
+    if (renderFrame) return;
+    renderFrame = window.requestAnimationFrame(render);
+  };
+  const renderNow = () => {
+    if (renderFrame) window.cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    render();
   };
   return {
-    append(delta) { text += String(delta || ""); render(); },
-    appendReasoning(delta) { reasoning += String(delta || ""); render(); },
+    append(delta) { text += String(delta || ""); scheduleRender(); },
+    appendReasoning(delta) { reasoning += String(delta || ""); scheduleRender(); },
     finish(finalText, finalReasoning = "", skillOutputs = []) {
       text = String(finalText || text || "后端没有返回内容。");
       reasoning = String(finalReasoning || reasoning || "");
@@ -2215,7 +2116,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       streaming = false;
       card.classList.remove("streaming-analysis-card");
       header.lastElementChild.textContent = options.preferSkillOutput ? "章节分析" : "Agent";
-      render();
+      renderNow();
       requestAnimationFrame(() => scrollAnalysisCardToTop(target, card));
     },
     interrupt() {
@@ -2223,7 +2124,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
       streaming = false;
       card.classList.remove("streaming-analysis-card");
       header.lastElementChild.textContent = "已中断";
-      render();
+      renderNow();
     },
     remove() { card.remove(); },
   };
@@ -2597,7 +2498,8 @@ function typesetResponseMath(root) {
       const displayMode = Boolean(match[2] != null || match[3] != null);
       const latex = match[2] ?? match[3] ?? match[4] ?? match[5] ?? "";
       const span = create("span", displayMode ? "response-math-block" : "response-math-inline");
-      window.katex.render(latex.trim(), span, { displayMode, throwOnError: false, strict: "ignore", trust: false });
+      span.setAttribute("aria-label", latex.trim());
+      window.katex.render(latex.trim(), span, { displayMode, throwOnError: false, strict: "ignore", trust: false, output: "html" });
       fragment.append(span);
       cursor = pattern.lastIndex;
     }
@@ -2839,12 +2741,11 @@ function captureSelection(event) {
     return;
   }
   const anchor = selection.anchorNode?.parentElement;
-  const textReader = anchor?.closest("#structured-reader, #reflow-reader");
-  const reflow = anchor?.closest("#reflow-reader");
+  const textReader = anchor?.closest("#structured-reader");
   const pdfPage = anchor?.closest(".pdf-page");
   if (!textReader && !pdfPage) return;
   state.selectedText = text.slice(0, 6000);
-  state.sourceView = pdfPage ? "pdf" : (reflow ? "reflow" : "index");
+  state.sourceView = pdfPage ? "pdf" : "index";
   state.selectedPage = pdfPage ? Number(pdfPage.dataset.pageNumber || 0) : null;
   state.selectedRect = selectionRectForMetadata(selection, pdfPage);
   const section = anchor.closest(".paper-section");
@@ -2902,24 +2803,20 @@ function addMarkFromSelection(type) {
   const selection = window.getSelection();
   if (!selection?.rangeCount || !state.selectedText) return toast("请先在论文正文中划选内容。", true);
   const page = selection.anchorNode?.parentElement?.closest(".pdf-page");
-  const reflowSection = selection.anchorNode?.parentElement?.closest("#reflow-reader .paper-section");
-  if (!page && !reflowSection) return toast("高亮和注释支持 PDF 原文与 AI 论文重排。", true);
-  const sectionId = reflowSection?.dataset.sectionId || state.currentSection;
-  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
-  const rects = page
-    ? normalizePdfMarkRects(selection.getRangeAt(0), page.getBoundingClientRect())
-    : [];
-  if (page && !rects.length) return;
+  if (!page) return toast("高亮和注释仅支持 PDF 原文。", true);
+  const sectionId = state.currentSection;
+  const rects = normalizePdfMarkRects(selection.getRangeAt(0), page.getBoundingClientRect());
+  if (!rects.length) return;
   const mark = {
     id: `mark-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type,
     color: state.pdfMarkColor || "yellow",
-    page: page ? Number(page.dataset.pageNumber || 1) : Number(section?.start_page || 1),
+    page: Number(page.dataset.pageNumber || 1),
     rects,
     text: state.selectedText,
     note: "",
     section_id: sectionId,
-    source_view: page ? "pdf" : "reflow",
+    source_view: "pdf",
     created_at: new Date().toISOString(),
   };
 
@@ -2987,7 +2884,6 @@ function commitPdfMark(mark, editingId = "") {
   void savePdfMarkRemote(mark);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(mark.page) || 1}"]`);
   renderPdfMarks(page, mark.page);
-  renderReflowAnnotations();
   window.getSelection()?.removeAllRanges();
   toast(mark.type === "note" ? (editingId ? "注释已更新。" : "注释已添加。") : "高亮已添加。");
 }
@@ -3038,27 +2934,7 @@ function undoLastPdfMark() {
   void deletePdfMarkRemote(removed.id);
   const page = $("pdf-document")?.querySelector(`[data-page-number="${Number(removed.page) || 1}"]`);
   if (page) renderPdfMarks(page, removed.page);
-  renderReflowAnnotations();
   toast("已撤销最近一次标注。");
-}
-
-function renderReflowAnnotations() {
-  const reader = $("reflow-reader");
-  if (!reader) return;
-  reader.querySelectorAll(".reflow-annotation").forEach((wrapper) => {
-    const parent = wrapper.parentNode;
-    wrapper.replaceWith(document.createTextNode(wrapper.textContent || ""));
-    parent?.normalize();
-  });
-  state.pdfMarks.forEach((mark) => {
-    if (!mark?.text) return;
-    const section = mark.section_id
-      ? reader.querySelector(`[data-section-id="${cssEscape(mark.section_id)}"] .paper-section-body`)
-      : null;
-    const root = section || reader;
-    const match = findTextMatch(root, mark.text);
-    if (match) wrapReflowTextMatch(match, mark);
-  });
 }
 
 function normalizeAnchorText(value) {
@@ -3074,7 +2950,7 @@ function findTextMatch(root, query) {
   const nodes = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
-      if (!node.nodeValue || node.parentElement?.closest(".reflow-annotation,script,style,button")) {
+      if (!node.nodeValue || node.parentElement?.closest("script,style,button")) {
         return NodeFilter.FILTER_REJECT;
       }
       return NodeFilter.FILTER_ACCEPT;
@@ -3112,35 +2988,6 @@ function findTextMatch(root, query) {
   const start = normalized.join("").indexOf(needle);
   if (start < 0) return null;
   return positions.slice(start, start + needle.length);
-}
-
-function wrapReflowTextMatch(positions, mark) {
-  const groups = [];
-  positions.forEach((position) => {
-    const previous = groups.at(-1);
-    if (previous?.node === position.node && previous.end === position.offset) {
-      previous.end += 1;
-    } else {
-      groups.push({ node: position.node, start: position.offset, end: position.offset + 1 });
-    }
-  });
-  groups.reverse().forEach((group) => {
-    if (!group.node.isConnected || group.end > group.node.length) return;
-    const tail = group.node.splitText(group.end);
-    const selected = group.node.splitText(group.start);
-    const wrapper = create("mark", `reflow-annotation pdf-mark-${mark.type} pdf-mark-${mark.color || "yellow"}`);
-    wrapper.dataset.annotationId = mark.id;
-    wrapper.title = mark.note || (mark.type === "note" ? "查看注释" : "论文高亮");
-    wrapper.append(selected);
-    tail.parentNode?.insertBefore(wrapper, tail);
-    if (mark.type === "note") {
-      wrapper.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openPdfNoteModal(mark, true);
-      });
-    }
-  });
 }
 
 function resolveTextOnlyPdfMarks(pageShell, pageNumber) {
@@ -3216,7 +3063,6 @@ async function loadPdfMarks() {
     state.pdfMarks = cached;
   }
   state.pdfMarkHistory = state.pdfMarks.map((mark) => mark.id).filter(Boolean);
-  renderReflowAnnotations();
 }
 
 function appendUserQuestion(text, target = $("analysis-feed")) {
@@ -3341,6 +3187,7 @@ function closeFork() {
 }
 
 async function createFork() {
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const context = $("fork-context-input").value.trim();
   const question = $("fork-question-input").value.trim() || "请深入分析这段内容。";
   closeFork();
@@ -3381,6 +3228,7 @@ async function createFork() {
 
 async function runForkTurn(fork, question) {
   if (!fork.sessionId) return toast("分支会话尚未就绪，请稍候再试。", true);
+  if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   const payload = await streamPaperTurn({
     action: "start_reading", session_id: fork.sessionId, paper_id: state.paperId,
     target_section: state.currentSection, content: question,
@@ -3709,7 +3557,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   const whyCandidate = readingMapCardWhy(item, groupKey, summary);
   const why = sameMapText(whyCandidate, title) || sameMapText(whyCandidate, summary) ? "" : whyCandidate;
   const sources = Array.isArray(item.source_sections) ? item.source_sections : [];
-  const source = sources.find((entry) => entry?.page || entry?.section_id) || {};
+  const source = resolveReadingMapSource(sources);
   const card = create("article", `reading-map-card reading-map-${groupKey}`);
   card.append(create("strong", "", title));
   const fields = readingMapCardFields(item, groupKey, title);
@@ -3737,13 +3585,14 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   jump.type = "button";
   jump.disabled = !source.page && !source.section_id;
   jump.addEventListener("click", () => {
-    const section = state.paper?.sections?.find((item) => item.section_id === source.section_id);
-    jumpToPdfPage(source.page || section?.start_page || 1, source.section_id || "");
+    jumpToPdfPage(source.page, source.section_id);
   });
   const ask = create("button", "mini-button is-accent", "让智能体解释");
   ask.type = "button";
+  ask.dataset.tourAnchor = "reading-map-explain";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;
+    toggleReadingMapPanel(false);
     startReading(`请面向科研新手解释阅读地图中的“${title}”：说明它是什么、为什么重要、和论文主线的关系。`);
   });
   actions.append(jump, ask);
@@ -3757,6 +3606,18 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
     if (sourceText) card.append(create("small", "reading-map-source", sourceText));
   }
   return card;
+}
+
+function resolveReadingMapSource(sources = []) {
+  const entries = Array.isArray(sources) ? sources : [];
+  const candidate = entries.find((entry) => entry?.page || entry?.start_page || entry?.page_number)
+    || entries.find((entry) => entry?.section_id)
+    || {};
+  const sectionId = String(candidate.section_id || "");
+  const section = state.paper?.sections?.find((item) => item.section_id === sectionId);
+  const rawPage = candidate.page ?? candidate.start_page ?? candidate.page_number ?? section?.start_page;
+  const page = rawPage ? normalizePdfPage(rawPage) : 0;
+  return { ...candidate, section_id: sectionId, page };
 }
 
 function prepareSurveyMapItems(groupKey, rawItems) {
@@ -3790,6 +3651,11 @@ function isRenderableReadingMapItem(item, groupKey) {
 
 function readingMapCardFields(item, groupKey, title) {
   const specs = {
+    research_problem: [["一句话问题", ["one_sentence"]], ["研究价值", ["why_it_matters"]], ["新手结论", ["novice_takeaway"]]],
+    core_method: [["一句话方法", ["one_sentence"]], ["主要思想", ["main_idea"]], ["技术路线", ["technical_route"]]],
+    method_steps: [["目标", ["goal"]], ["输入", ["input"]], ["操作", ["operation"]], ["输出", ["output"]], ["必要性", ["why_needed"]]],
+    experimental_support: [["支撑结论", ["claim"]], ["证据", ["evidence"]], ["数据集", ["datasets"]], ["数据格式", ["dataset_format"]], ["实验设置", ["experiment_setting"]], ["对比方法", ["baselines"]], ["指标", ["metrics"]], ["实验协议", ["protocol"]], ["图表", ["figures_or_tables"]]],
+    limitations_and_questions: [["局限", ["limitation"]], ["影响", ["why_it_matters"]], ["新手追问", ["novice_question"]]],
     field_overview: [["领域范围", ["field_scope", "field"]], ["核心任务", ["core_tasks", "core_task"]], ["当前价值", ["why_now"]], ["新手结论", ["novice_takeaway"]], ["常见误解", ["common_misunderstanding"]]],
     development_timeline: [["时间范围", ["time_range"]], ["关键变化", ["key_change"]], ["代表工作", ["representative_work", "representative_works"]], ["阶段意义", ["why_important", "why_it_matters"]]],
     pain_points: [["为什么难", ["why_hard"]], ["实际影响", ["impact"]], ["已有尝试", ["existing_attempts"]], ["未解决部分", ["unresolved_part"]]],
@@ -3959,7 +3825,7 @@ function scrollReaderToSection(sectionId, smooth = true) {
 }
 
 function bindScrollSpy() {
-  [$("structured-reader"), $("reflow-reader")].forEach((reader) => {
+  [$("structured-reader")].forEach((reader) => {
     let ticking = false;
     reader.addEventListener("scroll", () => {
       if (ticking) return;
@@ -3984,7 +3850,7 @@ function bindScrollSpy() {
 }
 
 function activeTextReader() {
-  return state.readerMode === "reflow" ? $("reflow-reader") : $("structured-reader");
+  return $("structured-reader");
 }
 
 function updateCurrentSectionFromScroll(reader = activeTextReader()) {
@@ -3999,6 +3865,8 @@ function updateCurrentSectionFromScroll(reader = activeTextReader()) {
   }
   if (current === state.currentSection) return;
   state.currentSection = current;
+  const section = state.paper?.sections?.find((item) => item.section_id === current);
+  state.pendingPdfPage = normalizePdfPage(section?.start_page, state.pendingPdfPage || 1);
   persistState();
   document.querySelectorAll(".outline-item").forEach((item, index) => {
     item.classList.toggle("is-active", (state.paper?.sections?.[index]?.section_id) === current);
@@ -4031,6 +3899,10 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
+  if (window.SeeFurtherTutorial?.active) {
+    initializeTutorialPaper();
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const requestedPaper = params.get("paper_id");
   const requestedSession = params.get("session_id");
@@ -4072,7 +3944,39 @@ async function restoreLocalState() {
   }
 }
 
+function initializeTutorialPaper() {
+  const paper = window.SeeFurtherTutorial.demoReadingPaper;
+  state.paperId = paper.paper_id;
+  state.sessionId = "tutorial-reading-session";
+  state.conversationId = "tutorial-reading-conversation";
+  state.paper = paper;
+  state.readingMap = paper.reading_map;
+  state.readingMapStatus = "llm_done";
+  state.readingMapPhase = "llm_done";
+  state.readingMapProgress = 100;
+  state.parseStatus = "completed";
+  state.currentSection = paper.sections[0].section_id;
+  state.paperIndex = { sections: paper.sections.map((section) => ({ section_id: section.section_id, summary: section.content })) };
+  state.progress = {
+    percentage: 25,
+    section_statuses: Object.fromEntries(paper.sections.map((section) => [section.section_id, "completed"])),
+  };
+  state.readerMode = "structured";
+  state.readerModeChosen = true;
+  state.restored = true;
+  state.hasPdf = false;
+  $("paper-intake").hidden = true;
+  $("paper-workbench").hidden = false;
+  $("workspace-status").textContent = "论文精读 · 教程演示";
+  $("paper-note-button").hidden = false;
+  $("paper-boot").hidden = true;
+  document.body.classList.remove("is-booting");
+  renderPaperWorkspace();
+  window.SeeFurtherTutorial.openReadingMap = () => toggleReadingMapPanel(true);
+}
+
 function persistState() {
+  if (window.SeeFurtherTutorial?.active) return;
   syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);
