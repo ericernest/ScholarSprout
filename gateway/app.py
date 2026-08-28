@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from agents.agent import create_agent
 from bus.message_bus import MessageBus
 from channels.base import ChannelMessage
+from channels.feishu import FeishuChannel
 from channels.web import WebChannel
 from config.manager import is_setup_complete, load_config, resolve_data_dir
 from config.web import router as config_router
@@ -538,11 +539,12 @@ def start_gateway_server(
     set_kg_engine(kg_engine)
     set_kg_builder(kg_builder)
     message_bus = MessageBus()
-    input_channel = WebChannel(bus=message_bus)
+
+    web_channel = WebChannel(bus=message_bus)
+
     tool_registry = create_builtin_tool_registry(research_storage)
     skill_registry = create_skill_registry()
     capability_selector = CapabilitySelector()
-    input_channel.start()
 
     app.state.model = model
     app.state.setup_complete = setup_complete
@@ -551,6 +553,7 @@ def start_gateway_server(
     app.state.paper_reading_agent = paper_reading_agent
     app.state.research_storage = research_storage
     app.state.memory_service = memory_service
+
     configure_domain_onboarding_runtime(
         app.state,
         model,
@@ -559,12 +562,46 @@ def start_gateway_server(
         embedding_model=embedding_model,
         embedding_model_name=config.embedding.model_name,
     )
+
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
     app.state.capability_selector = capability_selector
     app.state.message_bus = message_bus
-    app.state.default_channel_name = input_channel.name
-    app.state.channels = {input_channel.name: input_channel}
+
+    # 先注册 WebChannel
+    app.state.default_channel_name = web_channel.name
+    app.state.channels = {
+        web_channel.name: web_channel,
+    }
+
+    # 再读取飞书配置
+    feishu_app_id = (
+        os.getenv("FEISHU_APP_ID")
+        or os.getenv("LARK_APP_ID")
+    )
+
+    feishu_app_secret = (
+        os.getenv("FEISHU_APP_SECRET")
+        or os.getenv("LARK_APP_SECRET")
+    )
+
+    if bool(feishu_app_id) != bool(feishu_app_secret):
+        raise RuntimeError(
+            "Feishu configuration is incomplete: "
+            "both FEISHU_APP_ID and FEISHU_APP_SECRET are required."
+        )
+
+    # 只有配置完整时，才创建并注册 FeishuChannel
+    if feishu_app_id and feishu_app_secret:
+        feishu_channel = FeishuChannel(
+            bus=message_bus,
+            app_id=feishu_app_id,
+            app_secret=feishu_app_secret,
+            app_state=app.state,
+        )
+
+        app.state.channels[feishu_channel.name] = feishu_channel
+
     # 论文精读组件
     app.state.paper_storage = paper_storage
     app.state.kg_engine = kg_engine
@@ -579,6 +616,9 @@ def start_gateway_server(
     )
     if setup_complete:
         resume_pending_reading_map_generations(app.state)
+
+    for channel in app.state.channels.values():
+        channel.start()
 
     if on_server_created is None:
         uvicorn.run(app, host=host, port=port)
