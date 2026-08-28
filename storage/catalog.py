@@ -265,7 +265,7 @@ class ResearchCatalog:
             ).fetchone()
             context_rows = connection.execute(
                 """SELECT artifact.artifact_kind, artifact.artifact_id, artifact.title,
-                          link.linked_at, reading.reading_session_id, reading.paper_id,
+                          link.relation, link.linked_at, reading.reading_session_id, reading.paper_id,
                           paper.title AS paper_title, domain.query AS domain_query
                    FROM conversation_artifacts link
                    JOIN work_artifacts artifact ON artifact.artifact_id = link.artifact_id
@@ -299,6 +299,7 @@ class ResearchCatalog:
                     "artifact_id": str(row["artifact_id"]),
                     "paper_id": str(row["paper_id"] or ""),
                     "title": title,
+                    "relation": str(row["relation"] or "created"),
                     "linked_at": str(row["linked_at"]),
                 })
         return {
@@ -315,6 +316,53 @@ class ResearchCatalog:
             "contexts": contexts,
             "messages": [dict(row) for row in messages],
         }
+
+    def list_context_candidates(
+        self, *, conversation_id: str, search: str = "", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List persisted research workspaces that can be brought into a chat."""
+        pattern = f"%{search.strip()}%"
+        with self.store._connection() as connection:
+            rows = connection.execute(
+                """SELECT w.artifact_id, w.artifact_kind, w.title, w.state, w.updated_at,
+                          r.reading_session_id, r.paper_id, p.title AS paper_title,
+                          d.query AS domain_query,
+                          CASE WHEN link.artifact_id IS NULL THEN 0 ELSE 1 END AS linked
+                   FROM work_artifacts w
+                   LEFT JOIN paper_reading_sessions r ON r.artifact_id = w.artifact_id
+                   LEFT JOIN papers p ON p.paper_id = r.paper_id
+                   LEFT JOIN domain_onboardings d ON d.artifact_id = w.artifact_id
+                   LEFT JOIN conversation_artifacts link
+                     ON link.conversation_id = ? AND link.artifact_id = w.artifact_id
+                   WHERE w.artifact_kind IN ('paper_reading', 'domain_onboarding')
+                     AND (w.title LIKE ? OR p.title LIKE ? OR d.query LIKE ?)
+                   ORDER BY linked DESC, w.updated_at DESC LIMIT ?""",
+                (conversation_id, pattern, pattern, pattern, limit),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            kind = str(row["artifact_kind"] or "")
+            context_id = (
+                str(row["reading_session_id"] or "")
+                if kind == "paper_reading"
+                else str(row["artifact_id"])
+            )
+            identity = (kind, str(row["paper_id"] or context_id) if kind == "paper_reading" else context_id)
+            if not context_id or identity in seen:
+                continue
+            seen.add(identity)
+            items.append({
+                "kind": kind,
+                "id": context_id,
+                "artifact_id": str(row["artifact_id"]),
+                "paper_id": str(row["paper_id"] or ""),
+                "title": str(row["paper_title"] or row["domain_query"] or row["title"] or ""),
+                "state": str(row["state"] or ""),
+                "updated_at": str(row["updated_at"] or ""),
+                "linked": bool(row["linked"]),
+            })
+        return items
 
     def list_domain_onboardings(self, *, search: str = "", limit: int = 100) -> list[dict[str, Any]]:
         pattern = f"%{search.strip()}%"

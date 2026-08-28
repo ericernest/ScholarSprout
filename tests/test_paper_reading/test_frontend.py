@@ -189,10 +189,20 @@ class PaperReadingFrontendTests(unittest.TestCase):
     def test_main_chat_uses_tools_without_mixing_paper_sidebar_history(self) -> None:
         javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("let activeDiscussion = null", javascript)
-        self.assertIn("active_context: {", javascript)
+        self.assertIn("let activeDiscussions = []", javascript)
+        self.assertIn("active_contexts: activeDiscussions.map", javascript)
         self.assertIn('fetch(`${endpoint}/stream`', javascript)
         self.assertNotIn('`${paperContext ? "/paper_reading" : endpoint}/stream`', javascript)
+
+    def test_reading_return_target_follows_its_launch_source(self) -> None:
+        chat = (STATIC / "app.js").read_text(encoding="utf-8")
+        reading = (FRONTEND / "app.js").read_text(encoding="utf-8")
+        domain = (STATIC / "domain-onboarding" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("conversation_id: sessionId", chat)
+        self.assertIn('conversation_id: state.conversationId || ""', reading)
+        self.assertIn('requestedPaper && !requestedSession ? ""', reading)
+        self.assertIn('get("conversation_id") || ""', domain)
 
     def test_discussion_picker_matches_chat_ui_without_pushing_messages_down(self) -> None:
         html = (STATIC / "chat.html").read_text(encoding="utf-8")
@@ -201,8 +211,11 @@ class PaperReadingFrontendTests(unittest.TestCase):
 
         self.assertIn('id="discussion-context-button"', html)
         self.assertIn('id="discussion-context-menu"', html)
+        self.assertIn('id="context-import-modal"', html)
         self.assertNotIn('id="discussion-context-select"', html)
         self.assertIn("function createDiscussionOption", javascript)
+        self.assertIn("function importSelectedContexts", javascript)
+        self.assertIn("function toggleDiscussion", javascript)
         self.assertIn("function scrollRestoredConversation", javascript)
         self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto", styles)
         self.assertIn(".discussion-context-button", styles)

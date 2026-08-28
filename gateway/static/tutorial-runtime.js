@@ -177,7 +177,9 @@
     { id: "domain-start-reading", page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "[data-import-paper]", title: "开始论文精读", copy: "除了单独上传论文，也可以从领域入门的论文详情下载 PDF，并从这里进入论文精读。" },
     { id: "library-folders", page: "library", route: "/library?view=papers&tutorial=1", target: "#folder-tree", title: "论文文件夹", copy: "使用真实资料库页面新建文件夹、移动论文并管理阅读状态。" },
     { id: "library-paper", page: "library", route: "/library?view=papers&tutorial=1", target: ".item-card", title: "论文管理", copy: "从论文卡片继续精读、查看笔记或调整所在文件夹。" },
-    { id: "discussion-select", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#discussion-context-button", title: "选择当前讨论", copy: "把刚才的智能体综述设为当前讨论，限定智能体可访问的研究范围。" },
+    { id: "discussion-select", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#discussion-context-button", title: "多选当前讨论", copy: "一个会话可以同时选择多篇论文和领域入门，研见会在这些范围内比较与综合。" },
+    { id: "discussion-import", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "[data-import-contexts]", title: "引入会话外部结果", copy: "还可以打开研究结果选择页，搜索并多选其他会话中的论文精读或领域入门，再加入当前讨论。" },
+    { id: "discussion-import-picker", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#context-import-results", companion: "#context-import-modal", title: "搜索与多选", copy: "按论文精读或领域入门筛选，选中多个结果后点击“引入并选中”。" },
     { id: "discussion-query", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#message-input", title: "围绕综述继续提问", copy: "示例问题：这个综述认为的未来可做的有哪些？" },
     { id: "discussion-answer", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#send-button", title: "围绕当前讨论回答", copy: "研见会围绕选定综述中的开放问题继续讨论。" },
     { id: "settings", page: "settings", route: "/settings?tutorial=1", target: ".config-tabs", companion: "#settings-form", title: "配置模型与多渠道", copy: "最后配置模型、数据目录与飞书等消息渠道；密钥仅保存在本地后端。" }
@@ -255,11 +257,22 @@
         document.querySelector("#paper-note-button")?.click();
       }
     }
-    if (pageName() === "return-chat") {
+   if (pageName() === "return-chat") {
       const bar = document.querySelector("#discussion-context-bar");
       const value = document.querySelector("#discussion-context-value");
-      if (bar) bar.hidden = false;
-      if (value) value.textContent = surveyTitle;
+     if (bar) bar.hidden = false;
+     if (value) value.textContent = surveyTitle;
+     const menu = document.querySelector("#discussion-context-menu");
+     if (menu && !menu.querySelector("[data-import-contexts]")) {
+       menu.insertAdjacentHTML("beforeend", "<button type='button' class='discussion-context-import' data-import-contexts='1'><span>＋</span><span><strong>引入会话外部结果</strong><small>搜索已有论文精读与领域入门</small></span></button>");
+     }
+     if (step.id === "discussion-import") menu.hidden = false;
+     if (step.id === "discussion-import-picker") {
+       const modal = document.querySelector("#context-import-modal");
+       const results = document.querySelector("#context-import-results");
+       if (modal) modal.hidden = false;
+       if (results) results.innerHTML = "<button class='context-import-card is-selected' type='button'><span class='context-import-card-kind'>论文精读</span><strong>智能体综述</strong><small>可引入当前会话</small><span class='context-import-card-check'>✓</span></button><button class='context-import-card is-selected' type='button'><span class='context-import-card-kind'>领域入门</span><strong>智能体 Agent</strong><small>可引入当前会话</small><span class='context-import-card-check'>✓</span></button>";
+     }
       if (input) input.value = "这个综述认为的未来可做的有哪些？";
       if (step.id === "discussion-answer") {
         appendChatMessage("user", "这个综述认为的未来可做的有哪些？", "tour-future-question");

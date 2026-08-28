@@ -46,6 +46,30 @@
         </div>
       </section>
 
+      <div id="context-import-modal" class="context-import-modal" hidden>
+        <section class="context-import-panel" role="dialog" aria-modal="true" aria-labelledby="context-import-title">
+          <header class="context-import-header">
+            <div><span class="context-import-kicker">RESEARCH CONTEXT</span><h2 id="context-import-title">引入会话外部结果</h2></div>
+            <button id="context-import-close" class="context-import-close" type="button" aria-label="关闭">×</button>
+          </header>
+          <p class="context-import-copy">搜索并选择已有的领域入门或论文精读。引入后可与本会话内容一起作为当前讨论。</p>
+          <div class="context-import-toolbar">
+            <input id="context-import-search" type="search" placeholder="搜索论文或领域" />
+            <div id="context-import-filters" class="context-import-filters">
+              <button type="button" data-kind="all" class="is-active">全部</button>
+              <button type="button" data-kind="paper_reading">论文精读</button>
+              <button type="button" data-kind="domain_onboarding">领域入门</button>
+            </div>
+          </div>
+          <div id="context-import-results" class="context-import-results"></div>
+          <footer class="context-import-footer">
+            <span id="context-import-count">未选择</span>
+            <button id="context-import-cancel" type="button">取消</button>
+            <button id="context-import-confirm" class="context-import-confirm" type="button" disabled>引入并选中</button>
+          </footer>
+        </section>
+      </div>
+
       <section id="messages" class="messages" aria-live="polite">
         <article class="message assistant">
           <div class="bubble">你好，我是研见 · SeeFurther。可以从论文精读、领域探索或科研讨论开始。</div>

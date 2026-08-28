@@ -10,25 +10,35 @@ from storage.local_store import LocalResearchStore
 from tools.base import BaseTool, ToolSpec
 
 
-def _runtime(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _runtime(arguments: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     context = arguments.get("_runtime_context")
     if not isinstance(context, dict):
-        return "", {}
-    active = context.get("active_context")
-    return str(context.get("conversation_id") or ""), active if isinstance(active, dict) else {}
+        return "", []
+    active = context.get("active_contexts")
+    if not isinstance(active, list):
+        legacy = context.get("active_context")
+        active = [legacy] if isinstance(legacy, dict) else []
+    return str(context.get("conversation_id") or ""), [item for item in active if isinstance(item, dict)]
 
 
 def _requested_id(
-    arguments: dict[str, Any], active: dict[str, Any], kind: str
+    arguments: dict[str, Any], active: list[dict[str, Any]], kind: str
 ) -> tuple[str, str | None]:
     explicit = str(arguments.get("id") or arguments.get("reading_session_id") or "").strip()
-    active_kind = str(active.get("kind") or "").strip()
-    active_id = str(active.get("id") or "").strip()
-    if active_kind != kind or not active_id:
+    allowed_ids = [
+        str(item.get("id") or "").strip()
+        for item in active
+        if str(item.get("kind") or "").strip() == kind and str(item.get("id") or "").strip()
+    ]
+    if not allowed_ids:
         return "", "该工具只能访问当前讨论中选定的同类研究对象"
-    if explicit and explicit != active_id:
+    if explicit and explicit not in allowed_ids:
         return "", "不能访问当前讨论之外的研究对象"
-    return active_id, None
+    if explicit:
+        return explicit, None
+    if len(allowed_ids) > 1:
+        return "", f"当前讨论包含多个同类研究对象，请明确指定 ID：{', '.join(allowed_ids)}"
+    return allowed_ids[0], None
 
 
 class _ResearchTool(BaseTool):
@@ -45,7 +55,7 @@ class _ResearchTool(BaseTool):
         row = self.store.get_reading_session_record(reading_id)
         if row is None:
             return None, "论文精读会话不存在"
-        if row["conversation_id"] != conversation_id:
+        if not self.store.conversation_has_artifact(conversation_id, row["artifact_id"]):
             return None, "该论文精读不属于当前主会话"
         return row, None
 
@@ -232,7 +242,7 @@ class GetDomainOnboardingResultTool(_ResearchTool):
         detail = ResearchCatalog(self.store).get_domain_onboarding(artifact_id)
         if detail is None:
             return {"error": "领域入门结果不存在"}
-        if detail.get("conversation_id") != conversation_id:
+        if not self.store.conversation_has_artifact(conversation_id, artifact_id):
             return {"error": "该领域入门结果不属于当前主会话"}
         job_row = None
         try:

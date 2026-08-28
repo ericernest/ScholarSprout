@@ -41,11 +41,11 @@ class ResearchContextToolTests(unittest.TestCase):
             **values,
             "_runtime_context": {
                 "conversation_id": "main",
-                "active_context": {
+                "active_contexts": [{
                     "kind": "paper_reading",
                     "id": "reading-1",
                     "title": "Paper One",
-                },
+                }],
             },
         }
 
@@ -113,6 +113,33 @@ class ResearchContextToolTests(unittest.TestCase):
             self.arguments(reading_session_id="reading-other")
         )
         self.assertIn("当前讨论之外", result["error"])
+
+    def test_imported_reading_can_be_selected_without_changing_its_owner(self) -> None:
+        self.store.ensure_conversation("other", title="Other")
+        self.store.ensure_conversation("target", title="Target")
+        self.store.upsert_paper(paper_id="paper-2", title="Paper Two", authors=[])
+        self.store.save_reading_session_snapshot("reading-2", {
+            "conversation_id": "other", "paper_id": "paper-2", "paper_title": "Paper Two",
+            "state": "active", "progress": {},
+        })
+        record = self.store.get_reading_session_record("reading-2")
+        self.store.link_research_artifacts("target", [record["artifact_id"]])
+
+        result = GetPaperReadingContextTool(self.store).run({
+            "reading_session_id": "reading-2",
+            "_runtime_context": {
+                "conversation_id": "target",
+                "active_contexts": [
+                    {"kind": "paper_reading", "id": "reading-1"},
+                    {"kind": "paper_reading", "id": "reading-2"},
+                ],
+            },
+        })
+
+        self.assertEqual(result["paper"]["title"], "Paper Two")
+        self.assertEqual(self.store.get_reading_session_record("reading-2")["conversation_id"], "other")
+        contexts = ResearchCatalog(self.store).get_conversation("target")["contexts"]
+        self.assertEqual(contexts[0]["relation"], "discussed")
 
     def test_legacy_paper_messages_migrate_to_hidden_dialogue(self) -> None:
         message_id = self.store.append_message(

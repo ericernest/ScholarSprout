@@ -28,21 +28,27 @@ def handle_chat_message(message: ChannelMessage, app_state: Any) -> dict[str, st
         except Exception:
             logger.exception("Failed to prepare conversation memory for %s", message.session_id)
 
-    raw_active = message.metadata.get("active_context")
-    active_context = {}
-    if isinstance(raw_active, dict):
-        active_context = {
+    raw_contexts = message.metadata.get("active_contexts")
+    if not isinstance(raw_contexts, list):
+        legacy = message.metadata.get("active_context")
+        raw_contexts = [legacy] if isinstance(legacy, dict) else []
+    active_contexts: list[dict[str, str]] = []
+    seen_contexts: set[tuple[str, str]] = set()
+    for raw_active in raw_contexts[:20]:
+        if not isinstance(raw_active, dict):
+            continue
+        active = {
             key: " ".join(
                 str(raw_active.get(key) or "").replace("<", "").replace(">", "").split()
             )[:300]
             for key in ("kind", "id", "title")
             if str(raw_active.get(key) or "").strip()
         }
-        if active_context.get("kind") not in {"domain_onboarding", "paper_reading"}:
-            active_context = {}
-    request_context_text = (
-        json.dumps(active_context, ensure_ascii=False) if active_context else ""
-    )
+        identity = (active.get("kind", ""), active.get("id", ""))
+        if identity[0] in {"domain_onboarding", "paper_reading"} and identity[1] and identity not in seen_contexts:
+            active_contexts.append(active)
+            seen_contexts.add(identity)
+    request_context_text = json.dumps(active_contexts, ensure_ascii=False) if active_contexts else ""
     result = run_agent_detailed(
         agent=app_state.chat_agent,
         user_content=str(message.content),
@@ -54,7 +60,8 @@ def handle_chat_message(message: ChannelMessage, app_state: Any) -> dict[str, st
         request_context_text=request_context_text,
         tool_context={
             "conversation_id": message.session_id,
-            "active_context": active_context,
+            "active_contexts": active_contexts,
+            "active_context": active_contexts[0] if len(active_contexts) == 1 else {},
         },
         max_steps=3,
         on_text_delta=message.metadata.get("_stream_text_delta"),
