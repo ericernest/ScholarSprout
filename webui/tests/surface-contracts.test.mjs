@@ -7,7 +7,7 @@ const root = resolve(import.meta.dirname, "../..");
 const staticRoot = join(root, "gateway", "static");
 
 const contracts = {
-  "index.html": ["hero-card", "开始体验", "/library", "/settings"],
+  "index.html": ["hero-card", "开始体验", "/library", "进入教程", "/app?tutorial=1"],
   "chat.html": ["chat-form", "mode-menu", "paper-mode-input", "discussion-context-bar", "/static/app.js"],
   "domain-onboarding/index.html": ["section-nav", "topbar-retry-button", "cancel-button", "sidebar-resizer", "/static/domain-onboarding/app.js"],
   "library/index.html": ["library-nav", "paper-import", "folder-tree", "paper-note-dialog", "/static/library/app.js"],
@@ -61,7 +61,12 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   assert.ok(chat.includes('fetch("/api/tutorial/status"'));
   assert.ok(chat.includes('window.location.replace("/app?tutorial=1")'));
   assert.ok(home.includes('id="start-experience"'));
+  assert.ok(home.includes('id="open-tutorial"'));
+  assert.ok(home.includes('href="/app?new=1"'));
   assert.ok(home.includes('/app?tutorial=1'));
+  for (const retiredLabel of ["Domain Onboarding", "Paper Reading", "Research Chat", "配置向导"]) {
+    assert.ok(!home.includes(retiredLabel));
+  }
   assert.ok(!readFileSync(join(root, "webui", "vite.config.ts"), "utf8").includes('tutorial: page("tutorial")'));
 });
 

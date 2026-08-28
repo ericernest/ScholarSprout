@@ -56,11 +56,11 @@ const discussionMenu = document.querySelector("#discussion-context-menu");
 const startExperienceLink = document.querySelector("#start-experience");
 
 if (startExperienceLink) {
-  startExperienceLink.href = "/app?tutorial=1";
+  startExperienceLink.href = "/app?new=1";
   fetch("/api/tutorial/status", { cache: "no-store" })
     .then((response) => response.ok ? response.json() : { completed: false })
     .then((status) => {
-      startExperienceLink.href = status.completed ? "/app?new=1" : "/app?tutorial=1";
+      if (!status.completed) window.location.replace("/app?tutorial=1");
     })
     .catch(() => {});
 }
