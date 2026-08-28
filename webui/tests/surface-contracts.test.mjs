@@ -45,7 +45,9 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   const paperApp = readFileSync(join(staticRoot, "paper-reading", "app.js"), "utf8");
   const chat = readFileSync(join(staticRoot, "app.js"), "utf8");
   const home = readFileSync(join(staticRoot, "index.html"), "utf8");
-  assert.ok(!tutorial.includes("预生成"));
+  for (const forbidden of ["预定义", "预制", "固定", "预生成"]) {
+    assert.ok(!tutorial.includes(forbidden), `tutorial still contains ${forbidden}`);
+  }
   assert.ok(!tutorial.includes("不会写入业务数据库"));
   assert.ok(tutorial.includes("跳过教程"));
   assert.ok(tutorial.includes("智能体 Agent"));
@@ -55,6 +57,11 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   assert.ok(tutorial.includes("demoReadingPaper"));
   assert.ok(tutorial.includes('companion: ".inspector"'));
   assert.ok(tutorial.includes("selectTutorialReaderText"));
+  assert.ok(tutorial.includes('id: "reading-note"'));
+  assert.ok(tutorial.includes('target: "#paper-note-button"'));
+  assert.ok(tutorial.includes('companion: "#paper-note-drawer"'));
+  assert.ok(tutorial.indexOf('id: "reading-selection"') < tutorial.indexOf('id: "reading-note"'));
+  assert.ok(tutorial.indexOf('id: "reading-note"') < tutorial.indexOf('id: "domain-mode"'));
   assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
   assert.ok(tutorial.includes("openReadingMap?.()"));
   assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
@@ -104,6 +111,13 @@ test("chat exposes a dedicated interrupt control and uses the wide workspace", (
   assert.ok(javascript.includes("/cancel"));
   assert.ok(styles.includes("width: calc(100% - clamp(24px, 3.2vw, 52px))"));
   assert.ok(styles.includes("max-width: none"));
+});
+
+test("external-channel answers refresh incrementally without rebuilding every message", () => {
+  const javascript = readFileSync(join(staticRoot, "app.js"), "utf8");
+  assert.ok(javascript.includes("window.setInterval(reloadWhenEnteringChat, 650)"));
+  assert.ok(javascript.includes("patchPersistedMessages(history)"));
+  assert.ok(javascript.includes("data-persisted-message-id") || javascript.includes("persistedMessageId"));
 });
 
 test("smart index uses an asymmetric twelve-column card rhythm", () => {

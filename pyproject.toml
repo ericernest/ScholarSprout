@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NoviceSynapse"
-version = "0.1.0"
-description = "NoviceSynapse - AI Research Assistant"
+name = "seefurther"
+version = "1.0.0"
+description = "研见 · SeeFurther - a local-first AI research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

@@ -68,6 +68,47 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             self.assertEqual(rows, [("user", "chat", "今天讨论数据库"), ("assistant", "chat", "好的。")])
             self.assertEqual(title, "今天讨论数据库")
 
+    def test_external_channel_stream_is_incrementally_visible_as_one_message(self) -> None:
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "research.sqlite3"
+            store = LocalResearchStore(database)
+            store.initialize()
+            state = SimpleNamespace(research_storage=store)
+            inbound = ChannelMessage(
+                session_id="feishu-chat",
+                channel="feishu",
+                direction="inbound",
+                mode="chat",
+                content="请解释这个方法",
+                message_id="feishu-inbound-1",
+            )
+
+            def streaming_handler(message, _state):
+                emit = message.metadata["_stream_text_delta"]
+                emit("正在")
+                with closing(sqlite3.connect(database)) as connection:
+                    draft = connection.execute(
+                        "SELECT role, channel, content FROM messages WHERE message_id = ?",
+                        ("feishu-inbound-1:assistant",),
+                    ).fetchone()
+                self.assertEqual(draft, ("assistant", "feishu", "正在"))
+                emit("分析")
+                return {"text": "正在分析完成。"}
+
+            process_channel_message(_Channel(), inbound, streaming_handler, state)
+
+            with closing(sqlite3.connect(database)) as connection:
+                rows = connection.execute(
+                    "SELECT message_id, role, channel, content FROM messages ORDER BY sequence_number"
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    ("feishu-inbound-1", "user", "feishu", "请解释这个方法"),
+                    ("feishu-inbound-1:assistant", "assistant", "feishu", "正在分析完成。"),
+                ],
+            )
+
     def test_empty_chat_transport_result_is_not_persisted_as_status_ok(self) -> None:
         with TemporaryDirectory() as directory:
             database = Path(directory) / "research.sqlite3"

@@ -767,6 +767,64 @@ class LocalResearchStore:
             )
         return message_id
 
+    def upsert_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+        mode: str = "chat",
+        channel: str = "web",
+        message_id: str,
+    ) -> str:
+        """Insert a message or update its visible content during a live response."""
+        if not content.strip():
+            raise ValueError("content must not be empty")
+        if not message_id:
+            raise ValueError("message_id must not be empty")
+        now = _now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT conversation_id FROM messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["conversation_id"]) != conversation_id:
+                    raise ValueError("message_id already belongs to another conversation")
+                connection.execute(
+                    """UPDATE messages
+                       SET role = ?, mode = ?, channel = ?, content = ?
+                       WHERE message_id = ?""",
+                    (role, mode, channel, content, message_id),
+                )
+            else:
+                sequence_number = connection.execute(
+                    "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM messages WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()[0]
+                connection.execute(
+                    """INSERT INTO messages(
+                           message_id, conversation_id, sequence_number, role,
+                           mode, channel, content, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        message_id,
+                        conversation_id,
+                        sequence_number,
+                        role,
+                        mode,
+                        channel,
+                        content,
+                        now,
+                    ),
+                )
+            connection.execute(
+                "UPDATE conversations SET last_active_at = ? WHERE conversation_id = ?",
+                (now, conversation_id),
+            )
+        return message_id
+
     def create_domain_onboarding(
         self,
         *,
