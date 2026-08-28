@@ -34,6 +34,10 @@ class ConfigUpdate(BaseModel):
     clear_embedding_api_key: bool = False
     embedding_model_name: str | None = None
     data_dir: str | None = None
+    feishu_enabled: bool | None = None
+    feishu_app_id: str | None = None
+    feishu_app_secret: str | None = None
+    clear_feishu_app_secret: bool = False
 
     @field_validator("base_url", "embedding_base_url")
     @classmethod
@@ -49,6 +53,11 @@ class ConfigUpdate(BaseModel):
     @field_validator("model_name", "embedding_model_name")
     @classmethod
     def normalize_model_name(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("feishu_app_id", "feishu_app_secret")
+    @classmethod
+    def normalize_feishu_value(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
 
     @field_validator("data_dir")
@@ -105,6 +114,19 @@ def _public_config(config: object) -> dict[str, object]:
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
             "effective_data_dir": str(resolve_data_dir(config)),
             "environment_override": bool(os.getenv("NOVICESYNAPSE_DATA_DIR")),
+        },
+        "channels": {
+            "feishu": {
+                "enabled": bool(config.channels.feishu.enabled),
+                "app_id": config.channels.feishu.app_id,
+                "app_secret_configured": bool(config.channels.feishu.app_secret.strip()),
+                "environment_override": bool(
+                    os.getenv("FEISHU_APP_ID")
+                    or os.getenv("LARK_APP_ID")
+                    or os.getenv("FEISHU_APP_SECRET")
+                    or os.getenv("LARK_APP_SECRET")
+                ),
+            },
         },
         "setup_complete": is_setup_complete(config),
     }
@@ -169,6 +191,26 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.api_key = ""
         elif payload.embedding_api_key is not None and payload.embedding_api_key.strip():
             config.embedding.api_key = payload.embedding_api_key.strip()
+        old_feishu = (
+            config.channels.feishu.enabled,
+            config.channels.feishu.app_id,
+            config.channels.feishu.app_secret,
+        )
+        if payload.feishu_enabled is not None:
+            config.channels.feishu.enabled = payload.feishu_enabled
+        if payload.feishu_app_id is not None:
+            config.channels.feishu.app_id = payload.feishu_app_id
+        if payload.clear_feishu_app_secret:
+            config.channels.feishu.app_secret = ""
+        elif payload.feishu_app_secret:
+            config.channels.feishu.app_secret = payload.feishu_app_secret
+        if config.channels.feishu.enabled and not (
+            config.channels.feishu.app_id and config.channels.feishu.app_secret
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="启用飞书前请同时填写 App ID 和 App Secret。",
+            )
         old_data_dir = resolve_data_dir(config)
         if payload.data_dir is not None:
             target = Path(payload.data_dir).expanduser()
@@ -185,6 +227,11 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
         raise HTTPException(status_code=422, detail=f"无法创建数据目录：{error}") from error
 
     data_dir_changed = resolve_data_dir(config) != old_data_dir
+    feishu_changed = old_feishu != (
+        config.channels.feishu.enabled,
+        config.channels.feishu.app_id,
+        config.channels.feishu.app_secret,
+    )
     reload_result: dict[str, object] = {}
     reloader = getattr(request.app.state, "reload_runtime_config", None)
     if callable(reloader):
@@ -196,5 +243,10 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
         **_public_config(config),
         "saved": True,
         **reload_result,
-        "restart_required": data_dir_changed or not bool(reload_result.get("runtime_reloaded")),
+        "channels_restart_required": feishu_changed,
+        "restart_required": (
+            data_dir_changed
+            or feishu_changed
+            or not bool(reload_result.get("runtime_reloaded"))
+        ),
     }

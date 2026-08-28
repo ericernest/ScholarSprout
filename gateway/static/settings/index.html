@@ -45,57 +45,92 @@
             <span id="setup-badge" class="status-badge">正在读取…</span>
           </div>
 
-          <form id="settings-form">
-            <label>
-              <span>基础模型 Base URL</span>
-              <input id="base-url" name="base_url" type="url" placeholder="https://你的服务商地址/v1" />
-              <small>基础模型服务的 OpenAI 兼容接口完整地址。</small>
-            </label>
+          <nav class="config-tabs" role="tablist" aria-label="配置分类">
+            <button class="config-tab is-active" type="button" role="tab" aria-selected="true" data-config-tab="model">模型与数据</button>
+            <button class="config-tab" type="button" role="tab" aria-selected="false" data-config-tab="channels">多渠道</button>
+          </nav>
 
-            <label>
-              <span>基础模型 API Key</span>
-              <div class="secret-field">
-                <input id="api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空会保留已经保存的密钥" />
-                <button id="toggle-secret" type="button">显示</button>
-              </div>
-              <small id="api-key-state">尚未读取密钥状态。</small>
-            </label>
+          <form id="settings-form" novalidate>
+            <section id="settings-model-panel" class="config-panel" role="tabpanel" data-config-panel="model">
+              <label>
+                <span>基础模型 Base URL</span>
+                <input id="base-url" name="base_url" type="url" placeholder="https://你的服务商地址/v1" />
+                <small>基础模型服务的 OpenAI 兼容接口完整地址。</small>
+              </label>
 
-            <label>
-              <span>模型名称</span>
-              <input id="model-name" name="model_name" type="text" required placeholder="填写服务商支持的模型 ID" />
-              <small>基础模型服务接受的 model 参数，必须填写。</small>
-            </label>
+              <label>
+                <span>基础模型 API Key</span>
+                <div class="secret-field">
+                  <input id="api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空会保留已经保存的密钥" />
+                  <button id="toggle-secret" type="button">显示</button>
+                </div>
+                <small id="api-key-state">尚未读取密钥状态。</small>
+              </label>
 
-            <details class="optional-config">
-              <summary><span>Embedding 配置</span><small>可选 · 点击展开</small></summary>
-              <div class="optional-config-fields">
+              <label>
+                <span>模型名称</span>
+                <input id="model-name" name="model_name" type="text" placeholder="填写服务商支持的模型 ID" />
+                <small>基础模型服务接受的 model 参数。</small>
+              </label>
+
+              <details class="optional-config">
+                <summary><span>Embedding 配置</span><small>可选 · 点击展开</small></summary>
+                <div class="optional-config-fields">
+                  <label>
+                    <span>Embedding URL</span>
+                    <input id="embedding-base-url" name="embedding_base_url" type="url" placeholder="留空复用基础模型 URL" />
+                    <small>可选；留空时复用基础模型 URL。</small>
+                  </label>
+                  <label>
+                    <span>Embedding API Key</span>
+                    <div class="secret-field">
+                      <input id="embedding-api-key" name="embedding_api_key" type="password" autocomplete="new-password" placeholder="留空复用基础模型 API Key" />
+                      <button class="toggle-secret" data-secret-target="embedding-api-key" type="button">显示</button>
+                    </div>
+                    <small id="embedding-api-key-state">可选；留空时复用基础模型 API Key。</small>
+                  </label>
+                  <label>
+                    <span>Embedding 模型</span>
+                    <input id="embedding-model-name" name="embedding_model_name" type="text" placeholder="例如 qwen3-embedding" />
+                    <small>可选；用于论文排序与证据匹配，调用失败时自动降级。</small>
+                  </label>
+                </div>
+              </details>
+
+              <label>
+                <span>数据目录</span>
+                <input id="data-dir" name="data_dir" type="text" placeholder="Windows: D:\SeeFurtherData；Linux: /home/user/seefurther-data" />
+                <small id="data-dir-help">支持绝对路径和 ~/ 开头的用户目录路径。</small>
+              </label>
+            </section>
+
+            <section id="settings-channels-panel" class="config-panel" role="tabpanel" data-config-panel="channels" hidden>
+              <article class="channel-card">
+                <div class="channel-heading">
+                  <div><p class="eyebrow">FEISHU / LARK</p><h3>飞书机器人</h3></div>
+                  <label class="switch-control"><input id="feishu-enabled" type="checkbox" /><span>启用</span></label>
+                </div>
+                <p class="channel-copy">通过飞书长连接接收文本消息，并复用研见的研究对话 Agent。保存后重启研见即可连接。</p>
                 <label>
-                  <span>Embedding URL</span>
-                  <input id="embedding-base-url" name="embedding_base_url" type="url" placeholder="留空复用基础模型 URL" />
-                  <small>可选；留空时复用基础模型 URL。</small>
+                  <span>App ID</span>
+                  <input id="feishu-app-id" name="feishu_app_id" type="text" autocomplete="off" placeholder="cli_xxxxxxxxxxxxxxxx" />
+                  <small>在飞书开放平台的应用凭证页获取。</small>
                 </label>
                 <label>
-                  <span>Embedding API Key</span>
+                  <span>App Secret</span>
                   <div class="secret-field">
-                    <input id="embedding-api-key" name="embedding_api_key" type="password" autocomplete="new-password" placeholder="留空复用基础模型 API Key" />
-                    <button class="toggle-secret" data-secret-target="embedding-api-key" type="button">显示</button>
+                    <input id="feishu-app-secret" name="feishu_app_secret" type="password" autocomplete="new-password" placeholder="留空会保留已经保存的密钥" />
+                    <button class="toggle-secret" data-secret-target="feishu-app-secret" type="button">显示</button>
                   </div>
-                  <small id="embedding-api-key-state">可选；留空时复用基础模型 API Key。</small>
+                  <small id="feishu-secret-state">尚未读取密钥状态。</small>
                 </label>
-                <label>
-                  <span>Embedding 模型</span>
-                  <input id="embedding-model-name" name="embedding_model_name" type="text" placeholder="例如 qwen3-embedding" />
-                  <small>可选；用于论文排序与证据匹配，调用失败时自动降级。</small>
+                <label class="clear-secret-control">
+                  <input id="clear-feishu-app-secret" type="checkbox" />
+                  <span>清除已保存的 App Secret</span>
                 </label>
-              </div>
-            </details>
-
-            <label>
-              <span>数据目录</span>
-              <input id="data-dir" name="data_dir" type="text" required placeholder="Windows: D:\SeeFurtherData；Linux: /home/user/seefurther-data" />
-              <small id="data-dir-help">支持绝对路径和 ~/ 开头的用户目录路径。</small>
-            </label>
+                <div id="feishu-config-state" class="channel-state">正在读取飞书配置…</div>
+              </article>
+            </section>
 
             <div id="message" class="message" hidden></div>
             <button id="save-button" class="save-button" type="submit">保存配置</button>

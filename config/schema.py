@@ -33,12 +33,29 @@ class StorageConfig:
     data_dir: str = "~/.novicesynapse"
 
 
+@dataclass(slots=True)
+class FeishuConfig:
+    """Feishu bot connection saved by the local configuration page."""
+
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: str = ""
+
+
+@dataclass(slots=True)
+class ChannelsConfig:
+    """External chat channels, grouped for future adapters."""
+
+    feishu: FeishuConfig = field(default_factory=FeishuConfig)
+
+
 # 描述当前应用配置。
 @dataclass(slots=True)
 class AppConfig:
     client: OpenAIClientConfig = field(default_factory=OpenAIClientConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    channels: ChannelsConfig = field(default_factory=ChannelsConfig)
 
 
 # 将配置对象转换为可写入 JSON 的字典。

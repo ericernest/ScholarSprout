@@ -8,7 +8,9 @@ from pathlib import Path
 
 from .schema import (
     AppConfig,
+    ChannelsConfig,
     EmbeddingConfig,
+    FeishuConfig,
     OpenAIClientConfig,
     StorageConfig,
     dump_app_config,
@@ -41,6 +43,8 @@ def load_config(config_file: Path | None = None) -> AppConfig:
     client_data = data.get("client", {})
     embedding_data = data.get("embedding", {})
     storage_data = data.get("storage", {})
+    channels_data = data.get("channels", {})
+    feishu_data = channels_data.get("feishu", {})
     return AppConfig(
         client=OpenAIClientConfig(
             api_key=client_data.get("api_key", ""),
@@ -64,6 +68,13 @@ def load_config(config_file: Path | None = None) -> AppConfig:
         ),
         storage=StorageConfig(
             data_dir=str(storage_data.get("data_dir") or DEFAULT_DATA_DIR),
+        ),
+        channels=ChannelsConfig(
+            feishu=FeishuConfig(
+                enabled=bool(feishu_data.get("enabled", False)),
+                app_id=str(feishu_data.get("app_id") or "").strip(),
+                app_secret=str(feishu_data.get("app_secret") or "").strip(),
+            ),
         ),
     )
 

@@ -51,6 +51,11 @@ h2 { font-size: 2rem; }
 .form-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.7rem; }
 .status-badge { padding: .45rem .65rem; border-radius: 999px; color: #d9fff6; background: rgba(102,245,214,.1); font-size: .76rem; white-space: nowrap; }
 form { display: grid; gap: 1.15rem; }
+.config-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; margin: -0.35rem 0 1.35rem; padding: .35rem; border: 1px solid var(--line); border-radius: 15px; background: rgba(2,12,10,.35); }
+.config-tab { min-height: 42px; border: 0; border-radius: 11px; color: var(--muted); background: transparent; font: 800 .9rem inherit; cursor: pointer; }
+.config-tab.is-active { color: #04110e; background: linear-gradient(135deg, var(--accent), #b8fff1); box-shadow: 0 8px 24px rgba(102,245,214,.14); }
+.config-panel { display: grid; gap: 1.15rem; }
+.config-panel[hidden] { display: none; }
 label { display: grid; gap: .45rem; }
 label > span { font-size: .9rem; font-weight: 700; }
 input { width: 100%; min-width: 0; height: 48px; padding: 0 .85rem; border: 1px solid var(--line); border-radius: 13px; outline: none; color: var(--ink); background: rgba(2,12,10,.52); font: inherit; }
@@ -67,6 +72,15 @@ small { color: var(--muted); line-height: 1.45; }
 .optional-config summary small { margin-left: auto; }
 .optional-config-fields { display: grid; gap: 1.05rem; padding: .2rem 1rem 1rem; border-top: 1px solid var(--line); }
 .optional-config-fields label:first-child { margin-top: .85rem; }
+.channel-card { display: grid; gap: 1.15rem; padding: 1.15rem; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(145deg, rgba(102,245,214,.055), rgba(2,12,10,.4)); }
+.channel-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.channel-heading h3 { margin: 0; font: 700 1.35rem Georgia, "Noto Serif CJK SC", serif; }
+.channel-copy { margin: -.35rem 0 0; color: var(--muted); font-size: .86rem; line-height: 1.65; }
+.switch-control { display: inline-flex; grid-template-columns: auto auto; align-items: center; gap: .55rem; padding: .5rem .7rem; border: 1px solid rgba(102,245,214,.28); border-radius: 999px; background: rgba(102,245,214,.08); cursor: pointer; }
+.switch-control input, .clear-secret-control input { width: 18px; height: 18px; accent-color: var(--accent); }
+.switch-control span { font-size: .82rem; }
+.clear-secret-control { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: .55rem; color: var(--muted); font-size: .82rem; cursor: pointer; }
+.channel-state { padding: .75rem .85rem; border: 1px solid rgba(135,167,255,.22); border-radius: 12px; color: #ced7ff; background: rgba(135,167,255,.07); font-size: .82rem; line-height: 1.5; }
 .save-button { height: 50px; margin-top: .35rem; border: 0; border-radius: 14px; color: #04110e; background: linear-gradient(135deg, var(--accent), #b8fff1); font: 800 1rem inherit; cursor: pointer; box-shadow: 0 0 28px rgba(102,245,214,.18); }
 .save-button:disabled { opacity: .65; cursor: wait; }
 .message { padding: .85rem; border-radius: 13px; font-size: .88rem; line-height: 1.55; }

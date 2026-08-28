@@ -58,6 +58,10 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
   assert.ok(tutorial.includes("openReadingMap?.()"));
   assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
+  assert.ok(tutorial.indexOf("上传一篇论文") < tutorial.indexOf("提出一个领域"));
+  assert.ok(tutorial.includes("prepareTutorialPaperUpload"));
+  assert.ok(tutorial.includes("tour-paper-card"));
+  assert.ok(tutorial.includes("也可以从领域入门的论文详情下载 PDF，并从这里进入论文精读"));
   assert.ok(chat.includes('fetch("/api/tutorial/status"'));
   assert.ok(chat.includes('window.location.replace("/app?tutorial=1")'));
   assert.ok(home.includes('id="start-experience"'));
