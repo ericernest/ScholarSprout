@@ -307,6 +307,33 @@ class RuntimeStorageIntegrationTests(unittest.TestCase):
             self.assertTrue(second["data"]["deduplicated"])
             self.assertEqual(len(ResearchCatalog(store).list_papers()), 1)
 
+    def test_uploading_same_pdf_url_reuses_local_file_without_redownload(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = LocalResearchStore(root / "research.sqlite3")
+            store.initialize()
+            paper_storage = PaperReadingStorage(root / "paper_reading", store)
+            state = SimpleNamespace(paper_pipeline=object(), paper_storage=paper_storage)
+            request = PaperReadingRequest(
+                action="upload_paper",
+                pdf_url="https://arxiv.org/pdf/2308.11432.pdf",
+                metadata={"title": "Cached paper"},
+            )
+
+            with (
+                patch(
+                    "handlers.paper_reading.handler.download_pdf_bytes",
+                    return_value=b"%PDF-1.4\ncached-paper\n%%EOF",
+                ) as download,
+                patch("handlers.paper_reading.handler._schedule_background_parse"),
+            ):
+                first = _handle_upload_paper(request, state)
+                second = _handle_upload_paper(request, state)
+
+            self.assertEqual(first["data"]["paper_id"], second["data"]["paper_id"])
+            self.assertTrue(second["data"]["deduplicated"])
+            download.assert_called_once_with(request.pdf_url)
+
 
 if __name__ == "__main__":
     unittest.main()
