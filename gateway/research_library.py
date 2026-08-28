@@ -39,6 +39,10 @@ class PaperNoteUpdate(BaseModel):
     content_markdown: str = Field(default="", max_length=1_000_000)
 
 
+class ConversationContextImport(BaseModel):
+    artifact_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class PdfRect(BaseModel):
     left: float = Field(ge=0, le=1)
     top: float = Field(ge=0, le=1)
@@ -87,6 +91,37 @@ def conversation_detail(conversation_id: str, request: Request) -> dict:
     if item is None:
         raise HTTPException(status_code=404, detail="会话不存在。")
     return item
+
+
+@router.get("/conversations/{conversation_id}/context-candidates")
+def conversation_context_candidates(
+    conversation_id: str, request: Request, search: Search = "", limit: Limit = 100
+) -> list[dict]:
+    return _catalog(request).list_context_candidates(
+        conversation_id=conversation_id, search=search, limit=limit
+    )
+
+
+@router.post("/conversations/{conversation_id}/contexts")
+def import_conversation_contexts(
+    conversation_id: str, payload: ConversationContextImport, request: Request
+) -> dict:
+    store = getattr(request.app.state, "research_storage", None)
+    if not isinstance(store, LocalResearchStore):
+        raise HTTPException(status_code=503, detail="研究资料库尚未初始化。")
+    try:
+        linked = store.link_research_artifacts(
+            conversation_id, payload.artifact_ids, relation="discussed"
+        )
+    except KeyError:
+        store.ensure_conversation(conversation_id, title="新会话", user_id="local-web")
+        linked = store.link_research_artifacts(
+            conversation_id, payload.artifact_ids, relation="discussed"
+        )
+    if not linked:
+        raise HTTPException(status_code=404, detail="没有找到可引入的研究结果。")
+    detail = ResearchCatalog(store).get_conversation(conversation_id)
+    return {"linked_artifact_ids": linked, "contexts": detail.get("contexts", []) if detail else []}
 
 
 @router.get("/domain-onboardings")

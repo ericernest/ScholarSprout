@@ -954,7 +954,10 @@ async function importPaper(paperId) {
     rememberImportedPaper(paper, importedId);
     localStorage.setItem("paper_reading_paper_id", importedId);
     localStorage.removeItem("paper_reading_session_id");
-    window.location.href = "/app/paper-reading";
+    const originConversationId = new URLSearchParams(window.location.search).get("conversation_id") || "";
+    const readingQuery = new URLSearchParams({ paper_id: importedId });
+    if (originConversationId) readingQuery.set("conversation_id", originConversationId);
+    window.location.href = `/app/paper-reading?${readingQuery.toString()}`;
   } catch (error) {
     toast(`论文导入失败：${error.message}`, true);
   }

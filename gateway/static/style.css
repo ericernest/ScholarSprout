@@ -415,8 +415,65 @@ h1 {
   color: var(--accent);
   font-size: 0.8rem;
 }
+.discussion-context-group {
+  padding: 8px 9px 3px;
+  color: rgba(159, 232, 215, 0.66);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.discussion-context-empty { padding: 8px 10px; color: rgba(154, 194, 183, 0.55); font-size: 0.74rem; }
+.discussion-context-import {
+  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 10px;
+  margin-top: 4px; padding: 10px; border: 1px dashed rgba(102, 245, 214, 0.28);
+  border-radius: 11px; color: #baffef; background: rgba(102, 245, 214, 0.05);
+  cursor: pointer; text-align: left;
+}
+.discussion-context-import > span:first-child { font-size: 1.2rem; }
+.discussion-context-import strong, .discussion-context-import small { display: block; }
+.discussion-context-import small { margin-top: 2px; color: rgba(154, 194, 183, 0.68); }
+
+.context-import-modal {
+  position: fixed; inset: 0; z-index: 20000; display: grid; place-items: center;
+  padding: clamp(16px, 4vw, 52px); background: rgba(2, 10, 8, 0.76); backdrop-filter: blur(16px);
+}
+.context-import-modal[hidden] { display: none; }
+.context-import-panel {
+  display: grid; grid-template-rows: auto auto auto minmax(180px, 1fr) auto;
+  width: min(980px, 94vw); max-height: min(760px, 90vh); overflow: hidden;
+  border: 1px solid rgba(102, 245, 214, 0.25); border-radius: 24px;
+  background: radial-gradient(circle at 92% 0, rgba(135, 167, 255, 0.14), transparent 24rem), #071713;
+  box-shadow: 0 30px 100px rgba(0,0,0,.58);
+}
+.context-import-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 26px 8px; }
+.context-import-header h2 { margin: 4px 0 0; font-size: clamp(1.25rem, 2vw, 1.7rem); }
+.context-import-kicker { color: var(--accent); font-size: .65rem; letter-spacing: .16em; }
+.context-import-close { border: 0; color: #dffdf5; background: transparent; font-size: 1.8rem; cursor: pointer; }
+.context-import-copy { margin: 0; padding: 0 26px 18px; color: rgba(190, 220, 212, .72); }
+.context-import-toolbar { display: flex; gap: 12px; padding: 0 26px 18px; }
+.context-import-toolbar input { flex: 1; min-width: 0; padding: 12px 15px; border: 1px solid rgba(102,245,214,.2); border-radius: 12px; color: var(--ink); background: rgba(8,28,23,.86); outline: none; }
+.context-import-toolbar input:focus { border-color: rgba(102,245,214,.58); }
+.context-import-filters { display: flex; gap: 6px; }
+.context-import-filters button, .context-import-footer button { padding: 9px 12px; border: 1px solid rgba(135,167,255,.2); border-radius: 10px; color: #dfe7ff; background: rgba(135,167,255,.06); cursor: pointer; }
+.context-import-filters button.is-active { border-color: rgba(102,245,214,.5); color: #baffef; background: rgba(102,245,214,.1); }
+.context-import-results { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; padding: 0 26px 22px; overflow-y: auto; }
+.context-import-card { position: relative; display: grid; gap: 7px; min-height: 112px; padding: 15px 46px 15px 15px; border: 1px solid rgba(135,167,255,.16); border-radius: 15px; color: #e8fff9; background: rgba(10,32,27,.7); cursor: pointer; text-align: left; }
+.context-import-card:hover, .context-import-card.is-selected { border-color: rgba(102,245,214,.52); background: rgba(102,245,214,.09); }
+.context-import-card:disabled { opacity: .52; cursor: default; }
+.context-import-card-kind { color: #aabfff; font-size: .66rem; }
+.context-import-card strong { overflow: hidden; font-size: .88rem; line-height: 1.45; }
+.context-import-card small { color: rgba(154,194,183,.67); }
+.context-import-card-check { position: absolute; top: 14px; right: 14px; color: var(--accent); font-size: .72rem; }
+.context-import-loading { grid-column: 1/-1; padding: 60px 20px; color: rgba(190,220,212,.68); text-align: center; }
+.context-import-footer { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 16px 26px; border-top: 1px solid rgba(102,245,214,.1); }
+.context-import-footer span { margin-right: auto; color: rgba(190,220,212,.72); }
+.context-import-footer .context-import-confirm { border-color: rgba(102,245,214,.4); color: #08211b; background: var(--accent); font-weight: 700; }
+.context-import-footer button:disabled { opacity: .42; cursor: default; }
+.context-import-open { overflow: hidden; }
 
 @media (max-width: 720px) {
+  .context-import-toolbar { align-items: stretch; flex-direction: column; }
+  .context-import-results { grid-template-columns: 1fr; }
   .discussion-context-bar {
     align-items: stretch;
     flex-direction: column;
