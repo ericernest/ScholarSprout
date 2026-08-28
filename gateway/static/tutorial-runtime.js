@@ -154,27 +154,27 @@
   document.documentElement.dataset.seefurtherTutorial = "active";
 
   const steps = [
-    { page: "chat", route: "/app?tutorial=1", target: "#message-input", title: "日常聊天", copy: "固定演示输入：你好。教程内容均为预生成，不调用模型。" },
-    { page: "chat", route: "/app?tutorial=1", target: "#send-button", title: "预生成回答", copy: "研见会介绍领域入门、论文管理与精读能力。" },
+    { page: "chat", route: "/app?tutorial=1", target: "#message-input", title: "日常聊天", copy: "在输入框中键入“你好”，开始第一次对话。" },
+    { page: "chat", route: "/app?tutorial=1", target: "#send-button", title: "认识研见", copy: "研见会介绍领域入门、论文管理与精读能力。" },
     { page: "chat", route: "/app?tutorial=1", target: "#mode-button", title: "切换研究模式", copy: "从这里选择领域入门或论文精读。" },
     { page: "chat", route: "/app?tutorial=1", target: "#message-input", title: "提出一个领域", copy: "固定演示领域：智能体 Agent。" },
-    { page: "chat", route: "/app?tutorial=1", target: ".tour-domain-card", title: "进入领域卡片", copy: "真实任务会持续更新卡片；教程直接展示预生成结果。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#prerequisites", title: "前置知识梳理", copy: "先了解进入智能体研究所需的语言模型、工具调用与环境交互基础。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#development", title: "领域发展路径", copy: "沿真实页面的时间线理解技术转折与代表范式。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#landscape", title: "概念全景", copy: "从核心问题进入记忆、协作、评测与可靠性等研究方向。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#papers", title: "Survey 主导论文清单", copy: "论文清单由后端筛选规则生成；这里预置一篇智能体综述。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: ".paper-row", title: "选择智能体综述", copy: "点击论文后，右侧会显示论文信息与继续操作。" },
-    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "[data-import-paper]", title: "下载并开始精读", copy: "真实使用会下载 PDF；教程不会下载或写入论文库。" },
+    { page: "chat", route: "/app?tutorial=1", target: ".tour-domain-card", title: "进入领域卡片", copy: "领域任务会持续更新卡片，完成后从卡片进入领域学习地图。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#prerequisites-content [data-detail-kind='prerequisite']", companion: ".inspector", title: "前置知识梳理", copy: "选择知识卡片，右侧同步展示关键概念与关联论文。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#development-content [data-detail-kind='stage'], #development-content [data-detail-kind='research-stage']", companion: ".inspector", title: "领域发展路径", copy: "选择发展阶段，右侧同步展示技术转折、核心概念与代表工作。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#landscape-content [data-detail-kind='problem']", companion: ".inspector", title: "概念全景", copy: "选择核心问题，右侧同步展开相关阶段、研究方向与论文。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#papers", companion: ".inspector", title: "Survey 主导论文清单", copy: "论文清单由后端筛选规则生成，右侧可查看当前论文的完整信息。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: ".paper-row", companion: ".inspector", title: "选择智能体综述", copy: "选择论文后，右侧会显示论文信息与继续操作。" },
+    { page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "[data-import-paper]", title: "下载并开始精读", copy: "从论文详情下载 PDF，并进入论文精读工作台。" },
     { page: "library", route: "/library?view=papers&tutorial=1", target: "#folder-tree", title: "论文文件夹", copy: "使用真实资料库页面新建文件夹、移动论文并管理阅读状态。" },
     { page: "library", route: "/library?view=papers&tutorial=1", target: ".item-card", title: "论文管理", copy: "从论文卡片继续精读、查看笔记或调整所在文件夹。" },
     { page: "reading", route: "/app/paper-reading?tutorial=1", target: "#paper-outline", title: "智能索引", copy: "章节索引与 PDF 页码联动，点击章节即可定位原文。" },
     { page: "reading", route: "/app/paper-reading?tutorial=1", target: "#reading-map-panel", title: "研究总览", copy: "集中查看研究问题、核心方法、方法步骤、实验支撑与局限。" },
-    { page: "reading", route: "/app/paper-reading?tutorial=1", target: ".reading-map-actions .is-accent", title: "智能体解释", copy: "从总览卡片发起解释时，会收起总览并进入右侧研究对话。" },
+    { page: "reading", route: "/app/paper-reading?tutorial=1", target: "[data-tour-anchor='reading-map-explain']", title: "智能体解释", copy: "从总览卡片发起解释时，会收起总览并进入右侧研究对话。" },
     { page: "reading", route: "/app/paper-reading?tutorial=1", target: "#analyze-section-button", title: "分析本节", copy: "围绕当前章节分析核心内容、论证结构和关键证据。" },
-    { page: "reading", route: "/app/paper-reading?tutorial=1", target: "#selection-toolbar", title: "选区提问与高亮注释", copy: "选中原文后，可以提问、添加高亮和本地注释。" },
+    { page: "reading", route: "/app/paper-reading?tutorial=1", target: "#structured-reader .guide-card p", companion: "#selection-toolbar", title: "选区提问、高亮与注释", copy: "划选正文后，可以围绕选区提问、解释、深入探索，并添加高亮或注释。" },
     { page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#discussion-context-button", title: "选择当前讨论", copy: "把刚才的智能体综述设为当前讨论，限定智能体可访问的研究范围。" },
     { page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#message-input", title: "围绕综述继续提问", copy: "固定演示问题：这个综述认为的未来可做的有哪些？" },
-    { page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#send-button", title: "预生成范围内回答", copy: "回答只使用当前综述中的开放问题，不会调用模型或保存会话。" },
+    { page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#send-button", title: "围绕当前讨论回答", copy: "研见会围绕选定综述中的开放问题继续讨论。" },
     { page: "settings", route: "/settings?tutorial=1", target: "#settings-form", title: "配置模型", copy: "最后填写 Base URL、API Key 与模型名称。API Key 仅保存在本地后端。" }
   ];
 
@@ -217,21 +217,29 @@
           const card = document.createElement("button");
           card.type = "button";
           card.className = "domain-task-card tour-domain-card";
-          card.innerHTML = "<strong>智能体 Agent · 领域入门</strong><span>预生成领域地图已完成</span><small>前置知识 · 发展路径 · 概念全景 · 论文清单</small>";
+          card.innerHTML = "<strong>智能体 Agent · 领域入门</strong><span>领域地图已完成</span><small>前置知识 · 发展路径 · 概念全景 · 论文清单</small>";
           list.appendChild(card);
         }
       }
     }
-    if (pageName() === "domain" && stepIndex >= 9) {
-      const paper = document.querySelector(".paper-row");
-      if (paper && typeof paper.click === "function") paper.click();
+    if (pageName() === "domain") {
+      const detailTargets = {
+        5: "#prerequisites-content [data-detail-kind='prerequisite']",
+        6: "#development-content [data-detail-kind='stage'], #development-content [data-detail-kind='research-stage']",
+        7: "#landscape-content [data-detail-kind='problem']",
+        8: ".paper-row",
+        9: ".paper-row",
+        10: ".paper-row"
+      };
+      const detailSelector = detailTargets[stepIndex];
+      const detailTarget = detailSelector ? document.querySelector(detailSelector) : null;
+      if (detailTarget && typeof detailTarget.click === "function") detailTarget.click();
     }
-    if (pageName() === "reading" && stepIndex >= 14 && typeof window.toggleReadingMapPanel === "function") {
-      window.toggleReadingMapPanel(true);
+    if (pageName() === "reading" && stepIndex >= 14) {
+      window.SeeFurtherTutorial?.openReadingMap?.();
     }
     if (pageName() === "reading" && stepIndex >= 17) {
-      const toolbar = document.querySelector("#selection-toolbar");
-      if (toolbar) toolbar.hidden = false;
+      selectTutorialReaderText();
     }
     if (pageName() === "return-chat") {
       const bar = document.querySelector("#discussion-context-bar");
@@ -246,6 +254,30 @@
     }
   }
 
+  function selectTutorialReaderText() {
+    const paragraph = document.querySelector("#structured-reader .guide-card p");
+    if (!paragraph) return;
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    let textNode = walker.nextNode();
+    while (textNode && String(textNode.textContent || "").trim().length < 8) textNode = walker.nextNode();
+    if (!textNode) return;
+    const value = String(textNode.textContent || "");
+    const start = Math.min(value.length, Math.max(0, value.search(/\S/)));
+    const end = Math.min(value.length, start + Math.max(8, Math.min(28, value.length - start)));
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, end);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const rect = range.getBoundingClientRect();
+    paragraph.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      clientX: rect.right,
+      clientY: rect.bottom
+    }));
+  }
+
   function installStyles() {
     const style = document.createElement("style");
     style.id = "seefurther-real-tour-styles";
@@ -253,7 +285,6 @@
       ".sf-tour-spotlight{position:fixed;z-index:30000;border:2px solid #66f5d6;border-radius:16px;box-shadow:0 0 0 9999px rgba(13,18,24,.72),0 0 32px rgba(102,245,214,.28);pointer-events:none;transition:all .24s ease}",
       ".sf-tour-bubble{position:fixed;z-index:30001;display:grid;gap:10px;width:min(380px,calc(100vw - 28px));padding:18px;border:1px solid rgba(102,245,214,.42);border-radius:18px;color:#eafff7;background:linear-gradient(145deg,rgba(5,35,33,.99),rgba(17,28,53,.99));box-shadow:0 26px 80px rgba(0,0,0,.48);font-family:Inter,'Microsoft YaHei',sans-serif}",
       ".sf-tour-bubble small{color:#66f5d6;font-weight:850;letter-spacing:.1em}.sf-tour-bubble h2{margin:0;font-size:1.08rem}.sf-tour-bubble p{margin:0;color:#c5ded8;font-size:.84rem;line-height:1.65}",
-      ".sf-tour-note{padding:8px 10px;border-radius:10px;color:#b9d8d1;background:rgba(255,255,255,.055);font-size:.72rem}",
       ".sf-tour-actions{display:flex;justify-content:space-between;gap:8px}.sf-tour-actions button{border-radius:99px;padding:9px 14px;font:750 .78rem/1 Inter,'Microsoft YaHei',sans-serif;cursor:pointer}",
       ".sf-tour-skip{border:1px solid rgba(255,255,255,.2);color:#dcefeb;background:transparent}.sf-tour-next{border:0;color:#04110e;background:linear-gradient(135deg,#66f5d6,#b8fff1)}",
       ".tour-domain-card{display:grid;gap:7px;width:min(760px,94%);margin:12px 0;padding:18px;text-align:left;border:1px solid rgba(102,245,214,.34);border-radius:18px;color:#eafff7;background:rgba(12,43,42,.9)}",
@@ -268,10 +299,19 @@
     window.location.replace(destination || "/app?new=1&tutorial=skip");
   }
 
-  function position(spotlight, bubble, target) {
+  function position(spotlight, bubble, target, companion) {
     target.scrollIntoView({ block: "center", behavior: "auto" });
     window.setTimeout(function () {
-      const rect = target.getBoundingClientRect();
+      const primaryRect = target.getBoundingClientRect();
+      const companionRect = companion?.getBoundingClientRect();
+      const rect = companionRect ? {
+        top: Math.min(primaryRect.top, companionRect.top),
+        left: Math.min(primaryRect.left, companionRect.left),
+        right: Math.max(primaryRect.right, companionRect.right),
+        bottom: Math.max(primaryRect.bottom, companionRect.bottom),
+        width: Math.max(primaryRect.right, companionRect.right) - Math.min(primaryRect.left, companionRect.left),
+        height: Math.max(primaryRect.bottom, companionRect.bottom) - Math.min(primaryRect.top, companionRect.top)
+      } : primaryRect;
       const pad = 7;
       spotlight.style.top = Math.max(7, rect.top - pad) + "px";
       spotlight.style.left = Math.max(7, rect.left - pad) + "px";
@@ -299,7 +339,7 @@
     spotlight.className = "sf-tour-spotlight";
     const bubble = document.createElement("section");
     bubble.className = "sf-tour-bubble";
-    bubble.innerHTML = "<small>真实页面引导 " + (index + 1) + "/" + steps.length + "</small><h2></h2><p></p><div class='sf-tour-note'>教程内容为预生成，不调用模型，也不会写入业务数据库。</div><div class='sf-tour-actions'><button class='sf-tour-skip' type='button'>跳过教程</button><button class='sf-tour-next' type='button'>" + (index === steps.length - 1 ? "完成" : "下一步") + "</button></div>";
+    bubble.innerHTML = "<small>真实页面引导 " + (index + 1) + "/" + steps.length + "</small><h2></h2><p></p><div class='sf-tour-actions'><button class='sf-tour-skip' type='button'>跳过教程</button><button class='sf-tour-next' type='button'>" + (index === steps.length - 1 ? "完成" : "下一步") + "</button></div>";
     bubble.querySelector("h2").textContent = current.title;
     bubble.querySelector("p").textContent = current.copy;
     document.body.append(spotlight, bubble);
@@ -310,7 +350,8 @@
         window.setTimeout(locate, 90);
         return;
       }
-      position(spotlight, bubble, target);
+      const companion = current.companion ? document.querySelector(current.companion) : null;
+      position(spotlight, bubble, target, companion);
     };
     locate();
     window.addEventListener("resize", locate);

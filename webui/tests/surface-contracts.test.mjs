@@ -40,18 +40,24 @@ test("gateway keeps stable API routes while serving the Vue build", () => {
   assert.ok(app.includes("legacy_path"), "source-checkout fallback was removed");
 });
 
-test("first-use tutorial overlays the real surfaces and stays outside business persistence", () => {
+test("first-use tutorial overlays the real surfaces with synchronized detail context", () => {
   const tutorial = readFileSync(join(staticRoot, "tutorial-runtime.js"), "utf8");
+  const paperApp = readFileSync(join(staticRoot, "paper-reading", "app.js"), "utf8");
   const chat = readFileSync(join(staticRoot, "app.js"), "utf8");
   const home = readFileSync(join(staticRoot, "index.html"), "utf8");
-  assert.ok(tutorial.includes("教程内容为预生成"));
-  assert.ok(tutorial.includes("不会写入业务数据库"));
+  assert.ok(!tutorial.includes("预生成"));
+  assert.ok(!tutorial.includes("不会写入业务数据库"));
   assert.ok(tutorial.includes("跳过教程"));
   assert.ok(tutorial.includes("智能体 Agent"));
   assert.ok(tutorial.includes("这个综述认为的未来可做的有哪些"));
   assert.ok(tutorial.includes("sf-tour-spotlight"));
   assert.ok(tutorial.includes("demoDomainSnapshot"));
   assert.ok(tutorial.includes("demoReadingPaper"));
+  assert.ok(tutorial.includes('companion: ".inspector"'));
+  assert.ok(tutorial.includes("selectTutorialReaderText"));
+  assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
+  assert.ok(tutorial.includes("openReadingMap?.()"));
+  assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
   assert.ok(chat.includes('fetch("/api/tutorial/status"'));
   assert.ok(chat.includes('window.location.replace("/app?tutorial=1")'));
   assert.ok(home.includes('id="start-experience"'));

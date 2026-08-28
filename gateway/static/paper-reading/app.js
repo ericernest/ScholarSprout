@@ -3589,6 +3589,7 @@ function renderReadingMapCard(item, groupKey, groupIndex, index) {
   });
   const ask = create("button", "mini-button is-accent", "让智能体解释");
   ask.type = "button";
+  ask.dataset.tourAnchor = "reading-map-explain";
   ask.addEventListener("click", () => {
     if (source.section_id) state.currentSection = source.section_id;
     toggleReadingMapPanel(false);
@@ -3971,6 +3972,7 @@ function initializeTutorialPaper() {
   $("paper-boot").hidden = true;
   document.body.classList.remove("is-booting");
   renderPaperWorkspace();
+  window.SeeFurtherTutorial.openReadingMap = () => toggleReadingMapPanel(true);
 }
 
 function persistState() {
