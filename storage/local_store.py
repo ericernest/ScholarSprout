@@ -1239,7 +1239,7 @@ class LocalResearchStore:
         """Return the stable carrier/dialogue identity for one reading session."""
         with self._connection() as connection:
             row = connection.execute(
-                """SELECT reading_session_id, conversation_id, dialogue_conversation_id,
+                """SELECT reading_session_id, conversation_id, dialogue_conversation_id, artifact_id,
                           paper_id, parent_reading_session_id, state,
                           current_section_id, progress_json, updated_at
                    FROM paper_reading_sessions WHERE reading_session_id = ?""",
@@ -1253,6 +1253,7 @@ class LocalResearchStore:
             "dialogue_conversation_id": str(
                 row["dialogue_conversation_id"] or f"paper-reading-dialogue:{session_id}"
             ),
+            "artifact_id": str(row["artifact_id"]),
             "paper_id": str(row["paper_id"]),
             "parent_reading_session_id": str(row["parent_reading_session_id"] or ""),
             "state": str(row["state"]),
@@ -1260,6 +1261,43 @@ class LocalResearchStore:
             "progress": json.loads(row["progress_json"] or "{}"),
             "updated_at": str(row["updated_at"]),
         }
+
+    def link_research_artifacts(
+        self, conversation_id: str, artifact_ids: list[str], *, relation: str = "discussed"
+    ) -> list[str]:
+        """Attach existing research workspaces to a chat without changing their owner."""
+        clean_ids = list(dict.fromkeys(item.strip() for item in artifact_ids if item.strip()))
+        if not clean_ids:
+            return []
+        if relation not in {"created", "continued", "discussed"}:
+            raise ValueError("unsupported artifact relation")
+        with self._connection() as connection:
+            conversation = connection.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(conversation_id)
+            placeholders = ",".join("?" for _ in clean_ids)
+            rows = connection.execute(
+                f"""SELECT artifact_id FROM work_artifacts
+                    WHERE artifact_id IN ({placeholders})
+                      AND artifact_kind IN ('paper_reading', 'domain_onboarding')""",
+                clean_ids,
+            ).fetchall()
+            available = {str(row["artifact_id"]) for row in rows}
+            linked = [item for item in clean_ids if item in available]
+            for artifact_id in linked:
+                self._link_artifact(connection, conversation_id, artifact_id, relation)
+        return linked
+
+    def conversation_has_artifact(self, conversation_id: str, artifact_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT 1 FROM conversation_artifacts
+                   WHERE conversation_id = ? AND artifact_id = ?""",
+                (conversation_id, artifact_id),
+            ).fetchone()
+        return row is not None
 
     def get_reading_dialogue_conversation_id(self, session_id: str) -> str:
         record = self.get_reading_session_record(session_id)

@@ -22,8 +22,11 @@ let isGenerating = false;
 let activeResponseController = null;
 let activeGenerationId = "";
 let selectedPaperFile = null;
-let activeDiscussion = null;
+let activeDiscussions = [];
 let conversationContexts = [];
+let contextImportCandidates = [];
+let contextImportSelection = new Set();
+let contextImportKind = "all";
 let conversationHistoryReload = null;
 let conversationHistorySignature = "";
 let conversationContextSignature = "";
@@ -56,6 +59,9 @@ const discussionBar = document.querySelector("#discussion-context-bar");
 const discussionButton = document.querySelector("#discussion-context-button");
 const discussionValue = document.querySelector("#discussion-context-value");
 const discussionMenu = document.querySelector("#discussion-context-menu");
+const contextImportModal = document.querySelector("#context-import-modal");
+const contextImportSearch = document.querySelector("#context-import-search");
+const contextImportResults = document.querySelector("#context-import-results");
 const startExperienceLink = document.querySelector("#start-experience");
 
 if (startExperienceLink) {
@@ -151,9 +157,36 @@ function bindChatPage() {
   });
   discussionMenu?.addEventListener("click", (event) => {
     event.stopPropagation();
+    const importButton = event.target.closest("button[data-import-contexts]");
+    if (importButton) {
+      setDiscussionMenuOpen(false);
+      void openContextImport();
+      return;
+    }
     const option = event.target.closest("button[data-context-key]");
-    if (!option) return;
-    selectDiscussion(option.dataset.contextKey || "");
+    if (option) toggleDiscussion(option.dataset.contextKey || "");
+  });
+  document.querySelector("#context-import-close")?.addEventListener("click", closeContextImport);
+  document.querySelector("#context-import-cancel")?.addEventListener("click", closeContextImport);
+  document.querySelector("#context-import-confirm")?.addEventListener("click", () => void importSelectedContexts());
+  contextImportModal?.addEventListener("click", (event) => {
+    if (event.target === contextImportModal) closeContextImport();
+  });
+  contextImportSearch?.addEventListener("input", debounce(() => void loadContextCandidates(), 220));
+  document.querySelector("#context-import-filters")?.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-kind]");
+    if (!button) return;
+    contextImportKind = button.dataset.kind || "all";
+    document.querySelectorAll("#context-import-filters button").forEach((item) => item.classList.toggle("is-active", item === button));
+    renderContextCandidates();
+  });
+  contextImportResults?.addEventListener("click", (event) => {
+    const card = event.target.closest("button[data-artifact-id]");
+    if (!card || card.disabled) return;
+    const artifactId = card.dataset.artifactId || "";
+    if (contextImportSelection.has(artifactId)) contextImportSelection.delete(artifactId);
+    else contextImportSelection.add(artifactId);
+    renderContextCandidates();
   });
 
   paperFileButton.addEventListener("click", () => paperFileInput.click());
@@ -336,7 +369,7 @@ function restoreDomainContextCard(context) {
     <span class="paper-card-enter">进入领域学习工作台 <b>↗</b></span>
   `;
   card.addEventListener("click", () => {
-    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(context.id)}`;
+    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(context.id)}&conversation_id=${encodeURIComponent(sessionId)}`;
   });
   item.append(card);
   messages.append(item);
@@ -348,18 +381,43 @@ function contextKey(context) {
 
 function restoreDiscussionSelector() {
   if (!discussionMenu || !discussionButton || !discussionValue || !discussionBar) return;
-  discussionMenu.replaceChildren(createDiscussionOption(null));
-  conversationContexts.forEach((context) => {
-    discussionMenu.append(createDiscussionOption(context));
-  });
+  discussionMenu.replaceChildren();
+  const local = conversationContexts.filter((context) => context.relation !== "discussed");
+  const imported = conversationContexts.filter((context) => context.relation === "discussed");
+  appendDiscussionGroup("本会话涉及", local);
+  if (imported.length) appendDiscussionGroup("已引入的外部结果", imported);
+  const importButton = document.createElement("button");
+  importButton.type = "button";
+  importButton.className = "discussion-context-import";
+  importButton.dataset.importContexts = "1";
+  importButton.innerHTML = '<span>＋</span><span><strong>引入会话外部结果</strong><small>搜索已有论文精读与领域入门</small></span>';
+  discussionMenu.append(importButton);
   const params = new URLSearchParams(window.location.search);
-  const requested = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
-  activeDiscussion = conversationContexts.find((item) => contextKey(item) === requested)
-    || conversationContexts.find((item) => contextKey(item) === contextKey(activeDiscussion))
-    || conversationContexts.at(-1)
-    || null;
+  const requestedKeys = params.getAll("context");
+  const legacyKey = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  const previousKeys = activeDiscussions.map(contextKey);
+  const desiredKeys = requestedKeys.length ? requestedKeys : (legacyKey !== ":" ? [legacyKey] : previousKeys);
+  activeDiscussions = conversationContexts.filter((item) => desiredKeys.includes(contextKey(item)));
+  if (!activeDiscussions.length && !requestedKeys.length && legacyKey === ":" && conversationContexts.length) {
+    activeDiscussions = [conversationContexts.at(-1)];
+  }
   syncDiscussionPicker();
-  discussionBar.hidden = !conversationContexts.length;
+  discussionBar.hidden = false;
+}
+
+function appendDiscussionGroup(label, contexts) {
+  const heading = document.createElement("div");
+  heading.className = "discussion-context-group";
+  heading.textContent = label;
+  discussionMenu.append(heading);
+  if (!contexts.length) {
+    const empty = document.createElement("div");
+    empty.className = "discussion-context-empty";
+    empty.textContent = "暂无结果";
+    discussionMenu.append(empty);
+    return;
+  }
+  contexts.forEach((context) => discussionMenu.append(createDiscussionOption(context)));
 }
 
 function createDiscussionOption(context) {
@@ -378,36 +436,124 @@ function createDiscussionOption(context) {
   return option;
 }
 
-function selectDiscussion(key) {
-  activeDiscussion = conversationContexts.find((item) => contextKey(item) === key) || null;
+function toggleDiscussion(key) {
+  const item = conversationContexts.find((context) => contextKey(context) === key);
+  if (!item) return;
+  const selected = activeDiscussions.some((context) => contextKey(context) === key);
+  activeDiscussions = selected
+    ? activeDiscussions.filter((context) => contextKey(context) !== key)
+    : [...activeDiscussions, item];
   const params = new URLSearchParams(window.location.search);
-  if (activeDiscussion) {
-    params.set("context_kind", activeDiscussion.kind);
-    params.set("context_id", activeDiscussion.id);
-  } else {
-    params.delete("context_kind");
-    params.delete("context_id");
-  }
+  params.delete("context_kind");
+  params.delete("context_id");
+  params.delete("context");
+  activeDiscussions.forEach((context) => params.append("context", contextKey(context)));
   const query = params.toString();
   window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   syncDiscussionPicker();
-  setDiscussionMenuOpen(false);
 }
 
 function syncDiscussionPicker() {
   if (!discussionValue || !discussionMenu) return;
-  const selectedKey = activeDiscussion ? contextKey(activeDiscussion) : "";
-  const kind = activeDiscussion?.kind === "paper_reading" ? "论文" : "领域";
-  discussionValue.textContent = activeDiscussion
-    ? `${kind} · ${activeDiscussion.title || "未命名"}`
-    : "不指定论文或领域";
+  const selectedKeys = new Set(activeDiscussions.map(contextKey));
+  discussionValue.textContent = activeDiscussions.length === 1
+    ? `${activeDiscussions[0].kind === "paper_reading" ? "论文" : "领域"} · ${activeDiscussions[0].title || "未命名"}`
+    : activeDiscussions.length > 1 ? `已选择 ${activeDiscussions.length} 项当前讨论` : "不指定论文或领域";
   discussionMenu.querySelectorAll(".discussion-context-option").forEach((option) => {
-    const selected = option.dataset.contextKey === selectedKey;
+    const selected = selectedKeys.has(option.dataset.contextKey || "");
     option.classList.toggle("is-selected", selected);
     option.setAttribute("aria-selected", String(selected));
     const check = option.querySelector(".discussion-context-option-check");
     if (check) check.textContent = selected ? "✓" : "";
   });
+}
+
+async function openContextImport() {
+  if (!contextImportModal) return;
+  contextImportSelection = new Set();
+  contextImportModal.hidden = false;
+  document.body.classList.add("context-import-open");
+  await loadContextCandidates();
+  contextImportSearch?.focus();
+}
+
+function closeContextImport() {
+  if (!contextImportModal) return;
+  contextImportModal.hidden = true;
+  document.body.classList.remove("context-import-open");
+}
+
+async function loadContextCandidates() {
+  if (!contextImportResults) return;
+  contextImportResults.innerHTML = '<div class="context-import-loading">正在整理研究结果…</div>';
+  const search = encodeURIComponent(contextImportSearch?.value.trim() || "");
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}/context-candidates?search=${search}&limit=150`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    contextImportCandidates = await response.json();
+    renderContextCandidates();
+  } catch {
+    contextImportResults.innerHTML = '<div class="context-import-loading">暂时无法读取研究结果，请稍后重试。</div>';
+  }
+}
+
+function renderContextCandidates() {
+  if (!contextImportResults) return;
+  const items = contextImportCandidates.filter((item) => contextImportKind === "all" || item.kind === contextImportKind);
+  contextImportResults.replaceChildren();
+  if (!items.length) contextImportResults.innerHTML = '<div class="context-import-loading">没有找到匹配的研究结果。</div>';
+  items.forEach((item) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "context-import-card";
+    card.dataset.artifactId = item.artifact_id;
+    card.disabled = Boolean(item.linked);
+    card.classList.toggle("is-selected", contextImportSelection.has(item.artifact_id));
+    card.innerHTML = `<span class="context-import-card-kind">${item.kind === "paper_reading" ? "论文精读" : "领域入门"}</span><strong>${escapeHtml(item.title || "未命名")}</strong><small>${item.linked ? "已在当前会话" : "可引入当前会话"}</small><span class="context-import-card-check">${item.linked ? "已引入" : contextImportSelection.has(item.artifact_id) ? "✓" : ""}</span>`;
+    contextImportResults.append(card);
+  });
+  const count = document.querySelector("#context-import-count");
+  const confirm = document.querySelector("#context-import-confirm");
+  if (count) count.textContent = contextImportSelection.size ? `已选择 ${contextImportSelection.size} 项` : "未选择";
+  if (confirm) confirm.disabled = !contextImportSelection.size;
+}
+
+async function importSelectedContexts() {
+  if (!contextImportSelection.size) return;
+  const confirm = document.querySelector("#context-import-confirm");
+  if (confirm) confirm.disabled = true;
+  try {
+    const response = await fetch(`/api/research/conversations/${encodeURIComponent(sessionId)}/contexts`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifact_ids: [...contextImportSelection] }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    conversationContexts = Array.isArray(payload.contexts) ? payload.contexts : conversationContexts;
+    const importedIds = new Set(payload.linked_artifact_ids || []);
+    activeDiscussions = [...activeDiscussions, ...conversationContexts.filter((item) => importedIds.has(item.artifact_id))]
+      .filter((item, index, all) => all.findIndex((other) => contextKey(other) === contextKey(item)) === index);
+    closeContextImport();
+    restoreDiscussionSelector();
+    syncDiscussionUrl();
+  } catch (error) {
+    if (contextImportResults) contextImportResults.innerHTML = `<div class="context-import-loading">${escapeHtml(error.message || "引入失败")}</div>`;
+  } finally {
+    if (confirm) confirm.disabled = !contextImportSelection.size;
+  }
+}
+
+function syncDiscussionUrl() {
+  const params = new URLSearchParams(window.location.search);
+  params.delete("context_kind"); params.delete("context_id"); params.delete("context");
+  activeDiscussions.forEach((context) => params.append("context", contextKey(context)));
+  const query = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+}
+
+function debounce(callback, delay) {
+  let timer;
+  return (...args) => { window.clearTimeout(timer); timer = window.setTimeout(() => callback(...args), delay); };
 }
 
 function setDiscussionMenuOpen(open) {
@@ -418,7 +564,8 @@ function setDiscussionMenuOpen(open) {
 
 function scrollRestoredConversation() {
   const params = new URLSearchParams(window.location.search);
-  const requestedKey = `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
+  const requestedKey = params.getAll("context")[0]
+    || `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
   const requestedCard = requestedKey === ":"
     ? null
     : messages.querySelector(`[data-context-key="${CSS.escape(requestedKey)}"]`);
@@ -525,11 +672,11 @@ async function sendMessage() {
         user_id: "local-web",
         metadata: {
           generation_id: generationId,
-          ...(activeDiscussion ? { active_context: {
-            kind: activeDiscussion.kind,
-            id: activeDiscussion.id,
-            title: activeDiscussion.title || "",
-          } } : {}),
+          ...(activeDiscussions.length ? { active_contexts: activeDiscussions.map((context) => ({
+            kind: context.kind,
+            id: context.id,
+            title: context.title || "",
+          })) } : {}),
         },
       }),
       signal: controller.signal,
@@ -814,7 +961,7 @@ function appendDomainOnboardingCard(job, query) {
     <span class="paper-card-enter">进入领域学习工作台 <b>↗</b></span>
   `;
   card.addEventListener("click", () => {
-    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}`;
+    window.location.href = `/app/domain-onboarding?task_id=${encodeURIComponent(job.task_id)}&conversation_id=${encodeURIComponent(sessionId)}`;
   });
   const cancel = document.createElement("button");
   cancel.type = "button";
@@ -850,7 +997,8 @@ function appendDomainOnboardingCard(job, query) {
   if (!conversationContexts.some((context) => contextKey(context) === `domain_onboarding:${job.task_id}`)) {
     conversationContexts.push({ kind: "domain_onboarding", id: job.task_id, title: query });
   }
-  activeDiscussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`) || activeDiscussion;
+  const discussion = conversationContexts.find((context) => contextKey(context) === `domain_onboarding:${job.task_id}`);
+  if (discussion && !activeDiscussions.some((context) => contextKey(context) === contextKey(discussion))) activeDiscussions.push(discussion);
   restoreDiscussionSelector();
 }
 
@@ -894,9 +1042,7 @@ async function retryDomainOnboardingFromCard(item, query, accessToken) {
     conversationContexts = conversationContexts.filter(
       (context) => contextKey(context) !== previousContextKey,
     );
-    if (activeDiscussion && contextKey(activeDiscussion) === previousContextKey) {
-      activeDiscussion = null;
-    }
+    activeDiscussions = activeDiscussions.filter((context) => contextKey(context) !== previousContextKey);
     item.remove();
     appendDomainOnboardingCard(job, query);
     updateDomainOnboardingCard(job.task_id, nextSnapshot);
@@ -1102,7 +1248,7 @@ async function submitPaper() {
       title: detail.data?.paper?.title || "当前论文",
     };
     conversationContexts.push(discussion);
-    activeDiscussion = discussion;
+    activeDiscussions = [discussion];
     restoreDiscussionSelector();
     watchPaperCard(paperCard, paperId, sourceLabel);
     resetPaperComposer();

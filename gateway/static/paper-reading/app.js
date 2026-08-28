@@ -696,6 +696,7 @@ async function ensureReadingSession() {
     const { payload } = await callPaperReading({
       action: "create_session",
       session_id: "",
+      conversation_id: state.conversationId || "",
       paper_id: state.paperId,
     });
     state.sessionId = payload.data?.session_id || payload.session?.session_id || "";
