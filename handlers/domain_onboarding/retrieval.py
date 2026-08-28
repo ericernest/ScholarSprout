@@ -168,7 +168,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
                     fields = (
                         "paperId,title,abstract,year,url,citationCount,"
                         "influentialCitationCount,referenceCount,authors,externalIds,"
-                        "publicationTypes"
+                        "publicationTypes,openAccessPdf"
                     )
                     if exact_arxiv:
                         response = self._http.get(
@@ -202,6 +202,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
 
     def _parse_paper(self, item: dict[str, Any], query: str) -> PaperCandidate | None:
         external = item.get("externalIds") or {}
+        open_access_pdf = item.get("openAccessPdf") or {}
         paper_id = str(item.get("paperId") or external.get("ArXiv") or external.get("DOI") or "").strip()
         title = str(item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
@@ -215,6 +216,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
                 abstract=item.get("abstract"),
                 year=item.get("year"),
                 url=url,
+                pdf_url=str(open_access_pdf.get("url") or "").strip() or None,
                 citation_count=item.get("citationCount"),
                 influential_citation_count=item.get("influentialCitationCount"),
                 reference_count=item.get("referenceCount"),
@@ -317,7 +319,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
             fields = (
                 "paperId,title,abstract,year,url,citationCount,"
                 "influentialCitationCount,referenceCount,authors,externalIds,"
-                "publicationTypes"
+                "publicationTypes,openAccessPdf"
             )
             for survey in survey_papers:
                 identifier = self._citation_identifier(survey)
@@ -490,6 +492,7 @@ class ArxivRetriever(_ResilientRetriever):
                         abstract=abstract,
                         year=year,
                         url=url,
+                        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}.pdf",
                         citation_count=None,
                         source="arxiv",
                         matched_queries=[query],
@@ -559,7 +562,7 @@ class CrossrefRetriever(_ResilientRetriever):
                 params: dict[str, Any] = {
                     "query.bibliographic": query,
                     "rows": limit_per_query,
-                    "select": "DOI,title,author,published-print,published-online,URL,is-referenced-by-count,abstract,type",
+                    "select": "DOI,title,author,published-print,published-online,URL,link,is-referenced-by-count,abstract,type",
                 }
                 if self.mailto:
                     params["mailto"] = self.mailto
@@ -616,6 +619,7 @@ class CrossrefRetriever(_ResilientRetriever):
                 abstract=item.get("abstract"),
                 year=year,
                 url=url,
+                pdf_url=self._pdf_url(item),
                 citation_count=item.get("is-referenced-by-count"),
                 source="crossref",
                 matched_queries=[query],
@@ -624,6 +628,17 @@ class CrossrefRetriever(_ResilientRetriever):
             )
         except ValidationError:
             return None
+
+    @staticmethod
+    def _pdf_url(item: dict[str, Any]) -> str | None:
+        for link in item.get("link") or []:
+            if not isinstance(link, dict):
+                continue
+            url = str(link.get("URL") or "").strip()
+            content_type = str(link.get("content-type") or "").strip().lower()
+            if url and content_type == "application/pdf":
+                return url
+        return None
 
     def close(self) -> None:
         if self._owns_client:

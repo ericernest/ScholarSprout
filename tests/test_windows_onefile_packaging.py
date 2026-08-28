@@ -23,6 +23,8 @@ def test_onefile_packaging_sources_are_complete() -> None:
     assert "PyInstaller 打包失败" in build_script
     assert '"Pillow>=10,<13"' in build_script
     assert '"pystray>=0.19,<1"' in build_script
+    assert "import PyInstaller, PIL, pystray, lark_oapi" in build_script
+    assert "--collect-all lark_oapi" in build_script
     assert "--icon $AppIcon" in build_script
     assert "--hidden-import pystray._win32" in build_script
     assert icon_bytes[:4] == b"\x00\x00\x01\x00"

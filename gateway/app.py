@@ -574,25 +574,12 @@ def start_gateway_server(
         web_channel.name: web_channel,
     }
 
-    # 再读取飞书配置
-    feishu_app_id = (
-        os.getenv("FEISHU_APP_ID")
-        or os.getenv("LARK_APP_ID")
+    feishu_enabled, feishu_app_id, feishu_app_secret = resolve_feishu_runtime_config(
+        config
     )
-
-    feishu_app_secret = (
-        os.getenv("FEISHU_APP_SECRET")
-        or os.getenv("LARK_APP_SECRET")
-    )
-
-    if bool(feishu_app_id) != bool(feishu_app_secret):
-        raise RuntimeError(
-            "Feishu configuration is incomplete: "
-            "both FEISHU_APP_ID and FEISHU_APP_SECRET are required."
-        )
 
     # 只有配置完整时，才创建并注册 FeishuChannel
-    if feishu_app_id and feishu_app_secret:
+    if feishu_enabled and feishu_app_id and feishu_app_secret:
         feishu_channel = FeishuChannel(
             bus=message_bus,
             app_id=feishu_app_id,
@@ -627,6 +614,25 @@ def start_gateway_server(
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
     on_server_created(server)
     server.run()
+
+
+def resolve_feishu_runtime_config(config: object) -> tuple[bool, str, str]:
+    """Resolve the Feishu connection, preserving environment-variable precedence."""
+    environment_app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
+    environment_app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv(
+        "LARK_APP_SECRET"
+    )
+    environment_override = bool(environment_app_id or environment_app_secret)
+    app_id = str(environment_app_id or config.channels.feishu.app_id or "").strip()
+    app_secret = str(
+        environment_app_secret or config.channels.feishu.app_secret or ""
+    ).strip()
+    enabled = environment_override or bool(config.channels.feishu.enabled)
+    if enabled and not (app_id and app_secret):
+        raise RuntimeError(
+            "Feishu configuration is incomplete: both App ID and App Secret are required."
+        )
+    return enabled, app_id, app_secret
 
 
 def create_runtime_models(config: object) -> tuple[object, object, bool]:

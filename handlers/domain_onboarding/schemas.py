@@ -458,6 +458,7 @@ class PaperCandidate(OnboardingModel):
     abstract: str | None = None
     year: int | None = Field(default=None, ge=1800, le=2100)
     url: str
+    pdf_url: str | None = None
     citation_count: int | None = Field(default=None, ge=0)
     influential_citation_count: int | None = Field(default=None, ge=0)
     reference_count: int | None = Field(default=None, ge=0)
@@ -496,6 +497,16 @@ class PaperCandidate(OnboardingModel):
         ).lower()
         if not DOI_PATTERN.fullmatch(normalized):
             raise ValueError("invalid DOI")
+        return normalized
+
+    @field_validator("pdf_url", mode="before")
+    @classmethod
+    def normalize_pdf_url(cls, value: object) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = str(value).strip()
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("PDF URL must use HTTP or HTTPS")
         return normalized
 
     @field_validator("arxiv_id", mode="before")

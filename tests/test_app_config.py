@@ -11,9 +11,16 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 from config.manager import load_config, resolve_data_dir, save_config
-from config.schema import AppConfig, EmbeddingConfig, OpenAIClientConfig, StorageConfig
+from config.schema import (
+    AppConfig,
+    ChannelsConfig,
+    EmbeddingConfig,
+    FeishuConfig,
+    OpenAIClientConfig,
+    StorageConfig,
+)
 from config.web import _is_local_request
-from gateway.app import app
+from gateway.app import app, resolve_feishu_runtime_config
 
 
 class ConfigManagerTests(unittest.TestCase):
@@ -32,6 +39,13 @@ class ConfigManagerTests(unittest.TestCase):
                     api_key="embedding-secret",
                 ),
                 storage=StorageConfig(data_dir=str(Path(directory) / "data")),
+                channels=ChannelsConfig(
+                    feishu=FeishuConfig(
+                        enabled=True,
+                        app_id="cli_test",
+                        app_secret="feishu-secret",
+                    ),
+                ),
             )
 
             self.assertEqual(save_config(expected, path), path)
@@ -54,6 +68,8 @@ class ConfigManagerTests(unittest.TestCase):
             self.assertEqual(config.embedding.model_name, "qwen3-embedding")
             self.assertIsNone(config.embedding.base_url)
             self.assertEqual(config.storage.data_dir, "~/.novicesynapse")
+            self.assertFalse(config.channels.feishu.enabled)
+            self.assertEqual(config.channels.feishu.app_id, "")
 
     def test_environment_data_dir_overrides_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -62,6 +78,33 @@ class ConfigManagerTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"NOVICESYNAPSE_DATA_DIR": override}):
                 self.assertEqual(resolve_data_dir(config), Path(override).resolve())
+
+    def test_feishu_runtime_reads_saved_config_and_environment_takes_precedence(self) -> None:
+        config = AppConfig(
+            channels=ChannelsConfig(
+                feishu=FeishuConfig(
+                    enabled=True,
+                    app_id="cli_saved",
+                    app_secret="saved-secret",
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            resolve_feishu_runtime_config(config),
+            (True, "cli_saved", "saved-secret"),
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "FEISHU_APP_ID": "cli_environment",
+                "FEISHU_APP_SECRET": "environment-secret",
+            },
+        ):
+            self.assertEqual(
+                resolve_feishu_runtime_config(config),
+                (True, "cli_environment", "environment-secret"),
+            )
 
 
 class ConfigWebTests(unittest.TestCase):
@@ -97,6 +140,13 @@ class ConfigWebTests(unittest.TestCase):
             config = AppConfig(
                 client=OpenAIClientConfig(api_key="never-return-this", model_name="model"),
                 storage=StorageConfig(data_dir=directory),
+                channels=ChannelsConfig(
+                    feishu=FeishuConfig(
+                        enabled=True,
+                        app_id="cli_public_id",
+                        app_secret="never-return-feishu-secret",
+                    ),
+                ),
             )
             with patch("config.web.load_config", return_value=config):
                 response = TestClient(app).get("/api/config")
@@ -108,6 +158,10 @@ class ConfigWebTests(unittest.TestCase):
             self.assertTrue(body["embedding"]["uses_client_base_url"])
             self.assertNotIn("never-return-this", response.text)
             self.assertEqual(body["storage"]["effective_data_dir"], str(Path(directory).resolve()))
+            self.assertTrue(body["channels"]["feishu"]["enabled"])
+            self.assertEqual(body["channels"]["feishu"]["app_id"], "cli_public_id")
+            self.assertTrue(body["channels"]["feishu"]["app_secret_configured"])
+            self.assertNotIn("never-return-feishu-secret", response.text)
 
     def test_update_preserves_blank_secret_and_creates_data_dir(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -144,6 +198,54 @@ class ConfigWebTests(unittest.TestCase):
             self.assertTrue(target.is_dir())
             save.assert_called_once_with(config)
 
+    def test_update_feishu_preserves_blank_secret_and_requires_restart(self) -> None:
+        config = AppConfig(
+            channels=ChannelsConfig(
+                feishu=FeishuConfig(
+                    enabled=False,
+                    app_id="cli_old",
+                    app_secret="existing-secret",
+                ),
+            ),
+        )
+        app.state.reload_runtime_config = lambda updated: {"runtime_reloaded": True}
+        try:
+            with (
+                patch("config.web.load_config", return_value=config),
+                patch("config.web.save_config") as save,
+            ):
+                response = TestClient(app).put(
+                    "/api/config",
+                    json={
+                        "feishu_enabled": True,
+                        "feishu_app_id": "cli_new",
+                    },
+                )
+        finally:
+            del app.state.reload_runtime_config
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["channels_restart_required"])
+        self.assertTrue(response.json()["restart_required"])
+        self.assertEqual(config.channels.feishu.app_id, "cli_new")
+        self.assertEqual(config.channels.feishu.app_secret, "existing-secret")
+        save.assert_called_once_with(config)
+
+    def test_enabling_feishu_requires_complete_credentials(self) -> None:
+        config = AppConfig()
+        with (
+            patch("config.web.load_config", return_value=config),
+            patch("config.web.save_config") as save,
+        ):
+            response = TestClient(app).put(
+                "/api/config",
+                json={"feishu_enabled": True, "feishu_app_id": "cli_only"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("App Secret", response.json()["detail"])
+        save.assert_not_called()
+
     def test_configuration_page_is_available(self) -> None:
         response = TestClient(app).get("/settings")
         self.assertEqual(response.status_code, 200)
@@ -160,6 +262,12 @@ class ConfigWebTests(unittest.TestCase):
         self.assertIn('id="embedding-model-name"', settings_html)
         self.assertIn('id="embedding-base-url"', settings_html)
         self.assertIn('id="embedding-api-key"', settings_html)
+        self.assertIn('data-config-tab="model"', settings_html)
+        self.assertIn('data-config-tab="channels"', settings_html)
+        self.assertIn('id="feishu-enabled"', settings_html)
+        self.assertIn('id="feishu-app-id"', settings_html)
+        self.assertIn('id="feishu-app-secret"', settings_html)
+        self.assertIn("channels_restart_required", settings_script)
         self.assertNotIn("MinerU", settings_html + settings_script)
         self.assertEqual(settings_html.count('class="optional-config"'), 1)
         self.assertLess(settings_html.index('id="embedding-base-url"'), settings_html.index('id="embedding-api-key"'))

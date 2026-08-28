@@ -13,7 +13,7 @@
 
 之后如果 PyInstaller 已安装，可省略 `-InstallBuildTool`。打包脚本会先使用当前
 仓库代码和已经生成的 `gateway/static/app-v2` 前端产物，然后把网关、静态资源、
-内置 Skills 与 PDF 解析依赖打进一个 `SeeFurther.exe`。
+内置 Skills、PDF 解析依赖和飞书 SDK 打进一个 `SeeFurther.exe`。
 
 脚本会在当前目录创建被 Git 忽略的 `.venv` 隔离构建环境，不会卸载或改写全局
 Python/Conda 环境中的包。

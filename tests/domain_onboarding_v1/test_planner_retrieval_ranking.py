@@ -380,6 +380,12 @@ class RetrievalTests(unittest.TestCase):
                                     "author": [{"given": "Ada", "family": "Lovelace"}],
                                     "published-online": {"date-parts": [[2025, 1, 2]]},
                                     "URL": "https://doi.org/10.1000/rag",
+                                    "link": [
+                                        {
+                                            "URL": "https://example.org/rag.pdf",
+                                            "content-type": "application/pdf",
+                                        }
+                                    ],
                                     "is-referenced-by-count": 7,
                                     "type": "journal-article",
                                 }
@@ -394,6 +400,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(papers[0].authors, ["Ada Lovelace"])
         self.assertEqual(papers[0].year, 2025)
         self.assertEqual(papers[0].publication_types, ["journal-article"])
+        self.assertEqual(papers[0].pdf_url, "https://example.org/rag.pdf")
 
     def test_crossref_filters_non_paper_work_types(self) -> None:
         client = FakeHTTPClient(
@@ -479,6 +486,7 @@ class RetrievalTests(unittest.TestCase):
                                 "citationCount": 12,
                                 "authors": [{"name": "Ada"}],
                                 "externalIds": {"DOI": "10.1000/abc", "ArXiv": "2401.00001"},
+                                "openAccessPdf": {"url": "https://example.org/abc.pdf"},
                                 "publicationTypes": ["JournalArticle"],
                             }
                         ]
@@ -490,6 +498,7 @@ class RetrievalTests(unittest.TestCase):
         papers = retriever.search(["query"], limit_per_query=5).papers
         self.assertEqual(papers[0].paper_id, "abc")
         self.assertEqual(papers[0].matched_queries, ["query"])
+        self.assertEqual(papers[0].pdf_url, "https://example.org/abc.pdf")
         self.assertEqual(papers[0].publication_types, ["JournalArticle"])
         self.assertEqual(client.calls[0]["params"]["limit"], 5)
 
@@ -590,6 +599,26 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(set(merged[0].matched_role_hints), {"survey", "method"})
         self.assertEqual(set(merged[0].matched_path_hints), {"foundations", "methods"})
+
+    def test_deduplication_recovers_pdf_and_external_identifiers(self) -> None:
+        paper = make_candidates(1)[0].model_copy(
+            update={"pdf_url": None, "doi": None, "arxiv_id": None}
+        )
+        duplicate = paper.model_copy(
+            update={
+                "paper_id": "duplicate-open-access-id",
+                "pdf_url": "https://example.org/paper.pdf",
+                "doi": "10.1000/paper",
+                "arxiv_id": "2401.00001",
+            }
+        )
+
+        merged = self.ranker._deduplicate([paper, duplicate])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].pdf_url, "https://example.org/paper.pdf")
+        self.assertEqual(merged[0].doi, "10.1000/paper")
+        self.assertEqual(merged[0].arxiv_id, "2401.00001")
 
     def test_invalid_url_is_filtered(self) -> None:
         invalid = PaperCandidate(

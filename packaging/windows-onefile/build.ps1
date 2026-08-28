@@ -29,9 +29,9 @@ try {
         throw "没有隔离打包环境。请先运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
     }
 
-    & $BuildPython -c "import PyInstaller, PIL, pystray" 2>$null
+    & $BuildPython -c "import PyInstaller, PIL, pystray, lark_oapi" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "隔离环境中缺少 PyInstaller、Pillow 或 pystray。请运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
+        throw "隔离环境中缺少 PyInstaller、Pillow、pystray 或 lark-oapi。请运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
     }
 
     & $BuildPython -m PyInstaller `
@@ -50,6 +50,7 @@ try {
         --add-data "$AppIcon;packaging\windows-onefile" `
         --collect-all fitz `
         --collect-all pymupdf `
+        --collect-all lark_oapi `
         --collect-submodules handlers `
         --collect-submodules skills `
         --hidden-import pystray._win32 `
