@@ -277,12 +277,23 @@ select option { color: #07120f; }
   font: 400 .84rem/1.62 Inter,"Noto Sans CJK SC",sans-serif !important;
 }
 .section-guide {
-  display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .65rem; margin-top: .8rem;
+  display: grid; grid-template-columns: repeat(12,minmax(0,1fr)); gap: .65rem; margin-top: .8rem;
 }
 .section-guide-item {
-  display: grid; gap: .3rem; padding: .72rem; border: 1px solid rgba(36,76,65,.13);
-  border-radius: 8px; background: rgba(32,185,151,.055);
+  position: relative; display: grid; grid-column: span 6; align-content: start; gap: .38rem;
+  min-width: 0; padding: 1.45rem .8rem .78rem; border: 1px solid rgba(36,76,65,.13);
+  border-radius: 10px; background: linear-gradient(145deg,rgba(255,255,255,.78),rgba(32,185,151,.055));
+  box-shadow: 0 8px 22px rgba(26,78,64,.055);
 }
+.section-guide-item::before {
+  position: absolute; top: .48rem; right: .58rem; content: attr(data-card-index);
+  color: rgba(11,114,93,.48); font-size: .62rem; font-weight: 850; letter-spacing: .12em;
+}
+.section-guide-item.is-featured {
+  grid-column: 1 / -1; padding-left: 1rem; border-left: 4px solid #20b997;
+  background: linear-gradient(120deg,rgba(223,255,247,.88),rgba(255,255,255,.8));
+}
+.section-guide-item.is-wide-tail { grid-column: 1 / -1; }
 .section-guide-item strong { color: #0b725d; font-size: .78rem; }
 .section-guide-item p {
   margin: 0; color: #3d4d48; font: 400 .84rem/1.6 Inter,"Noto Sans CJK SC",sans-serif;
@@ -485,9 +496,10 @@ select option { color: #07120f; }
 .markdown-table-wrap th { color: #f1fffb; background: rgba(102,245,214,.1); font-weight: 700; }
 .markdown-table-wrap tr:last-child td { border-bottom: 0; }
 .markdown-table-wrap th:last-child, .markdown-table-wrap td:last-child { border-right: 0; }
-.response-math-block { display: block; max-width: 100%; margin: .7rem 0; overflow-x: auto; text-align: center; }
-.response-math-inline { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; }
+.response-math-block { display: block; max-width: 100%; margin: .7rem 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
+.response-math-inline { display: inline; max-width: none; overflow: visible; vertical-align: baseline; }
 .markdown-content .katex-display,.structured-output .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.katex .katex-mathml { display: none !important; }
 .structured-output { display: grid; gap: .5rem; }
 .value-block { padding: .62rem; border-radius: 10px; background: rgba(2,12,10,.36); }
 .value-block h4 {
@@ -557,6 +569,7 @@ select option { color: #07120f; }
 .tab-list li { margin: .3rem 0; color: var(--muted); font-size: .74rem; line-height: 1.55; overflow-wrap: anywhere; }
 .reading-composer { padding: .75rem; border-top: 1px solid var(--line); background: rgba(5,16,14,.8); }
 .reading-composer textarea { min-height: 82px; }
+.streaming-plain-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); line-height: 1.72; }
 .composer-row { margin-top: .45rem; }
 .composer-row span { max-width: 210px; color: var(--muted); font-size: .68rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -589,46 +602,6 @@ select option { color: #07120f; }
   height: 100%; padding: 1rem; overflow: auto; align-items: start;
   align-content: start; scroll-snap-type: y proximity;
 }
-.ai-reflow-content {
-  margin-top: 0;
-}
-.ai-reflow-label {
-  margin-bottom: .8rem; color: #0b725d; font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
-}
-.ai-reflow-content .markdown-content { color: #34413d; }
-.ai-reflow-content .markdown-content p,
-.ai-reflow-content .markdown-content li {
-  font: 400 clamp(.96rem,1.1vw,1.04rem)/1.82 Georgia,"Noto Serif CJK SC",serif;
-}
-.ai-reflow-content .markdown-content table { width: 100%; overflow-wrap: anywhere; }
-.reflow-reader { background: #fbfaf6; }
-.reflow-reader .ai-reflow-section { max-width: 860px; }
-.reflow-annotation {
-  padding: 0 .04em; border-radius: 2px; color: inherit; background: rgba(255,223,77,.42);
-  box-decoration-break: clone; -webkit-box-decoration-break: clone;
-}
-.reflow-annotation.pdf-mark-green { background: rgba(104,224,151,.36); }
-.reflow-annotation.pdf-mark-blue { background: rgba(112,163,255,.34); }
-.reflow-annotation.pdf-mark-pink { background: rgba(255,126,171,.34); }
-.reflow-annotation.pdf-mark-note {
-  outline: 1px solid rgba(5,112,91,.48); cursor: pointer;
-}
-.reflow-document-header { width: min(100%,860px); margin: .4rem auto 1.2rem; padding: 1rem 1.1rem 1.15rem; border-bottom: 1px solid rgba(35,75,64,.16); }
-.reflow-document-header h1 { margin: .25rem 0 0; color: #172f29; font: 700 clamp(1.45rem,2.5vw,2.25rem)/1.25 Georgia,"Noto Serif CJK SC",serif; }
-.mineru-markdown { display: grid; gap: .9rem; }
-.mineru-markdown > .markdown-content { display: grid; gap: .85rem; }
-.mineru-markdown .markdown-content p { margin: 0; }
-.mineru-markdown blockquote {
-  margin: .4rem 0; padding: .7rem .9rem; border-left: 3px solid rgba(32,185,151,.5);
-  color: #596762; background: rgba(32,185,151,.05);
-}
-.mineru-figure { margin: 1rem auto; display: grid; justify-items: center; gap: .45rem; }
-.mineru-figure img { display: block; max-width: 100%; height: auto; border-radius: 10px; }
-.mineru-figure figcaption { max-width: 72ch; color: #65716d; font-size: .78rem; line-height: 1.55; text-align: center; }
-.mineru-table-wrap { margin: 1rem 0; overflow: auto; border: 1px solid rgba(35,75,64,.14); border-radius: 12px; background: #fff; }
-.mineru-table { width: 100%; border-collapse: collapse; font-size: .76rem; line-height: 1.45; }
-.mineru-table th, .mineru-table td { min-width: 6rem; padding: .48rem .58rem; border: 1px solid rgba(35,75,64,.12); vertical-align: top; text-align: left; }
-.mineru-table th { color: #18352e; background: rgba(32,185,151,.07); }
 .reading-map-grid.is-survey-vertical {
   grid-auto-flow: row;
   grid-auto-columns: auto;
@@ -651,8 +624,8 @@ select option { color: #07120f; }
 .reading-map-card strong { color: #f1fffb; line-height: 1.32; overflow-wrap: anywhere; }
 .reading-map-card p { margin: 0; color: #b7d7ce; font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
 .reading-map-card small { color: #82aaa0; font-size: .7rem; line-height: 1.5; overflow-wrap: anywhere; }
-.reading-map-fields { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: .36rem .65rem; margin: 0; }
-.reading-map-fields dt { color: #7faaa0; font-size: .7rem; line-height: 1.55; }
+.reading-map-fields { display: grid; grid-template-columns: 5.2rem minmax(0,1fr); align-items: start; gap: .36rem .65rem; margin: 0; }
+.reading-map-fields dt { color: #7faaa0; font-size: .7rem; font-weight: 700; line-height: 1.55; }
 .reading-map-fields dd { margin: 0; color: #c4e1da; font-size: .78rem; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line; }
 .reading-map-why { color: #d5eee7 !important; }
 .reading-map-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -824,6 +797,9 @@ select option { color: #07120f; }
   .reader-panel { height: 78vh; }
   .paper-figure-caption { flex-direction: column; }
   .section-guide { grid-template-columns: 1fr; }
+  .section-guide-item,
+  .section-guide-item.is-featured,
+  .section-guide-item.is-wide-tail { grid-column: 1 / -1; }
   .reading-map-shell { border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
   .reading-map-detail { overflow: visible; }
   .reader-actions .mini-button:not(.is-accent) { display: none; }

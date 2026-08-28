@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 
 from .manager import (
     DEFAULT_DATA_DIR,
+    get_config_file,
     is_setup_complete,
     load_config,
     resolve_data_dir,
@@ -32,12 +33,13 @@ class ConfigUpdate(BaseModel):
     embedding_api_key: str | None = None
     clear_embedding_api_key: bool = False
     embedding_model_name: str | None = None
-    mineru_base_url: str | None = None
-    mineru_api_key: str | None = None
-    clear_mineru_api_key: bool = False
     data_dir: str | None = None
+    feishu_enabled: bool | None = None
+    feishu_app_id: str | None = None
+    feishu_app_secret: str | None = None
+    clear_feishu_app_secret: bool = False
 
-    @field_validator("base_url", "embedding_base_url", "mineru_base_url")
+    @field_validator("base_url", "embedding_base_url")
     @classmethod
     def validate_base_url(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -51,6 +53,11 @@ class ConfigUpdate(BaseModel):
     @field_validator("model_name", "embedding_model_name")
     @classmethod
     def normalize_model_name(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("feishu_app_id", "feishu_app_secret")
+    @classmethod
+    def normalize_feishu_value(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
 
     @field_validator("data_dir")
@@ -103,18 +110,55 @@ def _public_config(config: object) -> dict[str, object]:
             "api_key_configured": bool(config.embedding.api_key.strip()),
             "uses_client_api_key": not bool(config.embedding.api_key.strip()),
         },
-        "mineru": {
-            "base_url": config.mineru.base_url or "",
-            "api_key_configured": bool(config.mineru.api_key.strip()),
-            "enabled": bool(config.mineru.base_url and config.mineru.api_key.strip()),
-        },
         "storage": {
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
             "effective_data_dir": str(resolve_data_dir(config)),
             "environment_override": bool(os.getenv("NOVICESYNAPSE_DATA_DIR")),
         },
+        "channels": {
+            "feishu": {
+                "enabled": bool(config.channels.feishu.enabled),
+                "app_id": config.channels.feishu.app_id,
+                "app_secret_configured": bool(config.channels.feishu.app_secret.strip()),
+                "environment_override": bool(
+                    os.getenv("FEISHU_APP_ID")
+                    or os.getenv("LARK_APP_ID")
+                    or os.getenv("FEISHU_APP_SECRET")
+                    or os.getenv("LARK_APP_SECRET")
+                ),
+            },
+        },
         "setup_complete": is_setup_complete(config),
     }
+
+
+def _tutorial_marker() -> Path:
+    """Store the one-time tutorial flag beside this OS user's config file."""
+    return get_config_file().parent / ".seefurther-tutorial-v2-complete"
+
+
+@router.get("/api/tutorial/status")
+def read_tutorial_status(request: Request) -> dict[str, bool]:
+    _require_local_request(request)
+    return {"completed": _tutorial_marker().is_file()}
+
+
+@router.post("/api/tutorial/complete")
+def complete_tutorial(request: Request) -> dict[str, bool]:
+    _require_local_request(request)
+    marker = _tutorial_marker()
+    temporary = marker.with_name(f".{marker.name}.tmp")
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text("completed\n", encoding="utf-8")
+        temporary.replace(marker)
+    except OSError as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="无法保存教程完成状态。") from error
+    return {"completed": True}
 
 
 @router.get("/api/config")
@@ -139,8 +183,6 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.base_url = payload.embedding_base_url
         if "embedding_model_name" in payload.model_fields_set:
             config.embedding.model_name = payload.embedding_model_name or ""
-        if "mineru_base_url" in payload.model_fields_set:
-            config.mineru.base_url = payload.mineru_base_url
         if payload.clear_api_key:
             config.client.api_key = ""
         elif payload.api_key is not None and payload.api_key.strip():
@@ -149,10 +191,26 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
             config.embedding.api_key = ""
         elif payload.embedding_api_key is not None and payload.embedding_api_key.strip():
             config.embedding.api_key = payload.embedding_api_key.strip()
-        if payload.clear_mineru_api_key:
-            config.mineru.api_key = ""
-        elif payload.mineru_api_key is not None and payload.mineru_api_key.strip():
-            config.mineru.api_key = payload.mineru_api_key.strip()
+        old_feishu = (
+            config.channels.feishu.enabled,
+            config.channels.feishu.app_id,
+            config.channels.feishu.app_secret,
+        )
+        if payload.feishu_enabled is not None:
+            config.channels.feishu.enabled = payload.feishu_enabled
+        if payload.feishu_app_id is not None:
+            config.channels.feishu.app_id = payload.feishu_app_id
+        if payload.clear_feishu_app_secret:
+            config.channels.feishu.app_secret = ""
+        elif payload.feishu_app_secret:
+            config.channels.feishu.app_secret = payload.feishu_app_secret
+        if config.channels.feishu.enabled and not (
+            config.channels.feishu.app_id and config.channels.feishu.app_secret
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="启用飞书前请同时填写 App ID 和 App Secret。",
+            )
         old_data_dir = resolve_data_dir(config)
         if payload.data_dir is not None:
             target = Path(payload.data_dir).expanduser()
@@ -169,6 +227,11 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
         raise HTTPException(status_code=422, detail=f"无法创建数据目录：{error}") from error
 
     data_dir_changed = resolve_data_dir(config) != old_data_dir
+    feishu_changed = old_feishu != (
+        config.channels.feishu.enabled,
+        config.channels.feishu.app_id,
+        config.channels.feishu.app_secret,
+    )
     reload_result: dict[str, object] = {}
     reloader = getattr(request.app.state, "reload_runtime_config", None)
     if callable(reloader):
@@ -180,5 +243,10 @@ def update_web_config(payload: ConfigUpdate, request: Request) -> dict[str, obje
         **_public_config(config),
         "saved": True,
         **reload_result,
-        "restart_required": data_dir_changed or not bool(reload_result.get("runtime_reloaded")),
+        "channels_restart_required": feishu_changed,
+        "restart_required": (
+            data_dir_changed
+            or feishu_changed
+            or not bool(reload_result.get("runtime_reloaded"))
+        ),
     }

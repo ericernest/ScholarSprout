@@ -146,9 +146,24 @@ class ResearchCatalog:
         with self.store._connection() as connection:
             row = connection.execute(
                 """SELECT
-                   (SELECT COUNT(*) FROM conversations) AS conversations,
-                   (SELECT COUNT(*) FROM domain_onboardings) AS domain_onboardings,
-                   (SELECT COUNT(*) FROM paper_reading_sessions) AS paper_readings,
+                   (SELECT COUNT(*) FROM conversations c
+                    WHERE c.parent_conversation_id IS NULL
+                      AND EXISTS (SELECT 1 FROM messages visible_message
+                                  WHERE visible_message.conversation_id = c.conversation_id)
+                      AND NOT EXISTS (SELECT 1 FROM paper_reading_sessions hidden
+                                      WHERE hidden.dialogue_conversation_id = c.conversation_id)
+                      AND NOT (c.conversation_id LIKE 'paper-reading-%'
+                               AND NOT EXISTS (SELECT 1 FROM paper_reading_sessions visible
+                                               WHERE visible.conversation_id = c.conversation_id))) AS conversations,
+                   (SELECT COUNT(*) FROM (
+                      SELECT LOWER(TRIM(REPLACE(REPLACE(REPLACE(d.query, '  ', ' '), '  ', ' '), '  ', ' '))) AS normalized_query,
+                             COALESCE((SELECT link.conversation_id FROM conversation_artifacts link
+                                       WHERE link.artifact_id = d.artifact_id
+                                       ORDER BY link.linked_at DESC LIMIT 1), '') AS conversation_id
+                      FROM domain_onboardings d
+                      GROUP BY normalized_query, conversation_id
+                    )) AS domain_onboardings,
+                   (SELECT COUNT(DISTINCT paper_id) FROM paper_reading_sessions) AS paper_readings,
                    (SELECT COUNT(*) FROM library_items) AS library_papers,
                    (SELECT COUNT(*) FROM library_items WHERE folder_id IS NULL) AS unfiled_papers,
                    (SELECT COUNT(*) FROM papers) AS all_papers"""
@@ -184,7 +199,11 @@ class ResearchCatalog:
                            ORDER BY latest.sequence_number DESC LIMIT 1) AS latest_message
                    FROM conversations c
                    LEFT JOIN messages m ON m.conversation_id = c.conversation_id
-                   WHERE NOT (
+                    WHERE c.parent_conversation_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM paper_reading_sessions hidden
+                        WHERE hidden.dialogue_conversation_id = c.conversation_id
+                    ) AND NOT (
                        c.conversation_id LIKE 'paper-reading-%'
                        AND NOT EXISTS (
                            SELECT 1 FROM paper_reading_sessions prs
@@ -193,8 +212,10 @@ class ResearchCatalog:
                    ) AND (c.title LIKE ? OR EXISTS (
                        SELECT 1 FROM messages found
                        WHERE found.conversation_id = c.conversation_id AND found.content LIKE ?))
-                   GROUP BY c.conversation_id ORDER BY c.last_active_at DESC LIMIT ?""",
-                (pattern, pattern, limit),
+                   GROUP BY c.conversation_id
+                   HAVING COUNT(m.message_id) > 0
+                   ORDER BY c.last_active_at DESC LIMIT ?""",
+                 (pattern, pattern, limit),
             ).fetchall()
         return [
             {
@@ -309,7 +330,7 @@ class ResearchCatalog:
                    LEFT JOIN domain_recommendations r ON r.artifact_id = d.artifact_id
                    WHERE w.title LIKE ? OR d.query LIKE ?
                    GROUP BY d.artifact_id ORDER BY w.updated_at DESC LIMIT ?""",
-                (pattern, pattern, limit),
+                (pattern, pattern, max(limit * 4, limit)),
             ).fetchall()
             job_results: dict[str, dict[str, Any]] = {}
             has_jobs = connection.execute(
@@ -327,7 +348,15 @@ class ResearchCatalog:
                     for row in job_rows
                 }
         items = []
+        seen: set[tuple[str, str]] = set()
         for row in rows:
+            identity = (
+                str(row["conversation_id"] or ""),
+                " ".join(str(row["query"] or "").casefold().split()),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
             overview = _loads(row["overview_json"], {})
             job_result = job_results.get(str(row["artifact_id"]), {})
             job_papers = job_result.get("papers")
@@ -359,7 +388,7 @@ class ResearchCatalog:
                     "updated_at": row["updated_at"],
                 }
             )
-        return items
+        return items[:limit]
 
     def get_domain_onboarding(self, artifact_id: str) -> dict[str, Any] | None:
         with self.store._connection() as connection:
@@ -444,10 +473,15 @@ class ResearchCatalog:
                    LEFT JOIN paper_reading_blocks b ON b.reading_session_id = s.reading_session_id
                    WHERE w.title LIKE ? OR p.title LIKE ?
                    GROUP BY s.reading_session_id ORDER BY s.updated_at DESC LIMIT ?""",
-                (pattern, pattern, limit),
+                 (pattern, pattern, max(limit * 4, limit)),
             ).fetchall()
         items = []
+        seen_papers: set[str] = set()
         for row in rows:
+            paper_identity = str(row["paper_id"] or "")
+            if paper_identity in seen_papers:
+                continue
+            seen_papers.add(paper_identity)
             document = _loads(row["document_json"], {})
             display_title, display_abstract = _paper_display_fields(
                 row["paper_title"], row["paper_abstract"], row["document_json"]
@@ -477,7 +511,7 @@ class ResearchCatalog:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             })
-        return items
+        return items[:limit]
 
     def list_papers(
         self,

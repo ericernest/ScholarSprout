@@ -48,7 +48,12 @@ def record_outbound(app_state: Any, message: ChannelMessage) -> None:
         # history row.
         if not text:
             return
-        store.append_message(
+        writer = (
+            getattr(store, "upsert_message", store.append_message)
+            if message.metadata.get("_upsert_outbound")
+            else store.append_message
+        )
+        writer(
             message.session_id,
             role="assistant",
             content=text,

@@ -24,7 +24,6 @@
       <section id="discussion-context-bar" class="discussion-context-bar" hidden>
         <div class="discussion-context-copy">
           <span class="discussion-context-label">当前讨论</span>
-          <span class="discussion-context-hint">内容按需读取，不会自动塞入对话</span>
         </div>
         <div class="discussion-context-picker">
           <button
@@ -84,10 +83,13 @@
             />
           </div>
         </div>
+        <button id="stop-button" class="stop-button" type="button" hidden>中断</button>
         <button id="send-button" class="send-button" type="submit">发送</button>
       </form>
     </main>
 
+    <script src="/static/model-guard.js"></script>
+    <script src="/static/tutorial-runtime.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

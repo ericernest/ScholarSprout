@@ -6,6 +6,7 @@ import asyncio
 import json
 import mimetypes
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from agents.agent import create_agent
 from bus.message_bus import MessageBus
 from channels.base import ChannelMessage
+from channels.feishu import FeishuChannel
 from channels.web import WebChannel
 from config.manager import is_setup_complete, load_config, resolve_data_dir
 from config.web import router as config_router
@@ -42,6 +44,7 @@ from handlers.paper_reading_handler import (
 )
 from gateway.message_flow import (
     cancel_stream_generation,
+    get_stream_generation,
     process_channel_input,
     process_channel_stream,
 )
@@ -54,7 +57,6 @@ from handlers.paper_reading.kg.engine import KnowledgeGraphEngine
 from handlers.paper_reading.kg.builder import ProgressiveKGBuilder
 from handlers.paper_reading.kg.query import KGQueryEngine
 from handlers.paper_reading.pipeline.sources import PaperPipeline
-from handlers.paper_reading.pipeline.mineru import MinerUClient
 from skills.registry import create_skill_registry
 from skills.selector import CapabilitySelector
 from tools.registry import create_builtin_tool_registry
@@ -208,6 +210,14 @@ def cancel_chat_generation(generation_id: str) -> dict[str, object]:
         "generation_id": generation_id,
         "cancelled": cancel_stream_generation(generation_id),
     }
+
+
+@app.get("/chat/generations/{generation_id}")
+def get_chat_generation(generation_id: str, session_id: str) -> dict[str, object]:
+    snapshot = get_stream_generation(generation_id, session_id=session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    return snapshot
 
 
 # paper_reading 功能入口。
@@ -497,7 +507,12 @@ def close_domain_onboarding_resources() -> None:
 
 
 # 启动 gateway 服务。
-def start_gateway_server(host: str, port: int) -> None:
+def start_gateway_server(
+    host: str,
+    port: int,
+    *,
+    on_server_created: Callable[[uvicorn.Server], None] | None = None,
+) -> None:
     config = load_config()
     model, embedding_model, setup_complete = create_runtime_models(config)
     chat_agent = create_agent(model, "chat")
@@ -524,11 +539,12 @@ def start_gateway_server(host: str, port: int) -> None:
     set_kg_engine(kg_engine)
     set_kg_builder(kg_builder)
     message_bus = MessageBus()
-    input_channel = WebChannel(bus=message_bus)
+
+    web_channel = WebChannel(bus=message_bus)
+
     tool_registry = create_builtin_tool_registry(research_storage)
     skill_registry = create_skill_registry()
     capability_selector = CapabilitySelector()
-    input_channel.start()
 
     app.state.model = model
     app.state.setup_complete = setup_complete
@@ -537,6 +553,7 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.paper_reading_agent = paper_reading_agent
     app.state.research_storage = research_storage
     app.state.memory_service = memory_service
+
     configure_domain_onboarding_runtime(
         app.state,
         model,
@@ -545,12 +562,33 @@ def start_gateway_server(host: str, port: int) -> None:
         embedding_model=embedding_model,
         embedding_model_name=config.embedding.model_name,
     )
+
     app.state.tool_registry = tool_registry
     app.state.skill_registry = skill_registry
     app.state.capability_selector = capability_selector
     app.state.message_bus = message_bus
-    app.state.default_channel_name = input_channel.name
-    app.state.channels = {input_channel.name: input_channel}
+
+    # 先注册 WebChannel
+    app.state.default_channel_name = web_channel.name
+    app.state.channels = {
+        web_channel.name: web_channel,
+    }
+
+    feishu_enabled, feishu_app_id, feishu_app_secret = resolve_feishu_runtime_config(
+        config
+    )
+
+    # 只有配置完整时，才创建并注册 FeishuChannel
+    if feishu_enabled and feishu_app_id and feishu_app_secret:
+        feishu_channel = FeishuChannel(
+            bus=message_bus,
+            app_id=feishu_app_id,
+            app_secret=feishu_app_secret,
+            app_state=app.state,
+        )
+
+        app.state.channels[feishu_channel.name] = feishu_channel
+
     # 论文精读组件
     app.state.paper_storage = paper_storage
     app.state.kg_engine = kg_engine
@@ -559,7 +597,6 @@ def start_gateway_server(host: str, port: int) -> None:
     app.state.session_manager = session_manager
     app.state.fork_manager = fork_manager
     app.state.paper_pipeline = paper_pipeline
-    app.state.mineru_client = MinerUClient(config.mineru)
     app.state.retired_runtime_resources = []
     app.state.reload_runtime_config = lambda updated: reload_runtime_config(
         app.state, updated
@@ -567,7 +604,35 @@ def start_gateway_server(host: str, port: int) -> None:
     if setup_complete:
         resume_pending_reading_map_generations(app.state)
 
-    uvicorn.run(app, host=host, port=port)
+    for channel in app.state.channels.values():
+        channel.start()
+
+    if on_server_created is None:
+        uvicorn.run(app, host=host, port=port)
+        return
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
+    on_server_created(server)
+    server.run()
+
+
+def resolve_feishu_runtime_config(config: object) -> tuple[bool, str, str]:
+    """Resolve the Feishu connection, preserving environment-variable precedence."""
+    environment_app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
+    environment_app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv(
+        "LARK_APP_SECRET"
+    )
+    environment_override = bool(environment_app_id or environment_app_secret)
+    app_id = str(environment_app_id or config.channels.feishu.app_id or "").strip()
+    app_secret = str(
+        environment_app_secret or config.channels.feishu.app_secret or ""
+    ).strip()
+    enabled = environment_override or bool(config.channels.feishu.enabled)
+    if enabled and not (app_id and app_secret):
+        raise RuntimeError(
+            "Feishu configuration is incomplete: both App ID and App Secret are required."
+        )
+    return enabled, app_id, app_secret
 
 
 def create_runtime_models(config: object) -> tuple[object, object, bool]:
@@ -622,7 +687,6 @@ def reload_runtime_config(app_state: object, config: object) -> dict[str, object
     query_engine = getattr(app_state, "kg_query_engine", None)
     if query_engine is not None:
         query_engine.model = model
-    app_state.mineru_client = MinerUClient(config.mineru)
     retired = getattr(app_state, "retired_runtime_resources", None)
     if retired is None:
         retired = []
