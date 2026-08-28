@@ -130,12 +130,6 @@ def chat_page() -> FileResponse:
     return _frontend_page("pages/chat.html", STATIC_DIR / "chat.html")
 
 
-# 返回完全在前端运行的预生成首次使用教程。
-@app.get("/app/tutorial")
-def tutorial_page() -> FileResponse:
-    return _frontend_page("pages/tutorial.html", STATIC_DIR / "chat.html")
-
-
 # 返回首次运行与后续修改共用的配置向导。
 @app.get("/settings")
 def settings_page() -> FileResponse:

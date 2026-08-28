@@ -14,7 +14,8 @@ const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
 const DOMAIN_PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const CHAT_PENDING_GENERATION_KEY = "seefurther_pending_chat_generation_v1";
-const FEATURE_TOUR_KEY = "seefurther_feature_tour_v1";
+const tutorialParams = new URLSearchParams(window.location.search);
+const tutorialActive = tutorialParams.get("tutorial") === "1";
 
 let currentMode = "chat";
 let isGenerating = false;
@@ -54,15 +55,22 @@ const discussionValue = document.querySelector("#discussion-context-value");
 const discussionMenu = document.querySelector("#discussion-context-menu");
 const startExperienceLink = document.querySelector("#start-experience");
 
-if (startExperienceLink && localStorage.getItem(FEATURE_TOUR_KEY) === "completed") {
-  startExperienceLink.href = "/app?new=1";
+if (startExperienceLink) {
+  startExperienceLink.href = "/app?tutorial=1";
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: false })
+    .then((status) => {
+      startExperienceLink.href = status.completed ? "/app?new=1" : "/app?tutorial=1";
+    })
+    .catch(() => {});
 }
-if (
-  document.body.classList.contains("chat-body")
-  && localStorage.getItem(FEATURE_TOUR_KEY) !== "completed"
-  && new URLSearchParams(window.location.search).get("tutorial") !== "skip"
-) {
-  window.location.replace("/app/tutorial");
+if (document.body.classList.contains("chat-body") && !tutorialActive && tutorialParams.get("tutorial") !== "skip") {
+  fetch("/api/tutorial/status", { cache: "no-store" })
+    .then((response) => response.ok ? response.json() : { completed: true })
+    .then((status) => {
+      if (!status.completed) window.location.replace("/app?tutorial=1");
+    })
+    .catch(() => {});
 }
 
 bindChatPage();
@@ -169,6 +177,7 @@ function bindChatPage() {
 
   const initialMode = new URLSearchParams(window.location.search).get("mode");
   setMode(initialMode in modeLabels ? initialMode : currentMode);
+  if (tutorialActive) return;
   void restoreConversationHistory().finally(() => {
     restoreDomainOnboardingCard();
     void restorePendingChatGeneration();
@@ -400,6 +409,7 @@ function setMode(mode) {
 
 // Send user message to current backend endpoint.
 async function sendMessage() {
+  if (tutorialActive) return;
   if (isGenerating) {
     await stopActiveGeneration();
     return;

@@ -29,8 +29,7 @@ export default defineConfig({
         "paper-reading": page("paper-reading"),
         "domain-onboarding": page("domain-onboarding"),
         library: page("library"),
-        settings: page("settings"),
-        tutorial: page("tutorial")
+        settings: page("settings")
       }
     }
   }

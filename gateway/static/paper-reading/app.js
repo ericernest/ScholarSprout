@@ -3898,6 +3898,10 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
+  if (window.SeeFurtherTutorial?.active) {
+    initializeTutorialPaper();
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const requestedPaper = params.get("paper_id");
   const requestedSession = params.get("session_id");
@@ -3939,7 +3943,38 @@ async function restoreLocalState() {
   }
 }
 
+function initializeTutorialPaper() {
+  const paper = window.SeeFurtherTutorial.demoReadingPaper;
+  state.paperId = paper.paper_id;
+  state.sessionId = "tutorial-reading-session";
+  state.conversationId = "tutorial-reading-conversation";
+  state.paper = paper;
+  state.readingMap = paper.reading_map;
+  state.readingMapStatus = "llm_done";
+  state.readingMapPhase = "llm_done";
+  state.readingMapProgress = 100;
+  state.parseStatus = "completed";
+  state.currentSection = paper.sections[0].section_id;
+  state.paperIndex = { sections: paper.sections.map((section) => ({ section_id: section.section_id, summary: section.content })) };
+  state.progress = {
+    percentage: 25,
+    section_statuses: Object.fromEntries(paper.sections.map((section) => [section.section_id, "completed"])),
+  };
+  state.readerMode = "structured";
+  state.readerModeChosen = true;
+  state.restored = true;
+  state.hasPdf = false;
+  $("paper-intake").hidden = true;
+  $("paper-workbench").hidden = false;
+  $("workspace-status").textContent = "论文精读 · 教程演示";
+  $("paper-note-button").hidden = false;
+  $("paper-boot").hidden = true;
+  document.body.classList.remove("is-booting");
+  renderPaperWorkspace();
+}
+
 function persistState() {
+  if (window.SeeFurtherTutorial?.active) return;
   syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);

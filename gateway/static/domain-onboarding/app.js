@@ -104,6 +104,16 @@ bindPanelResizers();
 initialize();
 
 async function initialize() {
+  if (window.SeeFurtherTutorial?.active) {
+    const snapshot = window.SeeFurtherTutorial.demoDomainSnapshot;
+    state.taskId = snapshot.task_id;
+    state.snapshot = snapshot;
+    state.result = snapshot.result;
+    state.partial = {};
+    state.revision = 1;
+    render();
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const saved = readWorkspace();
   const requestedTaskId = params.get("task_id") || "";

@@ -33,25 +33,30 @@ for (const [relativePath, markers] of Object.entries(contracts)) {
 
 test("gateway keeps stable API routes while serving the Vue build", () => {
   const app = readFileSync(join(root, "gateway", "app.py"), "utf8");
-  for (const route of ["/app", "/settings", "/library", "/app/paper-reading", "/app/domain-onboarding", "/app/tutorial"]) {
+  for (const route of ["/app", "/settings", "/library", "/app/paper-reading", "/app/domain-onboarding"]) {
     assert.ok(app.includes(`@app.get("${route}")`), `missing route ${route}`);
   }
   assert.ok(app.includes('FRONTEND_DIR = STATIC_DIR / "app-v2"'));
   assert.ok(app.includes("legacy_path"), "source-checkout fallback was removed");
 });
 
-test("first-use tutorial stays pre-generated and outside normal persistence", () => {
-  const tutorial = readFileSync(join(root, "webui", "src", "components", "ProductTour.vue"), "utf8");
+test("first-use tutorial overlays the real surfaces and stays outside business persistence", () => {
+  const tutorial = readFileSync(join(staticRoot, "tutorial-runtime.js"), "utf8");
   const chat = readFileSync(join(staticRoot, "app.js"), "utf8");
   const home = readFileSync(join(staticRoot, "index.html"), "utf8");
-  assert.ok(tutorial.includes("所有输入、回答和研究结果均为预生成内容"));
-  assert.ok(tutorial.includes("不会写入数据库"));
+  assert.ok(tutorial.includes("教程内容为预生成"));
+  assert.ok(tutorial.includes("不会写入业务数据库"));
   assert.ok(tutorial.includes("跳过教程"));
   assert.ok(tutorial.includes("智能体 Agent"));
   assert.ok(tutorial.includes("这个综述认为的未来可做的有哪些"));
-  assert.ok(!tutorial.includes("fetch("), "tutorial must not call backend APIs");
-  assert.ok(chat.includes('window.location.replace("/app/tutorial")'));
+  assert.ok(tutorial.includes("sf-tour-spotlight"));
+  assert.ok(tutorial.includes("demoDomainSnapshot"));
+  assert.ok(tutorial.includes("demoReadingPaper"));
+  assert.ok(chat.includes('fetch("/api/tutorial/status"'));
+  assert.ok(chat.includes('window.location.replace("/app?tutorial=1")'));
   assert.ok(home.includes('id="start-experience"'));
+  assert.ok(home.includes('/app?tutorial=1'));
+  assert.ok(!readFileSync(join(root, "webui", "vite.config.ts"), "utf8").includes('tutorial: page("tutorial")'));
 });
 
 test("model operations share the local configuration guard", () => {
@@ -63,6 +68,16 @@ test("model operations share the local configuration guard", () => {
   assert.ok(guard.includes("setup_complete"));
   assert.ok(guard.includes("先完成模型配置"));
   for (const html of [chat, paper, domain]) assert.ok(html.includes("/static/model-guard.js"));
+});
+
+test("every guided surface loads the same tutorial runtime before its app", () => {
+  for (const relativePath of ["chat.html", "domain-onboarding/index.html", "library/index.html", "paper-reading/index.html", "settings/index.html"]) {
+    const html = readFileSync(join(staticRoot, ...relativePath.split("/")), "utf8");
+    const tutorialAt = html.indexOf("/static/tutorial-runtime.js");
+    assert.ok(tutorialAt >= 0, `${relativePath} does not load the real-page tutorial runtime`);
+    const ownAppAt = html.lastIndexOf("app.js");
+    assert.ok(tutorialAt < ownAppAt, `${relativePath} initializes the app before tutorial isolation`);
+  }
 });
 
 test("chat exposes a dedicated interrupt control and uses the wide workspace", () => {

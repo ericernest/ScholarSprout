@@ -13,7 +13,6 @@ from gateway.app import (
     paper_reading_figure,
     paper_reading_page,
     paper_reading_upload_pdf,
-    tutorial_page,
 )
 from handlers.paper_reading.harness.storage import PaperReadingStorage
 
@@ -30,11 +29,6 @@ class PaperReadingFrontendTests(unittest.TestCase):
         self.assertEqual(
             Path(response.path), STATIC / "app-v2" / "pages" / "paper-reading.html"
         )
-
-    def test_tutorial_route_targets_vue_entry(self) -> None:
-        response = tutorial_page()
-
-        self.assertEqual(Path(response.path), STATIC / "app-v2" / "pages" / "tutorial.html")
 
     def test_legacy_page_route_returns_to_chat_paper_mode(self) -> None:
         response = legacy_paper_reading_page()
