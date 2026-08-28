@@ -1,227 +1,159 @@
-# NoviceSynapse
+<div align="center">
+  <img src="gateway/static/favicon.svg" width="92" alt="研见 · SeeFurther" />
+  <h1>研见 · SeeFurther</h1>
+  <p><strong>See Further into Research.</strong></p>
+  <p>从一篇论文，看见一个领域。</p>
+</div>
 
-NoviceSynapse 是一个本地优先的 AI Research Assistant，目标是帮助科研新手建立第一批“科研知识连接”，把方向、论文、概念、方法和实验串联起来。
+研见是一款本地优先的 AI 研究工作台，把领域入门、论文发现、PDF 精读、研究对话与个人笔记连接成一条连续工作流。它面向刚进入新方向的研究者，也适合需要长期管理论文、证据和研究上下文的用户。
 
-当前项目使用 Python 开发，支持 Windows 和 Linux 原生开发；生产部署推荐 Linux 或 Docker。Web 端以聊天页作为统一入口，当前提供三个模式：
+> v1 以 Windows 本地使用为主。模型配置、会话、论文、PDF、标注和笔记均由本地后端管理；除调用用户配置的模型与论文检索服务外，不需要额外部署前端服务器。
 
-- 日常聊天：支持 Markdown、表格、流式回答、思考过程折叠和生成中断。
-- 论文精读：从聊天卡片进入独立工作台，支持论文解析、章节索引、PDF 原文定位与缓存、高亮注释、阅读进度恢复、Copilot 问答和 Fork 探索。
-- 领域入门：从聊天卡片进入独立工作台，生成学习者画像、前置知识、发展路径、概念全景、学习路线、论文清单和质量评估，并支持任务进度、取消与重试。
+<!-- 截图占位：首页 / 对话工作台 -->
 
-## 团队文档
+## 核心功能
 
-- 架构介绍：[docs/project-structure.md](docs/project-structure.md)
-- 功能开发说明：[docs/development-guide.md](docs/development-guide.md)
-- Git 分支开发流程：[docs/git-workflow.md](docs/git-workflow.md)
-- 领域入门 V1：[docs/domain-onboarding-v1.md](docs/domain-onboarding-v1.md)
-- 领域入门前后端交接：[docs/领域入门-前后端接口与展示方案.md](docs/领域入门-前后端接口与展示方案.md)
-- 论文精读后端交接：[docs/论文精读-后端功能与接口交接文档.md](docs/论文精读-后端功能与接口交接文档.md)
-- 论文精读前端方案：[docs/论文精读-前端接口与展示方案.md](docs/论文精读-前端接口与展示方案.md)
-- 论文精读原始设计：[DOCX](docs/reference/paper-reading/论文精读.docx) /
-  [PDF](docs/reference/paper-reading/论文精读.pdf)
+### 研究对话
 
-框架、gateway、channel、bus、基础 chat agent 和 Web UI 已经搭好。功能开发同学请优先阅读功能开发说明，并主要在 `handlers/` 中完成论文精读和领域入门逻辑。
+- Markdown、公式、代码块和表格展示
+- 模型回答实时流式输出，可随时中断
+- 可选择一篇论文或一个领域作为“当前讨论”，Agent 只读取该范围内的研究资料
+- 从其他页面返回后继续显示并增量更新尚未完成的回答
+- 支持飞书机器人长连接，飞书消息与网页会话共享同一套研究对话 Agent
 
-## 快速开始
+### 领域入门
 
-推荐 Python 版本：`Python 3.11`
+- **前置知识梳理**：建立概念、方法和基础工作的依赖关系
+- **领域发展路径**：理解关键阶段、技术转折与代表工作
+- **概念全景**：从核心问题进入相关方向与论文
+- **论文清单**：最多 3 篇 Survey，再补充最多 3 篇由这些 Survey 引用的论文
+- 显示任务阶段与进度，支持取消、失败重试和继续查看
+- 可将推荐论文加入资料库，或下载 PDF 后直接开始论文精读
 
-Windows（PowerShell/命令提示符）和 Linux 使用同一组 `conda`、`pip` 与 `novicesynapse` 命令。路径通过 `pathlib` 处理，不要在配置中混用两种系统的路径：Windows 可填 `D:\NoviceSynapseData`，Linux 可填 `/home/<user>/novicesynapse-data`。默认的 `~/.novicesynapse` 在两种系统上都会展开到当前用户主目录。
+<!-- 截图占位：领域入门 -->
 
-使用 conda：
+### 论文精读
+
+- 上传本地 PDF，或从 PDF/arXiv 链接导入论文
+- PDF 原文、论文目录和智能索引双向联动
+- 研究总览集中整理研究问题、核心方法、方法步骤、实验支撑与局限
+- 智能体解释、分析本节、原文选区提问和专项探索
+- 高亮、注释、阅读位置与进度自动保存
+- 为每篇论文保存 Markdown 笔记，支持普通编辑、源码编辑、表格和公式
+
+<!-- 截图占位：论文精读 -->
+
+### 研究资料库
+
+- 统一管理会话、领域入门任务、论文和精读记录
+- 使用文件夹组织论文，恢复阅读状态并继续精读
+- 自动合并重复记录，保留论文来源、PDF 状态及关联上下文
+
+## 直接使用 Windows 版
+
+从 [v1 Release](https://github.com/ericernest/NoviceSynapse/releases/tag/v1.0.0) 下载任一版本：
+
+| 版本 | 文件 | 适合场景 |
+| --- | --- | --- |
+| **快速启动目录版（推荐）** | `SeeFurther-v1.0.0-windows-x64-portable.zip` | 完整解压后双击 `SeeFurther.exe`；启动快，移动时需要保留整个文件夹 |
+| **单文件版** | `SeeFurther-v1.0.0-windows-x64.exe` | 只需携带一个 exe；每次启动需要先释放运行文件，因此会更慢 |
+
+两种版本均为 Windows x64 免安装程序，已包含 Python 运行时、Web 前端、PDF 解析依赖和飞书 SDK。使用者不需要安装 Python、Node.js 或其它环境，只需准备一个 OpenAI 兼容的大模型 API。
+
+程序默认监听 `127.0.0.1:8000`；如果端口被占用，会在 `8001-8099` 中选择可用端口并打开浏览器。运行期间可通过系统托盘重新打开页面或选择“退出研见”。
+
+> Windows SmartScreen 可能提示未识别的发布者，这是因为当前 v1 尚未使用商业代码签名证书。请只从本仓库 Release 下载。
+
+## 从源码运行
+
+支持 Windows 和 Linux，要求 Python 3.11+：
 
 ```bash
-conda create -n novicesynapse python=3.11 -y
-```
-
-```bash
-conda activate novicesynapse
-```
-
-进入项目目录并安装：
-
-```bash
+git clone https://github.com/ericernest/NoviceSynapse.git
 cd NoviceSynapse
-```
-
-```bash
-pip install -e .
-```
-
-## 配置模型
-
-启动 gateway 后，推荐打开网页配置向导：
-
-```text
-http://127.0.0.1:8000/settings
-```
-
-首次运行即使尚未填写 API Key，也可以先启动 gateway 并打开这个页面。也可以继续使用命令行配置：
-
-```bash
-novicesynapse config
-```
-
-配置文件保存在：
-
-```text
-~/.novicesynapse/config.json
-```
-
-中科大 LLM 平台示例配置：
-
-```json
-{
-  "client": {
-    "api_key": "<your-ustc-api-key>",
-    "base_url": "https://api.llm.ustc.edu.cn/v1",
-    "model_name": "qwen-chat",
-    "timeout": 60.0,
-    "max_retries": 2,
-    "input_cost_per_million_tokens": null,
-    "output_cost_per_million_tokens": null
-  },
-  "storage": {
-    "data_dir": "~/.novicesynapse"
-  }
-}
-```
-
-注意：配置文件中的 `api_key` 只填写 key 本身，不需要加 `Bearer ` 前缀；OpenAI SDK 会自动生成 `Authorization: Bearer <api_key>` 请求头。
-
-也可以使用其它兼容 OpenAI SDK 的模型服务，只要提供 `base_url`、`api_key` 和可用的 `model_name`。
-
-会话、论文结构化数据、上传的 PDF 和图片默认写入 `storage.data_dir`。也可以用 `NOVICESYNAPSE_DATA_DIR` 环境变量覆盖该配置；修改目录后需重启服务，旧目录数据不会自动迁移。
-
-跨平台注意事项：SQLite 数据库、PDF、图片和配置文件都位于数据目录内；不依赖 `fork`、Unix socket 或平台专属文件锁。Dockerfile 使用 Linux 容器，在 Windows 上应通过 Docker Desktop 的 Linux 容器模式运行。若需要在 Windows 与 Linux 之间切换开发环境，请重新安装当前平台的 Python 依赖，不要直接复用另一平台创建的虚拟环境。
-
-如需估算领域入门重试产生的额外货币成本，可以按模型计价填写每百万输入、输出 token 单价。未配置单价时仍会记录实际 token，但 `estimated_cost` 返回 `null`。
-
-## CLI 命令
-
-查看命令：
-
-```bash
-novicesynapse --help
-```
-
-交互式配置：
-
-```bash
-novicesynapse config
-```
-
-检查配置：
-
-```bash
-novicesynapse doctor
-```
-
-启动本地 gateway：
-
-```bash
+python -m pip install -e .
 novicesynapse gateway --host 127.0.0.1 --port 8000
 ```
 
-校园网部署请使用 `deploy/start_campus.sh`，服务默认监听 `0.0.0.0:8000`，具体启动命令和网络放行要求见 [`deploy/campus-network.md`](deploy/campus-network.md)。
+打开 <http://127.0.0.1:8000/>。
 
-## Gateway 接口命令
-
-启动 gateway 后，可以用命令行直接访问当前三个功能入口。
-
-日常聊天：
+仓库已包含可直接运行的前端构建产物。只有修改了 `webui/` 时才需要 Node.js 18+ 并重新构建：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat -H "Content-Type: application/json" -d '{"session_id":"s1","content":"你好","user_id":"local","metadata":{}}'
-curl -X POST http://127.0.0.1:8000/chat -H "Content-Type: application/json" -d '{"session_id":"s1","content":"现在是什么时间","user_id":"local","metadata":{}}'
+cd webui
+npm install
+npm run build
 ```
 
-论文精读：
+## 配置
 
-```bash
-curl -X POST http://127.0.0.1:8000/paper_reading -H "Content-Type: application/json" -d '{"session_id":"s1","content":"请帮我精读这篇论文：https://arxiv.org/abs/xxxx.xxxxx","user_id":"local","metadata":{}}'
-```
+首次启动会进入教程，也可以随时打开 <http://127.0.0.1:8000/settings>。配置分为“模型与数据”和“多渠道”两个页面。
 
-领域入门：
+### 基础模型（必填）
 
-```bash
-curl -X POST http://127.0.0.1:8000/domain_onboarding -H "Content-Type: application/json" -d '{"session_id":"s1","content":"我想入门多模态大模型方向","user_id":"local","metadata":{}}'
-```
+| 配置项 | 说明 | 示例 |
+| --- | --- | --- |
+| Base URL | OpenAI 兼容接口的完整地址 | `https://api.example.com/v1` |
+| API Key | 模型服务商提供的密钥，只填写 Key 本身 | `sk-...` |
+| 模型名称 | 服务商接口接受的 `model` 参数 | `qwen-plus` |
 
-聊天和论文精读同时提供 SSE 流式接口，使用 `curl -N` 可以直接查看增量输出：
+API Key 保存在运行研见的电脑后端，不会在配置页面加载时回传明文。配置文件默认位于当前用户目录下的 `.novicesynapse/config.json`。
 
-```bash
-curl -N -X POST http://127.0.0.1:8000/chat/stream -H "Content-Type: application/json" -d '{"session_id":"s1","content":"解释一下 RAG","user_id":"local","metadata":{}}'
-curl -N -X POST http://127.0.0.1:8000/paper_reading/stream -H "Content-Type: application/json" -d '{"session_id":"s1","content":"总结当前章节","user_id":"local","metadata":{}}'
-```
+### Embedding（可选）
 
-领域入门的独立工作台使用异步任务接口：
+Embedding 用于论文排序与证据匹配。URL 和 API Key 留空时复用基础模型配置；如果服务商不提供 Embedding，可以保持默认，相关能力调用失败时会自动降级，不影响基础对话与论文阅读。
 
-- 创建任务：`POST /domain_onboarding/jobs`
-- 查询任务：`GET /domain_onboarding/jobs/{task_id}`
-- 订阅进度：`GET /domain_onboarding/jobs/{task_id}/events`
-- 取消任务：`DELETE /domain_onboarding/jobs/{task_id}`
-- 重试任务：`POST /domain_onboarding/jobs/{task_id}/retry`
+### 数据目录
 
-健康检查：
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-领域入门运行指标：
-
-```bash
-curl http://127.0.0.1:8000/metrics/domain_onboarding
-```
-
-该接口返回请求耗时、重试率、改善率、额外模型调用次数、额外 token 和可选费用估算。指标保存在当前 Gateway 进程内，服务重启后重新计数。
-
-## Web UI
-
-启动 gateway 后访问首页：
+会话数据库、论文、PDF、图片、标注和笔记默认保存在当前用户的 `.novicesynapse` 目录。配置页支持改为其它绝对路径，例如：
 
 ```text
-http://127.0.0.1:8000/
+Windows: D:\SeeFurtherData
+Linux:   /home/user/seefurther-data
 ```
 
-点击“开始体验”进入聊天页，也可以直接访问：
+修改数据目录后需要重启研见，原目录的数据不会自动迁移。
 
-```text
-http://127.0.0.1:8000/app
-```
+### 飞书机器人（可选）
 
-首页和聊天页均提供“配置”入口，首次配置及后续修改使用同一页面。
+在“多渠道”页面填写飞书 App ID 和 App Secret。飞书开放平台需要完成：
 
-会话、领域入门、论文精读和论文管理统一位于：
+1. 创建企业自建应用并启用机器人能力；
+2. 在事件订阅中选择“使用长连接接收事件”；
+3. 添加事件 `im.message.receive_v1`；
+4. 开通 `im:message` 和 `im:message.p2p_msg:readonly` 权限；
+5. 创建版本并发布最新版本；
+6. 将 App ID 和 App Secret 填入研见，启用后保存并重启程序。
 
-```text
-http://127.0.0.1:8000/library
-```
+无需公网回调地址。机器人接收文本消息后会复用研见的研究对话 Agent，回答同时保存在本地会话数据库中。
 
-论文精读工作台中的 PDF 高亮与注释会保存到本地 SQLite；浏览器同时保留缓存，已有浏览器标注会在首次打开时自动同步。
+## 页面入口
 
-聊天页默认模式是“日常聊天”。点击输入框旁边的 `+` 可以选择：
+| 页面 | 地址 | 用途 |
+| --- | --- | --- |
+| 首页 | `/` | 开始体验、进入教程和资料库 |
+| 研究对话 | `/app` | 日常聊天与研究上下文对话 |
+| 领域入门 | `/app/domain-onboarding` | 前置知识、发展路径、概念全景和论文清单 |
+| 论文精读 | `/app/paper-reading` | PDF、智能索引、研究总览、选区问答和笔记 |
+| 资料库 | `/library` | 会话、论文、文件夹和精读记录 |
+| 配置 | `/settings` | 模型、数据目录和飞书渠道 |
 
-- 日常聊天：`chat`
-- 论文精读：`paper_reading`
-- 领域入门：`domain_onboarding`
+## 数据与隐私
 
-选择非默认模式后，输入框内会出现当前模式的小气泡，点击 `×` 可以取消并回到日常聊天。
+- 网页配置接口默认只允许本机访问。
+- 模型 API Key、飞书密钥和业务数据保存在本地后端。
+- 论文内容只会按功能需要发送给用户配置的模型服务。
+- 若要迁移数据，请完整备份配置的数据目录。
 
-论文精读和领域入门都会先在聊天中返回任务卡片。论文解析或领域入门任务准备完成后，点击卡片进入对应工作台：
+## 技术栈
 
-```text
-http://127.0.0.1:8000/app/paper-reading
-http://127.0.0.1:8000/app/domain-onboarding
-```
+- 前端：Vue 3、TypeScript、Vite，以及按页面拆分的兼容层
+- 后端：Python、FastAPI、SQLite
+- PDF：PyMuPDF、PDF.js、KaTeX
+- 模型协议：OpenAI 兼容 API
+- 多渠道：飞书/Lark 长连接
+- Windows 发布：PyInstaller
 
-模型生成期间可以点击“中断”。流式输出结束后，页面只保留最终回答，思考过程默认折叠在回答上方；回答会定位到内容开头，便于从头阅读。
+## License
 
-## 测试
-
-运行完整测试：
-
-```bash
-python -m pytest -q
-```
+[MIT License](LICENSE)
