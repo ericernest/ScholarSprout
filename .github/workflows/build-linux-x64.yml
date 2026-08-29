@@ -9,16 +9,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    container: quay.io/pypa/manylinux_2_28_x86_64:latest
+    container: rockylinux:8
     permissions:
       contents: read
 
     steps:
+      - name: Install Linux build runtime
+        run: dnf install -y git tar gzip python3.11 python3.11-pip python3.11-devel
+
       - uses: actions/checkout@v4
 
       - name: Create isolated build environment
         run: |
-          /opt/python/cp311-cp311/bin/python -m venv packaging/linux-x64/.venv
+          python3.11 -m venv packaging/linux-x64/.venv
           packaging/linux-x64/.venv/bin/python -m pip install --upgrade pip
           packaging/linux-x64/.venv/bin/python -m pip install -e . "pyinstaller>=6.11,<7"
 
