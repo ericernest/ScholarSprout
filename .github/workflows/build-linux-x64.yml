@@ -1,0 +1,54 @@
+name: Build Linux x86_64 package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - packaging/linux-x64
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container: quay.io/pypa/manylinux_2_28_x86_64:latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create isolated build environment
+        run: |
+          /opt/python/cp311-cp311/bin/python -m venv packaging/linux-x64/.venv
+          packaging/linux-x64/.venv/bin/python -m pip install --upgrade pip
+          packaging/linux-x64/.venv/bin/python -m pip install -e . "pyinstaller>=6.11,<7"
+
+      - name: Build portable directory package
+        run: BUILD_PYTHON="$PWD/packaging/linux-x64/.venv/bin/python" bash packaging/linux-x64/build.sh
+
+      - name: Smoke test packaged gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SEEFURTHER_SKIP_BROWSER=1
+          export NOVICESYNAPSE_DATA_DIR="$RUNNER_TEMP/seefurther-linux-smoke"
+          packaging/linux-x64/output/SeeFurther/SeeFurther &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if packaging/linux-x64/.venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=1).read()"; then
+              break
+            fi
+            sleep 0.25
+          done
+          packaging/linux-x64/.venv/bin/python - <<'PY'
+          import urllib.request
+          assert b'"status":"ok"' in urllib.request.urlopen('http://127.0.0.1:8000/health').read()
+          assert b'context-import-modal' in urllib.request.urlopen('http://127.0.0.1:8000/static/chat.html').read()
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SeeFurther-v1.0.0-linux-x86_64
+          path: packaging/linux-x64/output/SeeFurther-v1.0.0-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 7

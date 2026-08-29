@@ -36,6 +36,9 @@ MANIFEST
 packaging/windows-onefile/output/
 packaging/windows-onefile/work/
 packaging/windows-onefile/.venv/
+packaging/linux-x64/output/
+packaging/linux-x64/work/
+packaging/linux-x64/.venv/
 
 # Installer logs
 pip-log.txt
