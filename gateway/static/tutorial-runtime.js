@@ -157,7 +157,7 @@
   const steps = [
     { id: "paper-mode", page: "chat", route: "/app?tutorial=1", target: "#mode-button", title: "选择论文精读", copy: "先从研究模式中选择论文精读，单独导入一篇想读的论文。" },
     { id: "paper-upload", page: "chat", route: "/app?tutorial=1", target: "#paper-file-button", companion: "#paper-mode-input", title: "上传一篇论文", copy: "选择本地 PDF，也可以拖入 PDF，或粘贴 PDF、arXiv 链接。" },
-    { id: "paper-submit", page: "chat", route: "/app?tutorial=1", target: "#send-button", title: "解析论文", copy: "点击解析论文后，研见会提取元数据、章节结构并生成精读任务。" },
+    { id: "paper-submit", page: "chat", route: "/app?tutorial=1", target: "#send-button", title: "解析论文", copy: "点击解析论文后，小芽会提取元数据、章节结构并生成精读任务。" },
     { id: "paper-card", page: "chat", route: "/app?tutorial=1", target: ".tour-paper-card", title: "进入论文精读", copy: "解析完成后，从论文卡片进入完整精读工作台。" },
     { id: "reading-index", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#paper-outline", title: "智能索引", copy: "章节索引与 PDF 页码联动，点击章节即可定位原文。" },
     { id: "reading-map", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#reading-map-panel", title: "研究总览", copy: "集中查看研究问题、核心方法、方法步骤、实验支撑与局限。" },
@@ -167,7 +167,7 @@
     { id: "reading-note", page: "reading", route: "/app/paper-reading?tutorial=1", target: "#paper-note-button", companion: "#paper-note-drawer", title: "论文笔记", copy: "阅读时可以随时记录 Markdown 笔记，在普通编辑与源码编辑间切换，笔记会关联当前论文。" },
     { id: "domain-mode", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#mode-button", title: "选择领域入门", copy: "完成单篇精读介绍后，再从研究模式进入一个领域的系统学习。" },
     { id: "domain-query", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#message-input", title: "提出一个领域", copy: "示例领域：智能体 Agent。" },
-    { id: "domain-submit", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#send-button", title: "生成领域地图", copy: "研见会梳理领域基础、发展路径、概念全景和核心论文。" },
+    { id: "domain-submit", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: "#send-button", title: "生成领域地图", copy: "小芽会梳理领域基础、发展路径、概念全景和核心论文。" },
     { id: "domain-card", page: "chat", route: "/app?tutorial=1&tutorial_phase=domain", target: ".tour-domain-card", title: "进入领域卡片", copy: "任务完成后，从卡片进入领域学习地图。" },
     { id: "domain-prerequisites", page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#prerequisites-content [data-detail-kind='prerequisite']", companion: ".inspector", title: "前置知识梳理", copy: "选择知识卡片，右侧同步展示关键概念与关联论文。" },
     { id: "domain-development", page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "#development-content [data-detail-kind='stage'], #development-content [data-detail-kind='research-stage']", companion: ".inspector", title: "领域发展路径", copy: "选择发展阶段，右侧同步展示技术转折、核心概念与代表工作。" },
@@ -177,11 +177,11 @@
     { id: "domain-start-reading", page: "domain", route: "/app/domain-onboarding?tutorial=1", target: "[data-import-paper]", title: "开始论文精读", copy: "除了单独上传论文，也可以从领域入门的论文详情下载 PDF，并从这里进入论文精读。" },
     { id: "library-folders", page: "library", route: "/library?view=papers&tutorial=1", target: "#folder-tree", title: "论文文件夹", copy: "使用真实资料库页面新建文件夹、移动论文并管理阅读状态。" },
     { id: "library-paper", page: "library", route: "/library?view=papers&tutorial=1", target: ".item-card", title: "论文管理", copy: "从论文卡片继续精读、查看笔记或调整所在文件夹。" },
-    { id: "discussion-select", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#discussion-context-button", title: "多选当前讨论", copy: "一个会话可以同时选择多篇论文和领域入门，研见会在这些范围内比较与综合。" },
+    { id: "discussion-select", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#discussion-context-button", title: "多选当前讨论", copy: "一个会话可以同时选择多篇论文和领域入门，小芽会在这些范围内比较与综合。" },
     { id: "discussion-import", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "[data-import-contexts]", title: "引入会话外部结果", copy: "还可以打开研究结果选择页，搜索并多选其他会话中的论文精读或领域入门，再加入当前讨论。" },
     { id: "discussion-import-picker", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#context-import-results", companion: "#context-import-modal", title: "搜索与多选", copy: "按论文精读或领域入门筛选，选中多个结果后点击“引入并选中”。" },
     { id: "discussion-query", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#message-input", title: "围绕综述继续提问", copy: "示例问题：这个综述认为的未来可做的有哪些？" },
-    { id: "discussion-answer", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#send-button", title: "围绕当前讨论回答", copy: "研见会围绕选定综述中的开放问题继续讨论。" },
+    { id: "discussion-answer", page: "return-chat", route: "/app?tutorial=1&tutorial_phase=return", target: "#send-button", title: "围绕当前讨论回答", copy: "小芽会围绕选定综述中的开放问题继续讨论。" },
     { id: "settings", page: "settings", route: "/settings?tutorial=1", target: ".config-tabs", companion: "#settings-form", title: "配置模型与多渠道", copy: "最后配置模型、数据目录与飞书等消息渠道；密钥仅保存在本地后端。" }
   ];
 
