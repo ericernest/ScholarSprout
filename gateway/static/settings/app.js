@@ -73,7 +73,7 @@ form?.addEventListener("submit", async (event) => {
     if (clearFeishuAppSecret) clearFeishuAppSecret.checked = false;
     showMessage(
       result.channels_restart_required
-        ? "飞书配置已保存；请重启研见后建立或关闭飞书连接。"
+        ? "飞书配置已保存；请重启科研萌芽后建立或关闭飞书连接。"
         : result.restart_required
         ? "配置已保存；数据目录或运行时未能热更新，请重启服务后生效。"
         : "配置已保存并立即生效，新请求会使用当前配置。",
@@ -119,8 +119,8 @@ function applyConfig(config) {
   setText(feishuConfigState, config.channels?.feishu?.environment_override
     ? "环境变量正在覆盖页面中的飞书凭据；修改页面配置后仍需移除环境变量并重启。"
     : config.channels?.feishu?.enabled
-      ? "飞书已启用；如刚修改凭据，请重启研见后生效。"
-      : "飞书未启用。保存凭据并打开开关后，重启研见即可连接。");
+      ? "飞书已启用；如刚修改凭据，请重启科研萌芽后生效。"
+      : "飞书未启用。保存凭据并打开开关后，重启科研萌芽即可连接。");
   setText(setupBadge, config.setup_complete ? "已配置" : "首次配置");
   setText(guideTitle, config.setup_complete ? "模型数据配置" : "三步完成配置");
   if (config.storage?.environment_override) {

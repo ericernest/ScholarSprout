@@ -89,7 +89,7 @@ onBeforeUnmount(() => {
   <main class="pa-surface-root" :data-surface="surfaceId">
     <div v-if="status === 'loading'" class="pa-boot" role="status" aria-live="polite">
       <img :src="faviconPath" alt="" width="58" height="58" />
-      <strong>研见 · SeeFurther</strong>
+      <strong>科研萌芽·ScholarSprout</strong>
       <span>正在点亮研究工作台…</span>
     </div>
     <div v-if="status === 'error'" class="pa-boot pa-boot-error" role="alert">
