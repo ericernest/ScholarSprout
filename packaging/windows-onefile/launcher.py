@@ -1,4 +1,4 @@
-"""Windows one-file launcher for SeeFurther."""
+"""Windows portable launcher for ScholarSprout."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ MAX_PORT = 8099
 def _icon_path() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / "packaging" / "windows-onefile" / "seefurther.ico"
-    return Path(__file__).with_name("seefurther.ico")
+    return Path(__file__).with_name("scholarsprout.ico")
 
 
 class _TrayController:
@@ -74,19 +74,19 @@ def _start_tray(controller: _TrayController) -> threading.Thread:
     with Image.open(_icon_path()) as icon_source:
         tray_image = icon_source.convert("RGBA")
     tray_icon = pystray.Icon(
-        "SeeFurther",
+        "ScholarSprout",
         tray_image,
-        "研见 · SeeFurther",
+        "科研萌芽·ScholarSprout",
         menu=pystray.Menu(
-            pystray.MenuItem("打开研见", controller.open_app, default=True),
+            pystray.MenuItem("打开科研萌芽", controller.open_app, default=True),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出研见", controller.exit_app),
+            pystray.MenuItem("退出科研萌芽", controller.exit_app),
         ),
     )
     controller.set_icon(tray_icon)
     tray_thread = threading.Thread(
         target=tray_icon.run,
-        name="seefurther-tray",
+        name="scholarsprout-tray",
         daemon=True,
     )
     tray_thread.start()
@@ -118,7 +118,7 @@ def _open_when_ready(port: int) -> None:
 
 
 def _show_error(message: str) -> None:
-    log_root = Path(os.getenv("LOCALAPPDATA") or Path.home()) / "SeeFurther"
+    log_root = Path(os.getenv("LOCALAPPDATA") or Path.home()) / "ScholarSprout"
     try:
         log_root.mkdir(parents=True, exist_ok=True)
         (log_root / "launcher-error.log").write_text(
@@ -130,7 +130,7 @@ def _show_error(message: str) -> None:
     ctypes.windll.user32.MessageBoxW(
         None,
         message,
-        "研见 · SeeFurther 启动失败",
+        "科研萌芽·ScholarSprout 启动失败",
         0x10,
     )
 
@@ -144,9 +144,9 @@ def main() -> None:
     try:
         port = _find_available_port()
         tray_controller = _TrayController(port)
-        if os.getenv("SEEFURTHER_SKIP_TRAY") != "1":
+        if os.getenv("SCHOLARSPROUT_SKIP_TRAY", os.getenv("SEEFURTHER_SKIP_TRAY")) != "1":
             _start_tray(tray_controller)
-        if os.getenv("SEEFURTHER_SKIP_BROWSER") != "1":
+        if os.getenv("SCHOLARSPROUT_SKIP_BROWSER", os.getenv("SEEFURTHER_SKIP_BROWSER")) != "1":
             threading.Thread(target=_open_when_ready, args=(port,), daemon=True).start()
         start_gateway_server(
             host=HOST,
