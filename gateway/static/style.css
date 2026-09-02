@@ -142,10 +142,6 @@ h1 {
   line-height: 1.85;
 }
 
-.hero-copy span {
-  display: block;
-}
-
 .hero-meta {
   display: flex;
   flex-wrap: wrap;
