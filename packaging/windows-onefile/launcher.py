@@ -25,7 +25,7 @@ MAX_PORT = 8099
 
 def _icon_path() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS) / "packaging" / "windows-onefile" / "seefurther.ico"
+        return Path(sys._MEIPASS) / "packaging" / "windows-onefile" / "scholarsprout.ico"
     return Path(__file__).with_name("scholarsprout.ico")
 
 

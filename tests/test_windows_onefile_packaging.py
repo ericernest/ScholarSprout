@@ -51,6 +51,20 @@ def test_tray_menu_uses_brand_actions_and_graceful_shutdown() -> None:
     assert "on_server_created: Callable[[uvicorn.Server], None] | None" in gateway
 
 
+def test_frozen_tray_icon_path_matches_packaged_icon(monkeypatch, tmp_path: Path) -> None:
+    launcher_path = PACKAGE_ROOT / "launcher.py"
+    spec = importlib.util.spec_from_file_location("scholarsprout_windows_launcher_icon", launcher_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(module.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    expected = tmp_path / "packaging" / "windows-onefile" / "scholarsprout.ico"
+    assert module._icon_path() == expected
+
+
 def test_tray_exit_requests_server_shutdown_and_stops_icon() -> None:
     launcher_path = PACKAGE_ROOT / "launcher.py"
     spec = importlib.util.spec_from_file_location("scholarsprout_windows_launcher", launcher_path)
