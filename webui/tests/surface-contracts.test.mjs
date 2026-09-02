@@ -28,6 +28,10 @@ for (const [relativePath, markers] of Object.entries(contracts)) {
     const html = readFileSync(join(staticRoot, ...relativePath.split("/")), "utf8");
     for (const marker of markers) assert.ok(html.includes(marker), `${relativePath} is missing ${marker}`);
     assert.ok(!html.includes("NoviceSynapse"), `${relativePath} still exposes the retired brand`);
+    assert.ok(!html.includes("研见"), `${relativePath} still exposes the previous Chinese brand`);
+    assert.ok(!html.includes("SeeFurther"), `${relativePath} still exposes the previous English brand`);
+    assert.ok(html.includes("科研萌芽"), `${relativePath} is missing the current Chinese brand`);
+    assert.ok(html.includes("ScholarSprout"), `${relativePath} is missing the current English brand`);
   });
 }
 
@@ -111,6 +115,17 @@ test("chat exposes a dedicated interrupt control and uses the wide workspace", (
   assert.ok(javascript.includes("/cancel"));
   assert.ok(styles.includes("width: calc(100% - clamp(24px, 3.2vw, 52px))"));
   assert.ok(styles.includes("max-width: none"));
+  assert.ok(html.includes("你好，我是科研助手小芽。"));
+});
+
+test("the shared icon represents the ScholarSprout brand", () => {
+  const legacyIcon = readFileSync(join(staticRoot, "favicon.svg"), "utf8");
+  const vueIcon = readFileSync(join(root, "webui", "public", "favicon.svg"), "utf8");
+  for (const icon of [legacyIcon, vueIcon]) {
+    assert.ok(icon.includes('aria-label="科研萌芽·ScholarSprout"'));
+    assert.ok(icon.includes('id="leaf-left"'));
+    assert.ok(icon.includes('id="leaf-right"'));
+  }
 });
 
 test("external-channel answers refresh incrementally without rebuilding every message", () => {
@@ -139,8 +154,8 @@ test("Vue compatibility layer preserves the previous surface design", () => {
   const overrides = readFileSync(join(root, "webui", "public", "styles", "legacy-overrides.css"), "utf8");
   const guide = readFileSync(join(root, "webui", "src", "components", "ProductGuide.vue"), "utf8");
   const home = readFileSync(join(root, "gateway", "static", "index.html"), "utf8");
-  assert.ok(home.includes("研见 · SeeFurther"));
-  assert.ok(home.includes("See Further into Research."));
+  assert.ok(home.includes("科研萌芽·ScholarSprout"));
+  assert.ok(home.includes("Where Research Takes Root."));
   assert.ok(!overrides.includes(".chat-page { max-width"));
   assert.ok(!overrides.includes("focus-within"));
   assert.ok(!overrides.includes("outline: 3px"));

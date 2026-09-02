@@ -31,7 +31,7 @@ onBeforeUnmount(() => window.clearTimeout(openTimer));
     <div class="pa-guide-header">
       <div class="pa-guide-mark"><img :src="faviconPath" alt="" /></div>
       <div class="pa-guide-heading">
-        <p class="pa-guide-kicker">研见 · SeeFurther</p>
+        <p class="pa-guide-kicker">科研萌芽·ScholarSprout</p>
         <h2>{{ surface.guideTitle }}</h2>
       </div>
     </div>
