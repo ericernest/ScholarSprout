@@ -116,6 +116,14 @@ test("chat exposes a dedicated interrupt control and uses the wide workspace", (
   assert.ok(styles.includes("width: calc(100% - clamp(24px, 3.2vw, 52px))"));
   assert.ok(styles.includes("max-width: none"));
   assert.ok(html.includes("你好，我是科研助手小芽。"));
+  assert.ok(html.includes("<span>科研萌芽·ScholarSprout</span>"));
+});
+
+test("home copy uses intentional semantic line breaks", () => {
+  const html = readFileSync(join(staticRoot, "index.html"), "utf8");
+  assert.ok(html.includes("<span>从一篇论文，看见一个领域。</span>"));
+  assert.ok(html.includes("<span>让论文中原本晦暗的信息显现出结构、联系与研究方向，</span>"));
+  assert.ok(html.includes("<span>在本地完成可持续的精读、探索和知识积累。</span>"));
 });
 
 test("the shared icon represents the ScholarSprout brand", () => {
