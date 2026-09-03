@@ -1,11 +1,11 @@
 <div align="center">
-  <img src="gateway/static/favicon.svg" width="92" alt="研见 · SeeFurther" />
-  <h1>研见 · SeeFurther</h1>
-  <p><strong>See Further into Research.</strong></p>
-  <p>从一篇论文，看见一个领域。</p>
+  <img src="gateway/static/favicon.svg" width="92" alt="科研萌芽·ScholarSprout" />
+  <h1>科研萌芽·ScholarSprout</h1>
+  <p><strong>Where Research Takes Root.</strong></p>
+  <p>让每一个科研问题从好奇萌芽。</p>
 </div>
 
-研见是一款本地优先的 AI 研究工作台，把领域入门、论文发现、PDF 精读、研究对话与个人笔记连接成一条连续工作流。它面向刚进入新方向的研究者，也适合需要长期管理论文、证据和研究上下文的用户。
+科研萌芽·ScholarSprout 是一款本地优先的 AI 研究工作台，把领域入门、论文发现、PDF 精读、研究对话与个人笔记连接成一条连续工作流。它面向刚进入新方向的研究者，也适合需要长期管理论文、证据和研究上下文的用户。
 
 > v1 以 Windows 本地使用为主。模型配置、会话、论文、PDF、标注和笔记均由本地后端管理；除调用用户配置的模型与论文检索服务外，不需要额外部署前端服务器。
 
@@ -55,12 +55,12 @@
 
 | 版本 | 文件 | 适合场景 |
 | --- | --- | --- |
-| **快速启动目录版（推荐）** | `SeeFurther-v1.0.0-windows-x64-portable.zip` | 完整解压后双击 `SeeFurther.exe`；启动快，移动时需要保留整个文件夹 |
-| **单文件版** | `SeeFurther-v1.0.0-windows-x64.exe` | 只需携带一个 exe；每次启动需要先释放运行文件，因此会更慢 |
+| **快速启动目录版（推荐）** | `ScholarSprout-v1.0.0-windows-x64-portable.zip` | 完整解压后双击 `ScholarSprout.exe`；启动快，移动时需要保留整个文件夹 |
+| **单文件版** | `ScholarSprout-v1.0.0-windows-x64.exe` | 只需携带一个 exe；每次启动需要先释放运行文件，因此会更慢 |
 
 两种版本均为 Windows x64 免安装程序，已包含 Python 运行时、Web 前端、PDF 解析依赖和飞书 SDK。使用者不需要安装 Python、Node.js 或其它环境，只需准备一个 OpenAI 兼容的大模型 API。
 
-程序默认监听 `127.0.0.1:8000`；如果端口被占用，会在 `8001-8099` 中选择可用端口并打开浏览器。运行期间可通过系统托盘重新打开页面或选择“退出研见”。
+程序默认监听 `127.0.0.1:8000`；如果端口被占用，会在 `8001-8099` 中选择可用端口并打开浏览器。运行期间可通过系统托盘重新打开页面或选择“退出科研萌芽”。
 
 > Windows SmartScreen 可能提示未识别的发布者，这是因为当前 v1 尚未使用商业代码签名证书。请只从本仓库 Release 下载。
 
@@ -97,7 +97,7 @@ npm run build
 | API Key | 模型服务商提供的密钥，只填写 Key 本身 | `sk-...` |
 | 模型名称 | 服务商接口接受的 `model` 参数 | `qwen-plus` |
 
-API Key 保存在运行研见的电脑后端，不会在配置页面加载时回传明文。配置文件默认位于当前用户目录下的 `.novicesynapse/config.json`。
+API Key 保存在运行科研萌芽的电脑后端，不会在配置页面加载时回传明文。配置文件默认位于当前用户目录下的 `.novicesynapse/config.json`。
 
 ### Embedding（可选）
 
@@ -108,11 +108,11 @@ Embedding 用于论文排序与证据匹配。URL 和 API Key 留空时复用基
 会话数据库、论文、PDF、图片、标注和笔记默认保存在当前用户的 `.novicesynapse` 目录。配置页支持改为其它绝对路径，例如：
 
 ```text
-Windows: D:\SeeFurtherData
-Linux:   /home/user/seefurther-data
+Windows: D:\ScholarSproutData
+Linux:   /home/user/scholarsprout-data
 ```
 
-修改数据目录后需要重启研见，原目录的数据不会自动迁移。
+修改数据目录后需要重启科研萌芽，原目录的数据不会自动迁移。
 
 ### 飞书机器人（可选）
 
@@ -123,9 +123,9 @@ Linux:   /home/user/seefurther-data
 3. 添加事件 `im.message.receive_v1`；
 4. 开通 `im:message` 和 `im:message.p2p_msg:readonly` 权限；
 5. 创建版本并发布最新版本；
-6. 将 App ID 和 App Secret 填入研见，启用后保存并重启程序。
+6. 将 App ID 和 App Secret 填入科研萌芽，启用后保存并重启程序。
 
-无需公网回调地址。机器人接收文本消息后会复用研见的研究对话 Agent，回答同时保存在本地会话数据库中。
+无需公网回调地址。机器人接收文本消息后会复用科研萌芽的研究对话 Agent，回答同时保存在本地会话数据库中。
 
 ## 页面入口
 
