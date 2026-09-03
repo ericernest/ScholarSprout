@@ -360,7 +360,9 @@ class SkillLoaderRegistryTests(unittest.TestCase):
             paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
         self.assertEqual(chat_profile["default_skill"], "chat.default")
-        self.assertIn("研见 · SeeFurther", chat_profile["system_prompt"])
+        self.assertIn("你是科研助手小芽", chat_profile["system_prompt"])
+        self.assertIn("科研萌芽·ScholarSprout", chat_profile["system_prompt"])
+        self.assertNotIn("研见 · SeeFurther", chat_profile["system_prompt"])
         self.assertIn("唯一允许访问的研究范围", chat_profile["system_prompt"])
         self.assertIn("不得查看或引用其他领域、论文或会话的数据", chat_profile["system_prompt"])
         self.assertNotIn("不要假装", chat_profile["system_prompt"])

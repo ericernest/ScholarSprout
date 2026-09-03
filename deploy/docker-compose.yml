@@ -25,7 +25,7 @@ services:
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
     volumes:
-      - ${NOVICESYNAPSE_CONFIG_DIR:?set NOVICESYNAPSE_CONFIG_DIR}:/home/novicesynapse/.novicesynapse:ro
+      - ${NOVICESYNAPSE_CONFIG_DIR:?set NOVICESYNAPSE_CONFIG_DIR}:/home/novicesynapse/.scholarsprout:ro
       - domain_onboarding_audit:/var/lib/novicesynapse/audit
       - domain_onboarding_jobs:/var/lib/novicesynapse/jobs
     restart: unless-stopped

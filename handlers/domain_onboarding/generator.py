@@ -1301,7 +1301,12 @@ class StructuredOnboardingGenerator:
             )
             for paper in papers
         }
-        prerequisites = self._normalize_prerequisites(payload.get("prerequisites"), references)
+        prerequisites = self._normalize_prerequisites(
+            payload.get("prerequisites"),
+            references,
+            request=request,
+            plan=plan,
+        )
         stages = self._normalize_stages(payload.get("development_stages"), references, prerequisites, papers)
         stages = self._align_stages_to_research_plan(stages, plan, references)
         landscape_raw = payload.get("current_landscape") if isinstance(payload.get("current_landscape"), dict) else {}
@@ -1572,6 +1577,9 @@ class StructuredOnboardingGenerator:
         self,
         value: object,
         references: dict[str, PaperReference],
+        *,
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
     ) -> list[Prerequisite]:
         items = value if isinstance(value, list) else []
         results: list[Prerequisite] = []
@@ -1598,7 +1606,147 @@ class StructuredOnboardingGenerator:
                     related_paper_ids=ids,
                 )
             )
-        return results
+        if results:
+            return results
+        return self._fallback_prerequisites(request, plan, references)
+
+    @staticmethod
+    def _fallback_prerequisites(
+        request: DomainOnboardingRequest,
+        plan: DomainResearchPlan,
+        references: dict[str, PaperReference],
+    ) -> list[Prerequisite]:
+        """Provide a minimal beginner foundation only when model output is empty."""
+
+        english = request.language == "en-US"
+        domain = plan.normalized_domain or request.query
+        paper_ids = list(references)[:3]
+
+        def evidence_for(index: int) -> list[str]:
+            if not paper_ids:
+                return []
+            return [paper_ids[index % len(paper_ids)]]
+
+        perspective_points = [
+            ConceptDetail(
+                name=item.name,
+                explanation=item.description,
+                why_it_matters=(
+                    "It frames the main research question in this field."
+                    if english
+                    else "它帮助理解该领域主要研究问题的边界。"
+                ),
+                related_paper_ids=evidence_for(index),
+            )
+            for index, item in enumerate(plan.perspectives[:2])
+        ]
+        if not perspective_points:
+            perspective_points = [
+                ConceptDetail(
+                    name=domain,
+                    explanation=(
+                        f"Core terminology and problem definitions for {domain}."
+                        if english
+                        else f"{domain}的核心术语、研究对象与问题定义。"
+                    ),
+                    related_paper_ids=evidence_for(0),
+                )
+            ]
+
+        branch_names = [
+            item.name_en if english else item.name_zh
+            for item in plan.subdirection_plans[:2]
+        ] or list(plan.expected_subdirections[:2])
+        method_points = [
+            ConceptDetail(
+                name=name,
+                explanation=(
+                    f"Understand the core method family represented by {name}."
+                    if english
+                    else f"理解“{name}”所代表的核心方法与技术路线。"
+                ),
+                related_paper_ids=evidence_for(index + 1),
+            )
+            for index, name in enumerate(branch_names)
+            if name
+        ]
+        if not method_points:
+            method_points = [
+                ConceptDetail(
+                    name="Methods and technical routes" if english else "方法与技术路线",
+                    explanation=(
+                        "Compare assumptions, inputs, outputs, and applicable conditions."
+                        if english
+                        else "比较不同方法的假设、输入输出与适用条件。"
+                    ),
+                    related_paper_ids=evidence_for(1),
+                )
+            ]
+
+        validation_points = [
+            ConceptDetail(
+                name="Claim-method-evidence chain" if english else "问题—方法—证据链",
+                explanation=(
+                    "Connect each research claim to its method and experimental evidence."
+                    if english
+                    else "把论文中的研究主张对应到方法设计和实验依据。"
+                ),
+                related_paper_ids=evidence_for(2),
+            ),
+            ConceptDetail(
+                name="Evaluation and reproducibility" if english else "评测与复现",
+                explanation=(
+                    "Read datasets, metrics, baselines, and reproducibility conditions together."
+                    if english
+                    else "结合数据集、指标、基线与复现条件判断结论是否可靠。"
+                ),
+                related_paper_ids=evidence_for(0),
+            ),
+        ]
+        return [
+            Prerequisite(
+                name=f"{domain} core concepts" if english else f"{domain}核心概念",
+                why_needed=(
+                    "Build a shared vocabulary before reading representative papers."
+                    if english
+                    else "先建立共同术语和问题边界，避免读论文时只记结论。"
+                ),
+                key_points=perspective_points,
+                related_paper_ids=list(dict.fromkeys(
+                    paper_id
+                    for point in perspective_points
+                    for paper_id in point.related_paper_ids
+                )),
+            ),
+            Prerequisite(
+                name="Methods and technical foundations" if english else "方法与技术基础",
+                why_needed=(
+                    "Recognize the assumptions and trade-offs behind different approaches."
+                    if english
+                    else "理解不同技术路线的基本假设、适用条件与取舍。"
+                ),
+                key_points=method_points,
+                related_paper_ids=list(dict.fromkeys(
+                    paper_id
+                    for point in method_points
+                    for paper_id in point.related_paper_ids
+                )),
+            ),
+            Prerequisite(
+                name="Paper reading and validation" if english else "论文阅读与实验验证",
+                why_needed=(
+                    "Judge whether a paper's evidence supports its main conclusions."
+                    if english
+                    else "学会判断论文的实验依据是否真正支撑主要结论。"
+                ),
+                key_points=validation_points,
+                related_paper_ids=list(dict.fromkeys(
+                    paper_id
+                    for point in validation_points
+                    for paper_id in point.related_paper_ids
+                )),
+            ),
+        ]
 
     def _normalize_landscape(
         self,

@@ -114,7 +114,7 @@ NoviceSynapse/
 职责：
 
 - 定义配置结构
-- 从 `~/.novicesynapse/config.json` 读取配置
+- 从 `~/.scholarsprout/config.json` 读取配置
 - 保存模型配置
 - 提供交互式配置流程
 
@@ -273,7 +273,7 @@ Profile 只有 Default Skill 时，Runtime 直接加载它，不调用 Selector�
 
 职责：
 
-- 从内置目录和 `~/.novicesynapse/skills/` 扫描 Skill
+- 从内置目录和 `~/.scholarsprout/skills/` 扫描 Skill
 - 解析并校验 `SKILL.md` 的 YAML Front Matter
 - 初始扫描只建立元数据索引，被选中后再加载完整正文
 - 按 Profile 的可选 `default_skill` 加载模式通用 Skill
