@@ -16,9 +16,9 @@ from .schema import (
     dump_app_config,
 )
 
-USER_CONFIG_DIR = Path.home() / ".novicesynapse"
+USER_CONFIG_DIR = Path.home() / ".scholarsprout"
 USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
-DEFAULT_DATA_DIR = "~/.novicesynapse"
+DEFAULT_DATA_DIR = "~/.scholarsprout"
 
 
 def get_config_file() -> Path:

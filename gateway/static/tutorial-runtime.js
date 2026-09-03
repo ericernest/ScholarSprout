@@ -119,7 +119,7 @@
       return Promise.resolve(jsonResponse({
         client: { base_url: "", model_name: "", api_key_configured: false },
         embedding: { base_url: "", model_name: "qwen3-embedding", uses_client_base_url: true, api_key_configured: false, uses_client_api_key: true },
-        storage: { data_dir: "~/.novicesynapse", effective_data_dir: "~/.novicesynapse", environment_override: false },
+        storage: { data_dir: "~/.scholarsprout", effective_data_dir: "~/.scholarsprout", environment_override: false },
         channels: { feishu: { enabled: false, app_id: "", app_secret_configured: false, environment_override: false } },
         setup_complete: true
       }));
