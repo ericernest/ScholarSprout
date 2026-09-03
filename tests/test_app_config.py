@@ -67,7 +67,7 @@ class ConfigManagerTests(unittest.TestCase):
             self.assertEqual(config.client.model_name, "legacy-model")
             self.assertEqual(config.embedding.model_name, "qwen3-embedding")
             self.assertIsNone(config.embedding.base_url)
-            self.assertEqual(config.storage.data_dir, "~/.novicesynapse")
+            self.assertEqual(config.storage.data_dir, "~/.scholarsprout")
             self.assertFalse(config.channels.feishu.enabled)
             self.assertEqual(config.channels.feishu.app_id, "")
 

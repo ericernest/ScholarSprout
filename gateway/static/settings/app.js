@@ -104,7 +104,7 @@ function applyConfig(config) {
   setValue(modelName, config.client?.model_name || "");
   setValue(embeddingModelName, config.embedding?.model_name || "qwen3-embedding");
   setValue(embeddingBaseUrl, config.embedding?.base_url || "");
-  setValue(dataDir, config.storage?.data_dir || "~/.novicesynapse");
+  setValue(dataDir, config.storage?.data_dir || "~/.scholarsprout");
   if (feishuEnabled) feishuEnabled.checked = Boolean(config.channels?.feishu?.enabled);
   setValue(feishuAppId, config.channels?.feishu?.app_id || "");
   setText(apiKeyState, config.client?.api_key_configured

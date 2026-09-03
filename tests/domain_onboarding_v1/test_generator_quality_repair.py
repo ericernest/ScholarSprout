@@ -676,6 +676,36 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(result.output.papers[0].contribution)
         self.assertTrue(result.output.papers[0].reading_focus)
 
+    def test_empty_model_prerequisites_use_beginner_fallback(self) -> None:
+        config = DomainOnboardingConfig()
+        ranked = WeightedPaperRanker(config).rank(
+            make_candidates(), make_plan(), limit=6
+        ).papers
+        payload = make_generation_payload([paper.paper_id for paper in ranked])
+        payload["prerequisites"] = []
+
+        result = StructuredOnboardingGenerator(
+            FakeJSONModel([payload]),
+            config,
+        ).generate(
+            DomainOnboardingRequest(query="RAG"),
+            make_profile(),
+            make_plan(),
+            ranked,
+        )
+
+        self.assertEqual(len(result.output.prerequisites), 3)
+        self.assertTrue(
+            all(item.name and item.why_needed for item in result.output.prerequisites)
+        )
+        allowed_ids = {paper.paper_id for paper in ranked}
+        self.assertTrue(
+            all(
+                set(item.related_paper_ids) <= allowed_ids
+                for item in result.output.prerequisites
+            )
+        )
+
     def test_incremental_generation_merges_outer_and_wrapped_section_fields(self) -> None:
         config = DomainOnboardingConfig()
         ranked = WeightedPaperRanker(config).rank(

@@ -97,7 +97,7 @@ npm run build
 | API Key | 模型服务商提供的密钥，只填写 Key 本身 | `sk-...` |
 | 模型名称 | 服务商接口接受的 `model` 参数 | `qwen-plus` |
 
-API Key 保存在运行科研萌芽的电脑后端，不会在配置页面加载时回传明文。配置文件默认位于当前用户目录下的 `.novicesynapse/config.json`。
+API Key 保存在运行科研萌芽的电脑后端，不会在配置页面加载时回传明文。配置文件默认位于当前用户目录下的 `.scholarsprout/config.json`。
 
 ### Embedding（可选）
 
@@ -105,7 +105,7 @@ Embedding 用于论文排序与证据匹配。URL 和 API Key 留空时复用基
 
 ### 数据目录
 
-会话数据库、论文、PDF、图片、标注和笔记默认保存在当前用户的 `.novicesynapse` 目录。配置页支持改为其它绝对路径，例如：
+会话数据库、论文、PDF、图片、标注和笔记默认保存在当前用户的 `.scholarsprout` 目录。配置页支持改为其它绝对路径，例如：
 
 ```text
 Windows: D:\ScholarSproutData
