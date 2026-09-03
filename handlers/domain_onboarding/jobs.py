@@ -241,11 +241,13 @@ class SQLiteJobStore:
         data = _without_internal_quality(data)
         with self._lock, self._connect() as db:
             row = db.execute(
-                "SELECT revision,partial_json,state FROM jobs WHERE task_id=?", (task_id,)
+                "SELECT revision,partial_json,state,progress FROM jobs WHERE task_id=?",
+                (task_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(task_id)
             revision = int(row["revision"]) + 1
+            progress = max(float(row["progress"]), min(1.0, max(0.0, float(progress))))
             partial = json.loads(row["partial_json"] or "{}")
             for path in replace_paths:
                 key = path.split(".", 1)[0]
@@ -324,11 +326,12 @@ class SQLiteJobStore:
         result = _without_internal_quality(result) if result is not None else None
         with self._lock, self._connect() as db:
             row = db.execute(
-                "SELECT revision FROM jobs WHERE task_id=?", (task_id,)
+                "SELECT revision,progress FROM jobs WHERE task_id=?", (task_id,)
             ).fetchone()
             if row is None:
                 raise KeyError(task_id)
             revision = int(row["revision"]) + 1
+            progress = max(float(row["progress"]), min(1.0, max(0.0, float(progress))))
             db.execute(
                 """UPDATE jobs SET state=?,revision=?,current_stage=?,progress=?,result_json=?,error=?,retryable=?,
                    partial_json=CASE WHEN ?='completed' THEN '{}' ELSE partial_json END,updated_at=CURRENT_TIMESTAMP
