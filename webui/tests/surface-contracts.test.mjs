@@ -121,7 +121,7 @@ test("chat exposes a dedicated interrupt control and uses the wide workspace", (
 
 test("home copy flows naturally within the available width", () => {
   const html = readFileSync(join(staticRoot, "index.html"), "utf8");
-  assert.ok(html.includes("从一篇论文，看见一个领域。让论文中原本晦暗的信息显现出结构、联系与研究方向，在本地完成可持续的精读、探索和知识积累。"));
+  assert.ok(html.includes("让每一个科研问题从好奇萌芽。陪你读懂第一篇论文、走进一个领域，在持续探索中长出自己的研究脉络。"));
   assert.ok(!html.includes('<p class="hero-copy"><span>'));
 });
 

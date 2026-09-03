@@ -1262,6 +1262,26 @@ class LocalResearchStore:
             "updated_at": str(row["updated_at"]),
         }
 
+    def find_latest_reading_session(
+        self, *, paper_id: str, conversation_id: str
+    ) -> str:
+        """Return the latest top-level reading session for one paper in a chat."""
+        paper_id = str(paper_id or "").strip()
+        conversation_id = str(conversation_id or "").strip()
+        if not paper_id or not conversation_id:
+            return ""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT reading_session_id
+                   FROM paper_reading_sessions
+                   WHERE paper_id = ? AND conversation_id = ?
+                     AND parent_reading_session_id IS NULL
+                   ORDER BY updated_at DESC, created_at DESC
+                   LIMIT 1""",
+                (paper_id, conversation_id),
+            ).fetchone()
+        return str(row["reading_session_id"]) if row is not None else ""
+
     def link_research_artifacts(
         self, conversation_id: str, artifact_ids: list[str], *, relation: str = "discussed"
     ) -> list[str]:

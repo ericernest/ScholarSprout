@@ -90,6 +90,13 @@ class ResearchCatalogTests(unittest.TestCase):
         self.assertEqual(counts["paper_readings"], 1)
         self.assertEqual(len(readings), 1)
         self.assertEqual(readings[0]["reading_session_id"], latest_reading)
+        conversation = self.catalog.get_conversation(self.conversation_id)
+        paper_contexts = [
+            item for item in conversation["contexts"]
+            if item["kind"] == "paper_reading" and item["paper_id"] == self.paper_id
+        ]
+        self.assertEqual(len(paper_contexts), 1)
+        self.assertEqual(paper_contexts[0]["id"], latest_reading)
         self.assertEqual(counts["domain_onboardings"], 1)
         self.assertEqual(len(domains), 1)
         self.assertEqual(domains[0]["artifact_id"], second_domain)
@@ -355,7 +362,7 @@ class ResearchLibraryApiTests(unittest.TestCase):
         response = TestClient(app).get("/library")
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-seefurther-entry="library"', response.text)
-        self.assertIn("研究资料库 · 研见 · SeeFurther", response.text)
+        self.assertIn("研究资料库 · 科研萌芽·ScholarSprout", response.text)
 
         legacy_html = (
             Path(__file__).resolve().parents[2] / "gateway/static/library/index.html"

@@ -705,6 +705,7 @@ async function ensureReadingSession() {
     state.progress = payload.progress || state.progress;
     if (!state.sessionId) throw new Error("创建阅读会话后未返回 session_id。");
     persistState();
+    syncWorkspaceUrl();
     return true;
   } catch (error) {
     toast(`无法创建阅读会话：${error.message}`, true);
@@ -3987,6 +3988,16 @@ function persistState() {
   else localStorage.removeItem(STORAGE.paper);
   if (state.currentSection) localStorage.setItem(STORAGE.section, state.currentSection);
   else localStorage.removeItem(STORAGE.section);
+}
+
+function syncWorkspaceUrl() {
+  if (!isDedicatedWorkspace || !state.paperId || !state.sessionId) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("paper_id", state.paperId);
+  params.set("session_id", state.sessionId);
+  if (state.conversationId) params.set("conversation_id", state.conversationId);
+  else params.delete("conversation_id");
+  window.history.replaceState(null, "", `${WORKSPACE_PATH}?${params.toString()}`);
 }
 
 function setNavigatorWidth(width, persist = true) {

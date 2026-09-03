@@ -273,7 +273,7 @@ class ResearchCatalog:
                    LEFT JOIN papers paper ON paper.paper_id = reading.paper_id
                    LEFT JOIN domain_onboardings domain ON domain.artifact_id = artifact.artifact_id
                    WHERE link.conversation_id = ?
-                   ORDER BY link.linked_at""",
+                   ORDER BY link.linked_at DESC""",
                 (conversation_id,),
             ).fetchall()
         contexts = []
@@ -286,7 +286,12 @@ class ResearchCatalog:
                 else str(row["artifact_id"])
             )
             title = str(row["paper_title"] or row["domain_query"] or row["title"] or "")
-            identity = (kind, context_id)
+            identity = (
+                kind,
+                str(row["paper_id"] or context_id)
+                if kind == "paper_reading"
+                else context_id,
+            )
             if (
                 context_id
                 and kind in {"paper_reading", "domain_onboarding"}
@@ -302,6 +307,7 @@ class ResearchCatalog:
                     "relation": str(row["relation"] or "created"),
                     "linked_at": str(row["linked_at"]),
                 })
+        contexts.reverse()
         return {
             "conversation_id": conversation["conversation_id"],
             "title": _conversation_display_title(conversation["title"]),
