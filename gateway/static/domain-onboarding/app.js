@@ -690,9 +690,9 @@ function renderLearningPath(data) {
 }
 
 function renderPapers(data) {
-  // `papers` is the backend-owned, survey-led recommendation result.
-  // `evidence_papers` supports the generated map and must not be promoted into
-  // the user-facing reading list when recommendation filtering returns empty.
+  // `papers` is the backend-owned recommendation result. When survey-led
+  // recommendations are unavailable, the backend may include validated,
+  // ranked retrieval candidates as an explicit fallback.
   const sourcePapers = Array.isArray(data.papers) ? data.papers : [];
   if (!sourcePapers.length) {
     $("paper-filters").replaceChildren();

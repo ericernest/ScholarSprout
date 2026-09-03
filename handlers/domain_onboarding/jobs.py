@@ -942,5 +942,5 @@ class DomainOnboardingJobManager:
 def create_job_store_from_env(default_path: str | Path | None = None) -> SQLiteJobStore:
     path = os.getenv("DOMAIN_ONBOARDING_JOB_DB")
     if not path:
-        path = str(default_path or "~/.novicesynapse/research.sqlite3")
+        path = str(default_path or "~/.scholarsprout/research.sqlite3")
     return SQLiteJobStore(path)

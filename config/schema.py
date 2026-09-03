@@ -30,7 +30,7 @@ class EmbeddingConfig:
 # 描述本地持久化数据的目录配置。
 @dataclass(slots=True)
 class StorageConfig:
-    data_dir: str = "~/.novicesynapse"
+    data_dir: str = "~/.scholarsprout"
 
 
 @dataclass(slots=True)
