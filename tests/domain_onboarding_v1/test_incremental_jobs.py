@@ -95,6 +95,21 @@ class IncrementalJobTests(unittest.TestCase):
         reopened = SQLiteJobStore(self.store.path)
         self.assertEqual(reopened.get(task_id)["result"], {"status": "ok"})
 
+    def test_job_progress_never_moves_backwards(self):
+        task_id = "monotonic-progress"
+        self.store.create(task_id, {"query": "RAG"}, None)
+
+        first = self.store.append_event(task_id, "llm_delta", 0.72, True, [], {})
+        second = self.store.append_event(task_id, "landscape_ready", 0.62, True, [], {})
+        third = self.store.append_event(task_id, "llm_delta", 0.50, True, [], {})
+
+        self.assertEqual([first["progress"], second["progress"], third["progress"]], [0.72, 0.72, 0.72])
+        self.assertEqual(self.store.get(task_id)["progress"], 0.72)
+        self.assertEqual(
+            [event["progress"] for event in self.store.events_after(task_id, 0)],
+            [0.72, 0.72, 0.72],
+        )
+
     def test_llm_deltas_are_batched_and_flushed_before_section_events(self):
         task_id = "batched-deltas"
         self.store.create(
