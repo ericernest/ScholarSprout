@@ -30,9 +30,18 @@
     <div class="progress-track" aria-hidden="true">
       <span id="progress-fill"></span>
     </div>
-    <div id="progress-stage-copy" class="progress-stage-copy" role="status" aria-live="polite">
-      <span class="progress-pulse" aria-hidden="true"></span>
-      <span id="progress-stage-text">任务仍在后台运行，完成的板块会自动出现。</span>
+    <div class="progress-overview">
+      <ol id="progress-steps" class="progress-steps" aria-label="领域入门生成进度">
+        <li class="progress-step is-active"><span>1</span><b>明确目标</b></li>
+        <li class="progress-step"><span>2</span><b>规划调研</b></li>
+        <li class="progress-step"><span>3</span><b>筛选论文</b></li>
+        <li class="progress-step"><span>4</span><b>构建内容</b></li>
+        <li class="progress-step"><span>5</span><b>整理结果</b></li>
+      </ol>
+      <div id="progress-stage-copy" class="progress-stage-copy" role="status" aria-live="polite">
+        <span class="progress-pulse" aria-hidden="true"></span>
+        <span id="progress-stage-text">当前步骤：正在分析任务 · 内容会随生成过程逐步展开。</span>
+      </div>
     </div>
 
     <main class="workspace">

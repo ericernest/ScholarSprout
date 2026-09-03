@@ -44,19 +44,19 @@ const STREAM_STAGE_LABELS = {
   repair: "正在完善生成结果",
 };
 const STAGE_LABELS = {
-  accepted: "任务已接收",
-  profile_ready: "标准新手路线已确定",
-  plan_ready: "调研计划已完成",
-  papers_ready: "论文检索已完成",
-  stage_plan_ready: "发展阶段提纲已完成",
+  accepted: "读取学习目标",
+  profile_ready: "定位学习基础",
+  plan_ready: "规划调研范围",
+  papers_ready: "整理论文证据",
+  stage_plan_ready: "梳理发展阶段",
   stage_retrieval_ready: "正在按发展阶段检索论文",
-  development_ready: "发展脉络已完成",
-  landscape_ready: "概念全景已完成",
-  learning_path_ready: "学习路线已完成",
-  quality_ready: "结果校验已完成",
-  final_quality_ready: "最终结果已生成",
+  development_ready: "整理前置知识与发展脉络",
+  landscape_ready: "梳理核心问题与研究方向",
+  learning_path_ready: "编排学习路线",
+  quality_ready: "检查内容一致性",
+  final_quality_ready: "整理学习地图",
   repair_started: "正在完善生成结果",
-  section_replaced: "已更新问题分区",
+  section_replaced: "更新问题分区",
   completed: "学习地图已生成",
   failed: "生成失败，可重试",
   cancelled: "任务已取消",
@@ -93,6 +93,7 @@ const state = {
   eventSource: null,
   pollTimer: null,
   activeLLMStage: "",
+  displayProgress: 0,
   paperFilter: "all",
   selected: null,
 };
@@ -220,11 +221,6 @@ function bindInteractions() {
   });
 
   $("inspector-content").addEventListener("click", async (event) => {
-    const paperButton = event.target.closest("[data-paper-id]");
-    if (paperButton) {
-      showDetail("paper", paperButton.dataset.paperId);
-      return;
-    }
     const importButton = event.target.closest("[data-import-paper]");
     if (importButton) {
       await importPaper(importButton.dataset.importPaper);
@@ -233,6 +229,11 @@ function bindInteractions() {
     const libraryButton = event.target.closest("[data-add-paper-library]");
     if (libraryButton) {
       await addPaperToLibrary(libraryButton.dataset.addPaperLibrary, libraryButton);
+      return;
+    }
+    const paperButton = event.target.closest("[data-paper-id]");
+    if (paperButton) {
+      showDetail("paper", paperButton.dataset.paperId);
     }
   });
 
@@ -321,8 +322,12 @@ async function refreshSnapshot() {
 
 function consumeSnapshot(snapshot, persist = true) {
   if (!snapshot || typeof snapshot !== "object") return;
-  state.snapshot = snapshot;
-  state.revision = Math.max(state.revision, Number(snapshot.revision) || 0);
+  const revision = Number(snapshot.revision) || 0;
+  if (revision && revision < state.revision) return;
+  const incomingProgress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
+  state.displayProgress = Math.max(state.displayProgress, incomingProgress);
+  state.snapshot = { ...snapshot, progress: state.displayProgress };
+  state.revision = Math.max(state.revision, revision);
   if (Object.prototype.hasOwnProperty.call(snapshot, "partial_result")) {
     state.partial = snapshot.partial_result && typeof snapshot.partial_result === "object"
       ? snapshot.partial_result
@@ -401,7 +406,10 @@ function handleEvent(event) {
     current_stage: isLLMDelta
       ? state.snapshot?.current_stage || "accepted"
       : payload.event,
-    progress: payload.progress,
+    progress: Math.max(
+      Number(state.snapshot?.progress) || 0,
+      Math.max(0, Math.min(1, Number(payload.progress) || 0)),
+    ),
     partial_result: state.partial,
     result: state.result,
     error: data.error || state.snapshot?.error || null,
@@ -455,7 +463,8 @@ function render() {
 
 function renderStatus() {
   const snapshot = state.snapshot || {};
-  const progress = Math.max(0, Math.min(1, Number(snapshot.progress) || 0));
+  const progress = Math.max(state.displayProgress, Math.max(0, Math.min(1, Number(snapshot.progress) || 0)));
+  state.displayProgress = progress;
   const terminal = TERMINAL_STATES.has(snapshot.state);
   const status = terminal
     ? STATUS_LABELS[snapshot.state]
@@ -466,8 +475,9 @@ function renderStatus() {
   $("status-label").textContent = status;
   $("progress-label").textContent = `${Math.round(progress * 100)}%`;
   $("progress-fill").style.transform = `scaleX(${progress})`;
+  renderProgressSteps(progress, snapshot.state);
   $("progress-stage-copy").hidden = terminal;
-  $("progress-stage-text").textContent = `${status} · 任务仍在后台运行，完成的板块会自动出现。`;
+  $("progress-stage-text").textContent = `当前步骤：${status} · 内容会随生成过程逐步展开。`;
   $("status-dot").className = `status-dot${
     ["failed", "interrupted"].includes(snapshot.state)
       ? " is-error"
@@ -482,11 +492,24 @@ function renderStatus() {
   $("topbar-retry-button").disabled = !canRetry;
 }
 
+function renderProgressSteps(progress, taskState) {
+  const thresholds = [0, 0.15, 0.35, 0.55, 0.9];
+  const activeIndex = taskState === "completed"
+    ? thresholds.length
+    : thresholds.reduce((index, threshold, candidate) => progress >= threshold ? candidate : index, 0);
+  document.querySelectorAll(".progress-step").forEach((step, index) => {
+    step.classList.toggle("is-past", index < activeIndex || taskState === "completed");
+    step.classList.toggle("is-active", index === activeIndex && taskState !== "completed");
+    if (index === activeIndex && taskState !== "completed") step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
+  });
+}
+
 function renderOverview(data) {
   $("overview-content").classList.remove("loading-section");
   $("overview-content").innerHTML = `
     <h2 class="hero-title">${escapeHtml(data.domain || data.query || state.snapshot?.request?.query || "正在理解你的学习目标")}</h2>
-    <p class="hero-copy">${escapeHtml(data.text || "正在检索论文并构建领域发展脉络，已完成的内容会自动出现在下方。")}</p>
+    <p class="hero-copy">${escapeHtml(data.text || "正在检索论文并构建领域发展脉络，内容会随生成过程逐步出现在下方。")}</p>
     <div class="profile-strip">
       ${profileItem("适用对象", "普通科研新手")}
       ${profileItem("路线类型", "标准学习路线")}
@@ -917,8 +940,11 @@ function renderPaperDetail(paper) {
 }
 
 async function addPaperToLibrary(paperId, button) {
-  const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
-  if (!paper) return;
+  const paper = paperIndex(currentData()).get(String(paperId));
+  if (!paper) {
+    toast("暂时找不到这篇论文，请刷新页面后重试。", true);
+    return;
+  }
   if (paperPdfUrl(paper) && window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   button.disabled = true;
   try {
@@ -945,8 +971,11 @@ async function addPaperToLibrary(paperId, button) {
 }
 
 async function importPaper(paperId) {
-  const paper = (currentData()?.papers || []).find((item) => String(item.paper_id) === String(paperId));
-  if (!paper) return;
+  const paper = paperIndex(currentData()).get(String(paperId));
+  if (!paper) {
+    toast("暂时找不到这篇论文，请刷新页面后重试。", true);
+    return;
+  }
   if (window.ensureBaseModelConfigured && !(await window.ensureBaseModelConfigured())) return;
   try {
     toast("正在下载 PDF 并导入论文精读…");
@@ -1080,6 +1109,7 @@ async function retryTask() {
     state.revision = 0;
     state.lastEventId = 0;
     state.activeLLMStage = "";
+    state.displayProgress = 0;
     state.selected = null;
     history.replaceState(null, "", `/app/domain-onboarding?task_id=${encodeURIComponent(state.taskId)}`);
     $("empty-state").hidden = true;
