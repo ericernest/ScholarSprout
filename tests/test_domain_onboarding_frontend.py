@@ -18,7 +18,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-seefurther-entry="domain-onboarding"', response.text)
-        self.assertIn("领域入门 · 研见 · SeeFurther", response.text)
+        self.assertIn("领域入门 · 科研萌芽·ScholarSprout", response.text)
         self.assertTrue((STATIC_DIR / "domain-onboarding" / "app.js").is_file())
         self.assertTrue((STATIC_DIR / "domain-onboarding" / "styles.css").is_file())
         self.assertIn('"static/domain-onboarding/*"', package_config)
@@ -57,7 +57,12 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
 
         self.assertIn('id="topbar-retry-button"', html)
         self.assertIn('id="progress-stage-copy"', html)
-        self.assertIn("任务仍在后台运行，完成的板块会自动出现", script)
+        self.assertIn('id="progress-steps"', html)
+        self.assertIn("明确目标", html)
+        self.assertIn("整理结果", html)
+        self.assertIn("内容会随生成过程逐步展开", script)
+        self.assertNotIn("任务仍在后台运行，完成的板块会自动出现", script)
+        self.assertIn("state.displayProgress = Math.max", script)
         self.assertIn("new EventSource", script)
         self.assertIn("/domain_onboarding/jobs/", script)
         self.assertIn('"llm_delta"', script)
@@ -172,6 +177,7 @@ class DomainOnboardingFrontendTests(unittest.TestCase):
 
         self.assertIn("function paperPdfUrl", script)
         self.assertIn("async function downloadDomainPaper", script)
+        self.assertIn("const paper = paperIndex(currentData()).get(String(paperId));", script)
         self.assertIn('const IMPORTED_PAPERS_KEY = "domain_onboarding_imported_papers_v1"', script)
         self.assertIn("function importedPaperId", script)
         self.assertIn("function rememberImportedPaper", script)
