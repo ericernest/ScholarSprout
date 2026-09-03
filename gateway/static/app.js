@@ -31,6 +31,7 @@ let conversationHistoryReload = null;
 let conversationHistorySignature = "";
 let conversationContextSignature = "";
 let conversationHistoryRendered = false;
+let conversationScrollTarget = "";
 const persistedMessageContents = new Map();
 let activeGenerationWatcher = null;
 let explicitStopRequested = false;
@@ -247,7 +248,11 @@ async function reloadConversationHistory() {
     if (!response.ok) return;
     const conversation = await response.json();
     const history = Array.isArray(conversation.messages) ? conversation.messages : [];
-    const contexts = Array.isArray(conversation.contexts) ? conversation.contexts : [];
+    const contexts = normalizeConversationContexts(
+      Array.isArray(conversation.contexts) ? conversation.contexts : [],
+    );
+    const wasRendered = conversationHistoryRendered;
+    const previousScrollTop = messages.scrollTop;
     const contextSignature = JSON.stringify(
       contexts.map((context) => [context.kind, context.id, context.linked_at]),
     );
@@ -256,14 +261,19 @@ async function reloadConversationHistory() {
       messages: history.map((message) => [message.message_id, message.created_at, message.content]),
       contexts: contexts.map((context) => [context.kind, context.id, context.linked_at]),
     });
-    if (signature === conversationHistorySignature) return;
+    if (signature === conversationHistorySignature) {
+      if (conversationScrollTarget) {
+        scrollRestoredConversation({ wasRendered, previousScrollTop });
+      }
+      return;
+    }
     if (
       conversationHistoryRendered
       && contextSignature === conversationContextSignature
       && patchPersistedMessages(history)
     ) {
       conversationHistorySignature = signature;
-      scrollRestoredConversation();
+      scrollRestoredConversation({ wasRendered, previousScrollTop });
       return;
     }
     conversationHistorySignature = signature;
@@ -290,10 +300,25 @@ async function reloadConversationHistory() {
       }
     }
     conversationHistoryRendered = true;
-    scrollRestoredConversation();
+    scrollRestoredConversation({ wasRendered, previousScrollTop });
   } catch {
     // Keep the welcome message when history is temporarily unavailable.
   }
+}
+
+function normalizeConversationContexts(contexts) {
+  const byIdentity = new Map();
+  contexts.forEach((context) => {
+    const identity = context?.kind === "paper_reading"
+      ? `paper_reading:${context.paper_id || context.id || ""}`
+      : contextKey(context);
+    if (!identity || identity.endsWith(":")) return;
+    const previous = byIdentity.get(identity);
+    if (!previous || String(context.linked_at || "") >= String(previous.linked_at || "")) {
+      byIdentity.set(identity, context);
+    }
+  });
+  return [...byIdentity.values()];
 }
 
 function visiblePersistedMessages(history) {
@@ -562,7 +587,7 @@ function setDiscussionMenuOpen(open) {
   discussionButton.setAttribute("aria-expanded", String(open));
 }
 
-function scrollRestoredConversation() {
+function scrollRestoredConversation({ wasRendered = false, previousScrollTop = 0 } = {}) {
   const params = new URLSearchParams(window.location.search);
   const requestedKey = params.getAll("context")[0]
     || `${params.get("context_kind") || ""}:${params.get("context_id") || ""}`;
@@ -570,14 +595,23 @@ function scrollRestoredConversation() {
     ? null
     : messages.querySelector(`[data-context-key="${CSS.escape(requestedKey)}"]`);
   requestAnimationFrame(() => {
-    if (!requestedCard) {
-      messages.scrollTop = messages.scrollHeight;
+    if (conversationScrollTarget === "latest-assistant") {
+      const latestAssistant = [...messages.querySelectorAll(".message.assistant[data-persisted-message-id]")].at(-1);
+      if (latestAssistant) {
+        conversationScrollTarget = "";
+        scrollMessageToTop(latestAssistant);
+        return;
+      }
+    }
+    if (requestedCard && !wasRendered) {
+      scrollMessageToTop(requestedCard);
       return;
     }
-    const targetTop = requestedCard.getBoundingClientRect().top
-      - messages.getBoundingClientRect().top
-      + messages.scrollTop;
-    messages.scrollTop = Math.max(0, targetTop - 14);
+    if (wasRendered) {
+      messages.scrollTop = Math.max(0, previousScrollTop);
+      return;
+    }
+    messages.scrollTop = messages.scrollHeight;
   });
 }
 
@@ -1751,6 +1785,7 @@ function appendStreamingMessage() {
       text = String(finalText || text || "后端没有返回内容。");
       reasoning = String(finalReasoning || reasoning || splitVisibleThinking(text).reasoning || "");
       streaming = false;
+      conversationScrollTarget = "latest-assistant";
       bubble.classList.remove("streaming-bubble");
       renderNow();
       requestAnimationFrame(() => scrollMessageToTop(item));
