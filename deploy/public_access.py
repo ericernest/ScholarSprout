@@ -17,7 +17,7 @@ IP_SERVICES = ("https://api.ipify.org?format=json", "https://ifconfig.me/ip")
 
 
 def fetch(url: str, timeout: float = 5.0) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "novicesynapse-deploy-check/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "scholarsprout-deploy-check/1.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", errors="replace").strip()
 
@@ -47,7 +47,7 @@ def local_port_status(host: str, port: int) -> dict[str, object]:
 
 def url_status(url: str) -> dict[str, object]:
     try:
-        request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "novicesynapse-deploy-check/1.0"})
+        request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "scholarsprout-deploy-check/1.0"})
         with urllib.request.urlopen(request, timeout=8) as response:
             return {"url": url, "ok": True, "status": response.status}
     except urllib.error.HTTPError as exc:

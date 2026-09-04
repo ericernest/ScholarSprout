@@ -2,7 +2,7 @@
   const params = new URLSearchParams(window.location.search);
   const active = params.get("tutorial") === "1";
   const nativeFetch = window.fetch.bind(window);
-  const stepKey = "seefurther_real_tour_step_v2";
+  const stepKey = "scholarsprout_real_tour_step_v2";
   const surveyTitle = "A Survey on Large Language Model based Autonomous Agents";
 
   const demoPaper = {
@@ -144,7 +144,7 @@
     return nativeFetch(input, options);
   }
 
-  window.SeeFurtherTutorial = {
+  window.ScholarSproutTutorial = {
     active: active,
     demoDomainSnapshot: demoDomainSnapshot,
     demoReadingPaper: demoReadingPaper,
@@ -152,7 +152,7 @@
   };
   if (!active) return;
   window.fetch = tutorialFetch;
-  document.documentElement.dataset.seefurtherTutorial = "active";
+  document.documentElement.dataset.scholarsproutTutorial = "active";
 
   const steps = [
     { id: "paper-mode", page: "chat", route: "/app?tutorial=1", target: "#mode-button", title: "选择论文精读", copy: "先从研究模式中选择论文精读，单独导入一篇想读的论文。" },
@@ -246,7 +246,7 @@
       if (detailTarget && typeof detailTarget.click === "function") detailTarget.click();
     }
     if (pageName() === "reading" && ["reading-map", "reading-explain"].includes(step.id)) {
-      window.SeeFurtherTutorial?.openReadingMap?.();
+      window.ScholarSproutTutorial?.openReadingMap?.();
     }
     if (step.id === "reading-selection") {
       selectTutorialReaderText();
@@ -286,7 +286,7 @@
     if (!input || input.files?.length) return;
     try {
       const transfer = new DataTransfer();
-      transfer.items.add(new File(["%PDF-1.4\n% SeeFurther tutorial"], "LLM-Agent-Survey.pdf", { type: "application/pdf" }));
+      transfer.items.add(new File(["%PDF-1.4\n% ScholarSprout tutorial"], "LLM-Agent-Survey.pdf", { type: "application/pdf" }));
       input.files = transfer.files;
       input.dispatchEvent(new Event("change", { bubbles: true }));
     } catch (_) {
@@ -336,7 +336,7 @@
 
   function installStyles() {
     const style = document.createElement("style");
-    style.id = "seefurther-real-tour-styles";
+    style.id = "scholarsprout-real-tour-styles";
     style.textContent = [
       ".sf-tour-spotlight{position:fixed;z-index:30000;border:2px solid #66f5d6;border-radius:16px;box-shadow:0 0 0 9999px rgba(13,18,24,.72),0 0 32px rgba(102,245,214,.28);pointer-events:none;transition:all .24s ease}",
       ".sf-tour-bubble{position:fixed;z-index:30001;display:grid;gap:10px;width:min(380px,calc(100vw - 28px));padding:18px;border:1px solid rgba(102,245,214,.42);border-radius:18px;color:#eafff7;background:linear-gradient(145deg,rgba(5,35,33,.99),rgba(17,28,53,.99));box-shadow:0 26px 80px rgba(0,0,0,.48);font-family:Inter,'Microsoft YaHei',sans-serif}",

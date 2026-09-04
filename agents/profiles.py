@@ -1,4 +1,4 @@
-"""从 JSON 文件读取 NoviceSynapse 的 agent 预设。"""
+"""从 JSON 文件读取 ScholarSprout 的 agent 预设。"""
 
 from __future__ import annotations
 

@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-HOST="${NOVICESYNAPSE_HOST:-0.0.0.0}"
-PORT="${NOVICESYNAPSE_PORT:-8000}"
-PYTHON_BIN="${NOVICESYNAPSE_PYTHON:-python3}"
+HOST="${SCHOLARSPROUT_HOST:-0.0.0.0}"
+PORT="${SCHOLARSPROUT_PORT:-8000}"
+PYTHON_BIN="${SCHOLARSPROUT_PYTHON:-python3}"
 
-echo "Starting NoviceSynapse for campus-network access on ${HOST}:${PORT}"
+echo "Starting ScholarSprout for campus-network access on ${HOST}:${PORT}"
 echo "Python: ${PYTHON_BIN}"
 echo "Access URL: http://<server-campus-ip>:${PORT}/"
 

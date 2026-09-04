@@ -361,7 +361,7 @@ class ResearchLibraryApiTests(unittest.TestCase):
     def test_library_page_is_available(self) -> None:
         response = TestClient(app).get("/library")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-seefurther-entry="library"', response.text)
+        self.assertIn('data-scholarsprout-entry="library"', response.text)
         self.assertIn("研究资料库 · 科研萌芽·ScholarSprout", response.text)
 
         legacy_html = (

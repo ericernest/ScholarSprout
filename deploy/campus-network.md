@@ -5,8 +5,8 @@
 在服务器仓库根目录执行：
 
 ```bash
-cd ~/competition/NoviceSynapse
-NOVICESYNAPSE_PYTHON=/data2/sxf2026/miniconda3/envs/novicesynapse/bin/python bash deploy/start_campus.sh
+cd ~/competition/ScholarSprout
+SCHOLARSPROUT_PYTHON=/data2/sxf2026/miniconda3/envs/scholarsprout/bin/python bash deploy/start_campus.sh
 ```
 
 默认监听 `0.0.0.0:8000`。`0.0.0.0` 表示服务接受服务器各网卡上的连接，便于校园网用户访问；它不是一个需要在浏览器中输入的地址。

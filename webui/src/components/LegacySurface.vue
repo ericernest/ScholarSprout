@@ -22,7 +22,7 @@ async function appendStyles(source: Document): Promise<void> {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = absoluteResource(sourceLink.getAttribute("href") || "");
-    link.dataset.seefurtherLegacy = props.surfaceId;
+    link.dataset.scholarsproutLegacy = props.surfaceId;
     link.onload = () => resolve();
     link.onerror = () => reject(new Error(`样式加载失败：${link.href}`));
     document.head.append(link);
@@ -32,7 +32,7 @@ async function appendStyles(source: Document): Promise<void> {
   const override = document.createElement("link");
   override.rel = "stylesheet";
   override.href = "/static/app-v2/styles/legacy-overrides.css";
-  override.dataset.seefurtherLegacy = `${props.surfaceId}-overrides`;
+  override.dataset.scholarsproutLegacy = `${props.surfaceId}-overrides`;
   document.head.append(override);
   injectedNodes.push(override);
 }
@@ -43,7 +43,7 @@ async function appendScripts(source: Document): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const script = document.createElement("script");
       script.src = absoluteResource(sourceScript.getAttribute("src") || "");
-      script.dataset.seefurtherLegacy = props.surfaceId;
+      script.dataset.scholarsproutLegacy = props.surfaceId;
       if (sourceScript.type) script.type = sourceScript.type;
       script.onload = () => resolve();
       script.onerror = () => reject(new Error(`脚本加载失败：${script.src}`));
@@ -69,7 +69,7 @@ async function loadSurface(): Promise<void> {
     target.replaceChildren(...content);
     await appendStyles(source);
     await appendScripts(source);
-    document.documentElement.dataset.seefurtherReady = props.surfaceId;
+    document.documentElement.dataset.scholarsproutReady = props.surfaceId;
     status.value = "ready";
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "页面加载失败";
@@ -81,7 +81,7 @@ onMounted(loadSurface);
 onBeforeUnmount(() => {
   injectedNodes.forEach((node) => node.remove());
   document.body.className = originalBodyClass;
-  delete document.documentElement.dataset.seefurtherReady;
+  delete document.documentElement.dataset.scholarsproutReady;
 });
 </script>
 

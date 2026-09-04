@@ -4,7 +4,7 @@ import type { SurfaceDefinition } from "../config/surfaces";
 
 const props = defineProps<{ surface: SurfaceDefinition }>();
 const dialog = ref<HTMLDialogElement | null>(null);
-const storageKey = "seefurther_product_guide_v1";
+const storageKey = "scholarsprout_product_guide_v1";
 const faviconPath = "/static/app-v2/favicon.svg";
 let openTimer = 0;
 

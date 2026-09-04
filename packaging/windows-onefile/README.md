@@ -17,7 +17,7 @@
 - `output/ScholarSprout-windows-x64-portable.zip`：上述完整目录的可分发压缩包。
 
 目录版不需要在每次启动时把运行环境解压到临时目录，因此启动明显快于单文件版。
-分发时必须复制整个 `SeeFurther` 文件夹，不能只拿出其中的 exe；或者直接发送 ZIP，
+分发时必须复制整个 `ScholarSprout` 文件夹，不能只拿出其中的 exe；或者直接发送 ZIP，
 使用者完整解压后双击 `ScholarSprout.exe` 即可。
 
 如确实需要单个 exe，可执行：

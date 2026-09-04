@@ -5,9 +5,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DOMAIN_ONBOARDING_AUDIT_DIR: /var/lib/novicesynapse/audit
+      DOMAIN_ONBOARDING_AUDIT_DIR: /var/lib/scholarsprout/audit
       DOMAIN_ONBOARDING_AUDIT_FSYNC: "1"
-      DOMAIN_ONBOARDING_JOB_DB: /var/lib/novicesynapse/jobs/domain_onboarding.sqlite3
+      DOMAIN_ONBOARDING_JOB_DB: /var/lib/scholarsprout/jobs/domain_onboarding.sqlite3
       DOMAIN_ONBOARDING_JOB_TOKEN_SECRET: ${DOMAIN_ONBOARDING_JOB_TOKEN_SECRET:?set DOMAIN_ONBOARDING_JOB_TOKEN_SECRET}
       DOMAIN_ONBOARDING_JOB_WORKERS: ${DOMAIN_ONBOARDING_JOB_WORKERS:-2}
       DOMAIN_ONBOARDING_JOB_QUEUE_SIZE: ${DOMAIN_ONBOARDING_JOB_QUEUE_SIZE:-20}
@@ -25,9 +25,9 @@ services:
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
     volumes:
-      - ${NOVICESYNAPSE_CONFIG_DIR:?set NOVICESYNAPSE_CONFIG_DIR}:/home/novicesynapse/.scholarsprout:ro
-      - domain_onboarding_audit:/var/lib/novicesynapse/audit
-      - domain_onboarding_jobs:/var/lib/novicesynapse/jobs
+      - ${SCHOLARSPROUT_CONFIG_DIR:?set SCHOLARSPROUT_CONFIG_DIR}:/home/scholarsprout/.scholarsprout:ro
+      - domain_onboarding_audit:/var/lib/scholarsprout/audit
+      - domain_onboarding_jobs:/var/lib/scholarsprout/jobs
     restart: unless-stopped
 
 volumes:

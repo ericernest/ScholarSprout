@@ -1,6 +1,6 @@
-# NoviceSynapse 架构介绍
+# ScholarSprout 架构介绍
 
-这份文档用于说明 NoviceSynapse 当前框架结构、目录职责和消息流。功能开发细节请看 [development-guide.md](development-guide.md)。
+这份文档用于说明 ScholarSprout 当前框架结构、目录职责和消息流。功能开发细节请看 [development-guide.md](development-guide.md)。
 
 ## 当前范围
 
@@ -24,7 +24,7 @@
 ## 目录职责
 
 ```text
-NoviceSynapse/
+ScholarSprout/
 |-- agents/
 |   |-- agent.py
 |   |-- profiles.py
@@ -100,10 +100,10 @@ NoviceSynapse/
 
 当前命令：
 
-- `novicesynapse config`
-- `novicesynapse doctor`
-- `novicesynapse gateway --host 127.0.0.1 --port 8000`
-- `novicesynapse agent`
+- `scholarsprout config`
+- `scholarsprout doctor`
+- `scholarsprout gateway --host 127.0.0.1 --port 8000`
+- `scholarsprout agent`
 
 `agent` 当前只是占位命令。
 

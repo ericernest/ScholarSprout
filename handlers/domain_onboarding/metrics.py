@@ -433,43 +433,43 @@ class DomainOnboardingMetrics:
         """Expose a stable, dependency-free Prometheus text view."""
         snapshot = self.snapshot()
         lines = [
-            "# HELP novicesynapse_domain_onboarding_requests_total Requests by final status.",
-            "# TYPE novicesynapse_domain_onboarding_requests_total counter",
+            "# HELP scholarsprout_domain_onboarding_requests_total Requests by final status.",
+            "# TYPE scholarsprout_domain_onboarding_requests_total counter",
         ]
         for status, value in sorted(snapshot["statuses"].items()):
             lines.append(
-                f'novicesynapse_domain_onboarding_requests_total{{status="{_label(status)}"}} {value}'
+                f'scholarsprout_domain_onboarding_requests_total{{status="{_label(status)}"}} {value}'
             )
         lines.extend(
             [
-                "# HELP novicesynapse_domain_onboarding_async_jobs_total Async job lifecycle events.",
-                "# TYPE novicesynapse_domain_onboarding_async_jobs_total counter",
+                "# HELP scholarsprout_domain_onboarding_async_jobs_total Async job lifecycle events.",
+                "# TYPE scholarsprout_domain_onboarding_async_jobs_total counter",
             ]
         )
         for event, value in sorted(snapshot["async_jobs"].items()):
             lines.append(
-                f'novicesynapse_domain_onboarding_async_jobs_total{{event="{_label(event)}"}} {value}'
+                f'scholarsprout_domain_onboarding_async_jobs_total{{event="{_label(event)}"}} {value}'
             )
         lines.extend(
             [
-                "# TYPE novicesynapse_domain_onboarding_request_p95_ms gauge",
-                f'novicesynapse_domain_onboarding_request_p95_ms {snapshot["latency"]["request"]["p95_ms"]}',
-                "# TYPE novicesynapse_domain_onboarding_model_tokens_total counter",
-                f'novicesynapse_domain_onboarding_model_tokens_total {snapshot["model_usage"]["total"]["total_tokens"]}',
-                "# TYPE novicesynapse_domain_onboarding_retrieval_failures_total counter",
-                f'novicesynapse_domain_onboarding_retrieval_failures_total {snapshot["papers"].get("retrieval_source_failure_count", 0)}',
-                "# TYPE novicesynapse_domain_onboarding_ranking_fallbacks_total counter",
-                f'novicesynapse_domain_onboarding_ranking_fallbacks_total {snapshot["ranking"]["fallback_count"]}',
-                "# TYPE novicesynapse_domain_onboarding_audit_write_failures_total counter",
-                f'novicesynapse_domain_onboarding_audit_write_failures_total {snapshot["audit"]["write_failures"]}',
+                "# TYPE scholarsprout_domain_onboarding_request_p95_ms gauge",
+                f'scholarsprout_domain_onboarding_request_p95_ms {snapshot["latency"]["request"]["p95_ms"]}',
+                "# TYPE scholarsprout_domain_onboarding_model_tokens_total counter",
+                f'scholarsprout_domain_onboarding_model_tokens_total {snapshot["model_usage"]["total"]["total_tokens"]}',
+                "# TYPE scholarsprout_domain_onboarding_retrieval_failures_total counter",
+                f'scholarsprout_domain_onboarding_retrieval_failures_total {snapshot["papers"].get("retrieval_source_failure_count", 0)}',
+                "# TYPE scholarsprout_domain_onboarding_ranking_fallbacks_total counter",
+                f'scholarsprout_domain_onboarding_ranking_fallbacks_total {snapshot["ranking"]["fallback_count"]}',
+                "# TYPE scholarsprout_domain_onboarding_audit_write_failures_total counter",
+                f'scholarsprout_domain_onboarding_audit_write_failures_total {snapshot["audit"]["write_failures"]}',
             ]
         )
         estimated = snapshot["model_cost"]["estimated_total_usd"]
         if estimated is not None:
             lines.extend(
                 [
-                    "# TYPE novicesynapse_domain_onboarding_estimated_cost_usd_total counter",
-                    f"novicesynapse_domain_onboarding_estimated_cost_usd_total {estimated}",
+                    "# TYPE scholarsprout_domain_onboarding_estimated_cost_usd_total counter",
+                    f"scholarsprout_domain_onboarding_estimated_cost_usd_total {estimated}",
                 ]
             )
         return "\n".join(lines) + "\n"

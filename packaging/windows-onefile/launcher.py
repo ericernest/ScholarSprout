@@ -144,9 +144,9 @@ def main() -> None:
     try:
         port = _find_available_port()
         tray_controller = _TrayController(port)
-        if os.getenv("SCHOLARSPROUT_SKIP_TRAY", os.getenv("SEEFURTHER_SKIP_TRAY")) != "1":
+        if os.getenv("SCHOLARSPROUT_SKIP_TRAY") != "1":
             _start_tray(tray_controller)
-        if os.getenv("SCHOLARSPROUT_SKIP_BROWSER", os.getenv("SEEFURTHER_SKIP_BROWSER")) != "1":
+        if os.getenv("SCHOLARSPROUT_SKIP_BROWSER") != "1":
             threading.Thread(target=_open_when_ready, args=(port,), daemon=True).start()
         start_gateway_server(
             host=HOST,

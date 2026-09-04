@@ -2,16 +2,16 @@
 
 ## 必需配置
 
-先通过 `novicesynapse config` 设置真实 `api_key`、`base_url` 和聊天模型。生产环境还应设置：
+先通过 `scholarsprout config` 设置真实 `api_key`、`base_url` 和聊天模型。生产环境还应设置：
 启用本地多语言 embedding 的部署需要安装 `pip install '.[embeddings]'`。
 
 ```text
-DOMAIN_ONBOARDING_AUDIT_DIR=/var/lib/novicesynapse/audit
+DOMAIN_ONBOARDING_AUDIT_DIR=/var/lib/scholarsprout/audit
 DOMAIN_ONBOARDING_AUDIT_FSYNC=1
 # 默认调用当前 OpenAI-compatible 端点的 qwen3-embedding。
 # 如需优先使用本地 ONNX 多语言 embedding：
 # DOMAIN_ONBOARDING_LOCAL_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-# DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/novicesynapse/embeddings
+# DOMAIN_ONBOARDING_EMBEDDING_CACHE_DIR=/var/cache/scholarsprout/embeddings
 # The browser settings page stores embedding.model_name and embedding.base_url.
 # Environment variables remain the highest-priority deployment overrides.
 DOMAIN_ONBOARDING_EMBEDDING_BASE_URL=<openai-compatible-embedding-base-url>
@@ -42,7 +42,7 @@ DOMAIN_ONBOARDING_REPAIR_MODELS=<fast-instruction-model>,<repair-backup>
 ## 启动与探针
 
 ```bash
-novicesynapse gateway --host 0.0.0.0 --port 8000
+scholarsprout gateway --host 0.0.0.0 --port 8000
 curl -f http://127.0.0.1:8000/health
 curl -f http://127.0.0.1:8000/ready
 ```
@@ -120,4 +120,4 @@ Pipeline 不再把发展路径证据标记为推荐。结果通过 `recommendati
 仓库提供 `Dockerfile` 与 `deploy/docker-compose.yml`。复制
 `deploy/domain-onboarding.env.example` 为部署系统的受保护环境配置后，可从
 `deploy/` 目录运行 `docker compose --env-file <protected-env-file> up -d --build`。
-模型密钥仍只存放于只读挂载的 NoviceSynapse 用户配置目录。
+模型密钥仍只存放于只读挂载的 ScholarSprout 用户配置目录。
