@@ -1,4 +1,4 @@
-"""导出 NoviceSynapse 的 Skill 基础能力。"""
+"""导出 ScholarSprout 的 Skill 基础能力。"""
 
 from .models import CapabilitySelection, SkillDocument, SkillMetadata, SkillSummary
 from .registry import SkillRegistry, create_skill_registry

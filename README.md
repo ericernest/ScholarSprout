@@ -51,7 +51,7 @@
 
 ## 直接使用 Windows 版
 
-从 [v1 Release](https://github.com/ericernest/NoviceSynapse/releases/tag/v1.0.0) 下载任一版本：
+从 [v1 Release](https://github.com/ericernest/ScholarSprout/releases/tag/v1.0.0) 下载任一版本：
 
 | 版本 | 文件 | 适合场景 |
 | --- | --- | --- |
@@ -69,10 +69,10 @@
 支持 Windows 和 Linux，要求 Python 3.11+：
 
 ```bash
-git clone https://github.com/ericernest/NoviceSynapse.git
-cd NoviceSynapse
+git clone https://github.com/ericernest/ScholarSprout.git
+cd ScholarSprout
 python -m pip install -e .
-novicesynapse gateway --host 127.0.0.1 --port 8000
+scholarsprout gateway --host 127.0.0.1 --port 8000
 ```
 
 打开 <http://127.0.0.1:8000/>。

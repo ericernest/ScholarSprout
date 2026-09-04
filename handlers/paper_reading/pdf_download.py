@@ -26,7 +26,7 @@ _HEADERS = {
     "Connection": "close",
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/124 Safari/537.36 SeeFurther/1.0"
+        "AppleWebKit/537.36 Chrome/124 Safari/537.36 ScholarSprout/1.0"
     ),
 }
 

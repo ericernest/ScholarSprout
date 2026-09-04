@@ -1,8 +1,8 @@
-研见 · SeeFurther — Linux x86_64 便携版
+科研萌芽 · ScholarSprout — Linux x86_64 便携版
 
 1. 解压整个压缩包。
-2. 在解压目录运行：./SeeFurther
-3. 程序会在浏览器打开研见。首次使用时按配置向导填写大模型 API。
+2. 在解压目录运行：./ScholarSprout
+3. 程序会在浏览器打开科研萌芽。首次使用时按配置向导填写大模型 API。
 4. 在启动终端按 Ctrl+C 可退出程序。
 
 无需安装 Python、Node.js 或项目依赖。

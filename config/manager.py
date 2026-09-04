@@ -1,4 +1,4 @@
-"""提供 NoviceSynapse 的配置加载与保存能力。"""
+"""提供 ScholarSprout 的配置加载与保存能力。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ DEFAULT_DATA_DIR = "~/.scholarsprout"
 
 def get_config_file() -> Path:
     """Return the configured config-file location (mainly useful for packaging/tests)."""
-    override = os.getenv("NOVICESYNAPSE_CONFIG_FILE")
+    override = os.getenv("SCHOLARSPROUT_CONFIG_FILE")
     return Path(override).expanduser() if override else USER_CONFIG_FILE
 
 
@@ -103,7 +103,7 @@ def save_config(config: AppConfig, config_file: Path | None = None) -> Path:
 
 def resolve_data_dir(config: AppConfig) -> Path:
     """Resolve the effective data directory, preserving the deployment override."""
-    configured = os.getenv("NOVICESYNAPSE_DATA_DIR") or config.storage.data_dir
+    configured = os.getenv("SCHOLARSPROUT_DATA_DIR") or config.storage.data_dir
     return Path(configured or DEFAULT_DATA_DIR).expanduser().resolve()
 
 

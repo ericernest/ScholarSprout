@@ -1,4 +1,4 @@
-"""Linux desktop launcher for the self-contained SeeFurther distribution."""
+"""Linux desktop launcher for the self-contained ScholarSprout distribution."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _open_when_ready(port: int) -> None:
 def _error_log_path() -> Path:
     state_home = os.getenv("XDG_STATE_HOME")
     root = Path(state_home) if state_home else Path.home() / ".local" / "state"
-    return root / "SeeFurther" / "launcher-error.log"
+    return root / "ScholarSprout" / "launcher-error.log"
 
 
 def _log_error(message: str) -> None:
@@ -55,15 +55,15 @@ def _log_error(message: str) -> None:
         path = _error_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{message}\n\n{traceback.format_exc()}", encoding="utf-8")
-        print(f"研见 · SeeFurther 启动失败：{message}\n日志：{path}", file=sys.stderr)
+        print(f"科研萌芽 · ScholarSprout 启动失败：{message}\n日志：{path}", file=sys.stderr)
     except OSError:
-        print(f"研见 · SeeFurther 启动失败：{message}", file=sys.stderr)
+        print(f"科研萌芽 · ScholarSprout 启动失败：{message}", file=sys.stderr)
 
 
 def main() -> None:
     try:
         port = _find_available_port()
-        if os.getenv("SEEFURTHER_SKIP_BROWSER") != "1":
+        if os.getenv("SCHOLARSPROUT_SKIP_BROWSER") != "1":
             threading.Thread(target=_open_when_ready, args=(port,), daemon=True).start()
         start_gateway_server(host=HOST, port=port)
     except Exception as exc:

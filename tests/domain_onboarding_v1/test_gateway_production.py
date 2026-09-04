@@ -94,17 +94,17 @@ class GatewayProductionTests(unittest.TestCase):
             {"multilingual_embedding": 2},
         )
         self.assertIn(
-            'novicesynapse_domain_onboarding_requests_total{status="ok"} 1',
+            'scholarsprout_domain_onboarding_requests_total{status="ok"} 1',
             prometheus_response.text,
         )
-        self.assertIn("novicesynapse_domain_onboarding_estimated_cost_usd_total 2.0", prometheus_response.text)
+        self.assertIn("scholarsprout_domain_onboarding_estimated_cost_usd_total 2.0", prometheus_response.text)
 
     def test_container_deployment_uses_readiness_and_non_root_user(self) -> None:
         root = Path(__file__).resolve().parents[2]
         dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
         compose = (root / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
 
-        self.assertIn("USER novicesynapse", dockerfile)
+        self.assertIn("USER scholarsprout", dockerfile)
         self.assertIn("/ready", dockerfile)
         self.assertIn("domain_onboarding_audit", compose)
         self.assertIn("DOMAIN_ONBOARDING_JOB_DB", compose)

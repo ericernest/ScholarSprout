@@ -27,9 +27,9 @@ for (const [relativePath, markers] of Object.entries(contracts)) {
   test(`${relativePath} keeps its required controls and scripts`, () => {
     const html = readFileSync(join(staticRoot, ...relativePath.split("/")), "utf8");
     for (const marker of markers) assert.ok(html.includes(marker), `${relativePath} is missing ${marker}`);
-    assert.ok(!html.includes("NoviceSynapse"), `${relativePath} still exposes the retired brand`);
-    assert.ok(!html.includes("研见"), `${relativePath} still exposes the previous Chinese brand`);
-    assert.ok(!html.includes("SeeFurther"), `${relativePath} still exposes the previous English brand`);
+    assert.ok(!html.includes("Novice" + "Synapse"), `${relativePath} still exposes the retired brand`);
+    assert.ok(!html.includes("研" + "见"), `${relativePath} still exposes the previous Chinese brand`);
+    assert.ok(!html.includes("See" + "Further"), `${relativePath} still exposes the previous English brand`);
     assert.ok(html.includes("科研萌芽"), `${relativePath} is missing the current Chinese brand`);
     assert.ok(html.includes("ScholarSprout"), `${relativePath} is missing the current English brand`);
   });
@@ -68,7 +68,7 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   assert.ok(tutorial.indexOf('id: "reading-note"') < tutorial.indexOf('id: "domain-mode"'));
   assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
   assert.ok(tutorial.includes("openReadingMap?.()"));
-  assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
+  assert.ok(paperApp.includes("window.ScholarSproutTutorial.openReadingMap"));
   assert.ok(tutorial.indexOf("上传一篇论文") < tutorial.indexOf("提出一个领域"));
   assert.ok(tutorial.includes("prepareTutorialPaperUpload"));
   assert.ok(tutorial.includes("tour-paper-card"));

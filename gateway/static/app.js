@@ -13,7 +13,7 @@ const modeEndpoints = {
 const DOMAIN_WORKSPACE_KEY = "domain_onboarding_workspace_v1_9";
 const DOMAIN_PENDING_REQUEST_KEY = "domain_onboarding_pending_request_v1";
 const DOMAIN_TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted"]);
-const CHAT_PENDING_GENERATION_KEY = "seefurther_pending_chat_generation_v1";
+const CHAT_PENDING_GENERATION_KEY = "scholarsprout_pending_chat_generation_v1";
 const tutorialParams = new URLSearchParams(window.location.search);
 const tutorialActive = tutorialParams.get("tutorial") === "1";
 
@@ -1899,7 +1899,7 @@ function setLoading(isLoading, interruptible = false) {
 
 // Get persistent local session id.
 function getSessionId() {
-  const key = "novicesynapse_session_id";
+  const key = "scholarsprout_session_id";
   const query = new URLSearchParams(window.location.search);
   const requested = query.get("conversation_id");
   if (requested) {

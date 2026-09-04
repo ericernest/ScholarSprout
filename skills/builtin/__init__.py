@@ -1,1 +1,1 @@
-"""包含 NoviceSynapse 内置 Skill。"""
+"""包含 ScholarSprout 内置 Skill。"""

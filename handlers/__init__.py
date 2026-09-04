@@ -1,4 +1,4 @@
-"""导出 NoviceSynapse 消息 handler。"""
+"""导出 ScholarSprout 消息 handler。"""
 
 from .chat_handler import handle_chat_message
 from .domain_onboarding_handler import handle_domain_onboarding_message

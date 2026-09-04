@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 的配置命令交互流程。"""
+"""定义 ScholarSprout 的配置命令交互流程。"""
 
 from __future__ import annotations
 

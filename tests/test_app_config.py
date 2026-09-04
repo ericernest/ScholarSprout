@@ -76,7 +76,7 @@ class ConfigManagerTests(unittest.TestCase):
             config = AppConfig(storage=StorageConfig(data_dir=str(Path(directory) / "file")))
             override = str(Path(directory) / "environment")
 
-            with patch.dict(os.environ, {"NOVICESYNAPSE_DATA_DIR": override}):
+            with patch.dict(os.environ, {"SCHOLARSPROUT_DATA_DIR": override}):
                 self.assertEqual(resolve_data_dir(config), Path(override).resolve())
 
     def test_feishu_runtime_reads_saved_config_and_environment_takes_precedence(self) -> None:
@@ -111,7 +111,7 @@ class ConfigWebTests(unittest.TestCase):
     def test_tutorial_completion_is_persisted_once_per_local_user_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_file = Path(directory) / "config.json"
-            with patch.dict(os.environ, {"NOVICESYNAPSE_CONFIG_FILE": str(config_file)}):
+            with patch.dict(os.environ, {"SCHOLARSPROUT_CONFIG_FILE": str(config_file)}):
                 client = TestClient(app)
                 before = client.get("/api/tutorial/status")
                 completed = client.post("/api/tutorial/complete")
@@ -121,7 +121,7 @@ class ConfigWebTests(unittest.TestCase):
             self.assertFalse(before.json()["completed"])
             self.assertEqual(completed.status_code, 200)
             self.assertTrue(after.json()["completed"])
-            self.assertTrue((Path(directory) / ".seefurther-tutorial-v2-complete").is_file())
+            self.assertTrue((Path(directory) / ".scholarsprout-tutorial-v2-complete").is_file())
 
     def test_generation_snapshot_requires_matching_session(self) -> None:
         client = TestClient(app)
@@ -249,7 +249,7 @@ class ConfigWebTests(unittest.TestCase):
     def test_configuration_page_is_available(self) -> None:
         response = TestClient(app).get("/settings")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-seefurther-entry="settings"', response.text)
+        self.assertIn('data-scholarsprout-entry="settings"', response.text)
         settings_html = (
             Path(__file__).resolve().parents[1] / "gateway/static/settings/index.html"
         ).read_text(encoding="utf-8")

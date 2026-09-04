@@ -1,12 +1,12 @@
-# NoviceSynapse 部署指南
+# ScholarSprout 部署指南
 
 ## 1. 启动服务
 
 登录 `tql`，在仓库目录执行：
 
 ```bash
-cd ~/competition/NoviceSynapse
-NOVICESYNAPSE_PYTHON=/data2/sxf2026/miniconda3/envs/novicesynapse/bin/python bash deploy/start_campus.sh
+cd ~/competition/ScholarSprout
+SCHOLARSPROUT_PYTHON=/data2/sxf2026/miniconda3/envs/scholarsprout/bin/python bash deploy/start_campus.sh
 ```
 
 看到下面的日志表示服务启动成功：
@@ -34,7 +34,7 @@ curl --noproxy '*' http://192.168.1.5:8000/health
 正常应返回：
 
 ```json
-{"status":"ok","service":"novicesynapse-gateway"}
+{"status":"ok","service":"scholarsprout-gateway"}
 ```
 
 如果服务器启用了主机防火墙，需要允许：

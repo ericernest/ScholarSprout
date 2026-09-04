@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeishuChannel(BaseChannel):
-    """负责飞书消息进入 NoviceSynapse，以及将结果发送回飞书。"""
+    """负责飞书消息进入 ScholarSprout，以及将结果发送回飞书。"""
 
     name = "feishu"
 
@@ -137,7 +137,7 @@ class FeishuChannel(BaseChannel):
         self.bus.publish_message(message)
 
     def send_outbound(self, message: ChannelMessage) -> None:
-        """把 NoviceSynapse 输出发送回飞书。"""
+        """把 ScholarSprout 输出发送回飞书。"""
         chat_id = str(
             message.metadata.get("chat_id")
             or message.session_id
@@ -227,7 +227,7 @@ class FeishuChannel(BaseChannel):
     def _process_inbound_message(
         self,
         inbound_message: ChannelMessage,) -> None:
-        """在后台线程中执行 NoviceSynapse Agent。"""
+        """在后台线程中执行 ScholarSprout Agent。"""
         try:
             process_channel_message(
                 channel=self,

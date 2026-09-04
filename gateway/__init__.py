@@ -1,1 +1,1 @@
-"""组织 NoviceSynapse 的 gateway 层模块。"""
+"""组织 ScholarSprout 的 gateway 层模块。"""
