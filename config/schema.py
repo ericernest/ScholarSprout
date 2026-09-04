@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 的配置数据结构。"""
+"""定义 ScholarSprout 的配置数据结构。"""
 
 from __future__ import annotations
 
