@@ -126,7 +126,7 @@ class SemanticScholarRetriever(_ResilientRetriever):
         sleep_func: Callable[[float], None] = sleep,
         clock: Callable[[], float] = monotonic,
     ) -> None:
-        headers = {"User-Agent": "NoviceSynapse/0.1 domain-onboarding"}
+        headers = {"User-Agent": "ScholarSprout/0.1 domain-onboarding"}
         if api_key:
             headers["x-api-key"] = api_key
         self._owns_client = client is None
@@ -401,7 +401,7 @@ class ArxivRetriever(_ResilientRetriever):
         self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=timeout,
-            headers={"User-Agent": "NoviceSynapse/0.1 domain-onboarding contact=local-user"},
+            headers={"User-Agent": "ScholarSprout/0.1 domain-onboarding contact=local-user"},
             follow_redirects=True,
             trust_env=False,
         )
@@ -532,7 +532,7 @@ class CrossrefRetriever(_ResilientRetriever):
         self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=timeout,
-            headers={"User-Agent": "NoviceSynapse/0.1 (mailto:local@example.invalid)"},
+            headers={"User-Agent": "ScholarSprout/0.1 (mailto:local@example.invalid)"},
             follow_redirects=True,
             trust_env=False,
         )

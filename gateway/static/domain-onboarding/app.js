@@ -105,8 +105,8 @@ bindPanelResizers();
 initialize();
 
 async function initialize() {
-  if (window.SeeFurtherTutorial?.active) {
-    const snapshot = window.SeeFurtherTutorial.demoDomainSnapshot;
+  if (window.ScholarSproutTutorial?.active) {
+    const snapshot = window.ScholarSproutTutorial.demoDomainSnapshot;
     state.taskId = snapshot.task_id;
     state.snapshot = snapshot;
     state.result = snapshot.result;
@@ -1387,7 +1387,7 @@ function escapeHtml(value) {
 }
 
 function getSessionId() {
-  const key = "novicesynapse_session_id";
+  const key = "scholarsprout_session_id";
   const existing = localStorage.getItem(key);
   if (existing) return existing;
   const created = `web-${crypto.randomUUID()}`;

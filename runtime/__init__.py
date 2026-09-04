@@ -1,4 +1,4 @@
-"""导出 NoviceSynapse 运行时执行器。"""
+"""导出 ScholarSprout 运行时执行器。"""
 
 from .agent_runner import run_agent
 

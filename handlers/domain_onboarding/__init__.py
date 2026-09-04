@@ -1,4 +1,4 @@
-"""NoviceSynapse 领域入门 V1 流水线。"""
+"""ScholarSprout 领域入门 V1 流水线。"""
 
 from .config import DomainOnboardingConfig
 from .pipeline import DomainOnboardingPipeline, create_default_pipeline

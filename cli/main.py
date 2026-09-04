@@ -1,4 +1,4 @@
-"""提供 NoviceSynapse 的 CLI 主入口。"""
+"""提供 ScholarSprout 的 CLI 主入口。"""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from config.app import run_config_flow
 from doctor.app import run_doctor_check
 
 app = typer.Typer(
-    name="novicesynapse",
-    help="NoviceSynapse - AI Research Assistant\n初次运行或需修改模型请运行 config 命令。",
+    name="scholarsprout",
+    help="ScholarSprout - AI Research Assistant\n初次运行或需修改模型请运行 config 命令。",
     no_args_is_help=True,
 )
 

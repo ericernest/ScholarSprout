@@ -1,1 +1,1 @@
-"""组织 NoviceSynapse 的配置模块。"""
+"""组织 ScholarSprout 的配置模块。"""

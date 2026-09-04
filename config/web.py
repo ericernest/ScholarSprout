@@ -75,7 +75,7 @@ class ConfigUpdate(BaseModel):
 
 
 def _is_local_request(request: Request) -> bool:
-    if os.getenv("NOVICESYNAPSE_ALLOW_REMOTE_CONFIG", "").strip() == "1":
+    if os.getenv("SCHOLARSPROUT_ALLOW_REMOTE_CONFIG", "").strip() == "1":
         return True
     host = request.client.host if request.client is not None else ""
     if host == "testclient":
@@ -90,7 +90,7 @@ def _require_local_request(request: Request) -> None:
     if not _is_local_request(request):
         raise HTTPException(
             status_code=403,
-            detail="配置接口默认仅允许从运行 NoviceSynapse 的本机访问。",
+            detail="配置接口默认仅允许从运行 ScholarSprout 的本机访问。",
         )
 
 
@@ -113,7 +113,7 @@ def _public_config(config: object) -> dict[str, object]:
         "storage": {
             "data_dir": storage.data_dir or DEFAULT_DATA_DIR,
             "effective_data_dir": str(resolve_data_dir(config)),
-            "environment_override": bool(os.getenv("NOVICESYNAPSE_DATA_DIR")),
+            "environment_override": bool(os.getenv("SCHOLARSPROUT_DATA_DIR")),
         },
         "channels": {
             "feishu": {
@@ -134,7 +134,7 @@ def _public_config(config: object) -> dict[str, object]:
 
 def _tutorial_marker() -> Path:
     """Store the one-time tutorial flag beside this OS user's config file."""
-    return get_config_file().parent / ".seefurther-tutorial-v2-complete"
+    return get_config_file().parent / ".scholarsprout-tutorial-v2-complete"
 
 
 @router.get("/api/tutorial/status")
