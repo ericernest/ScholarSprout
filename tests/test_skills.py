@@ -350,15 +350,19 @@ class SkillLoaderRegistryTests(unittest.TestCase):
     def test_agent_profiles_register_default_and_special_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = SkillRegistry(user_root=Path(temp_dir) / "user")
-            chat_profile = Profiles().get("chat")
+            profiles = Profiles()
+            chat_profile = profiles.get("chat")
             chat_skill_ids = registry.resolve_skill_ids(list(chat_profile["skills"]))
-            onboarding_profile = Profiles().get("domain_onboarding")
+            onboarding_profile = profiles.get("domain_onboarding")
             onboarding_skill_ids = registry.resolve_skill_ids(
                 list(onboarding_profile["skills"])
             )
-            paper_profile = Profiles().get("paper_reading")
+            paper_profile = profiles.get("paper_reading")
             paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
+        for profile in profiles.profiles:
+            self.assertIn("科研萌芽·ScholarSprout", profile["system_prompt"])
+            self.assertNotIn("NoviceSynapse", profile["system_prompt"])
         self.assertEqual(chat_profile["default_skill"], "chat.default")
         self.assertIn("你是科研助手小芽", chat_profile["system_prompt"])
         self.assertIn("科研萌芽·ScholarSprout", chat_profile["system_prompt"])
