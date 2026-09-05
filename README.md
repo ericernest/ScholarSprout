@@ -1,15 +1,12 @@
-<div align="center">
-  <img src="gateway/static/favicon.svg" width="92" alt="科研萌芽·ScholarSprout" />
-  <h1>科研萌芽·ScholarSprout</h1>
-  <p><strong>Where Research Takes Root.</strong></p>
-  <p>让每一个科研问题从好奇萌芽。</p>
-</div>
+# 科研萌芽·ScholarSprout v1.0.0
 
-科研萌芽·ScholarSprout 是一款本地优先的 AI 研究工作台，把领域入门、论文发现、PDF 精读、研究对话与个人笔记连接成一条连续工作流。它面向刚进入新方向的研究者，也适合需要长期管理论文、证据和研究上下文的用户。
+面向科研新手的本地优先科研助手。
 
-> v1 以 Windows 本地使用为主。模型配置、会话、论文、PDF、标注和笔记均由本地后端管理；除调用用户配置的模型与论文检索服务外，不需要额外部署前端服务器。
+- 提供研究对话、领域入门、论文精读和研究资料库。
+- 默认数据目录为 `~/.scholarsprout`。
+- Windows 提供单文件 EXE 与文件夹便携版 ZIP，两者功能一致；ZIP 包含所有依赖，启动较快，推荐使用。
 
-<!-- 截图占位：首页 / 对话工作台 -->
+首次启动后按配置向导填写模型接口即可使用。
 
 ## 核心功能
 
