@@ -58,7 +58,7 @@
 | **快速启动目录版（推荐）** | `ScholarSprout-v1.0.0-windows-x64-portable.zip` | 完整解压后双击 `ScholarSprout.exe`；启动快，移动时需要保留整个文件夹 |
 | **单文件版** | `ScholarSprout-v1.0.0-windows-x64.exe` | 只需携带一个 exe；每次启动需要先释放运行文件，因此会更慢 |
 
-两种版本均为 Windows x64 免安装程序，已包含 Python 运行时、Web 前端、PDF 解析依赖和飞书 SDK。使用者不需要安装 Python、Node.js 或其它环境，只需准备一个 OpenAI 兼容的大模型 API。
+两种版本均为 Windows x64 免安装程序，已包含 Python 运行时、Web 前端、PDF 解析依赖和飞书 SDK。使用者不需要安装 Python、Node.js 或其它环境，只需准备一个 OpenAI 兼容的大模型 API（建议使用 DeepSeek V4 Flash）。
 
 程序默认监听 `127.0.0.1:8000`；如果端口被占用，会在 `8001-8099` 中选择可用端口并打开浏览器。运行期间可通过系统托盘重新打开页面或选择“退出科研萌芽”。
 
