@@ -372,7 +372,7 @@ class DomainOnboardingPipeline:
 
             try:
                 incremental = getattr(self.generator, "generate_incrementally", None)
-                if callable(incremental) and progress_callback is not None:
+                if callable(incremental):
                     generation_result, trace.generation_duration_ms = context.call(
                         "generation",
                         self.config.generation_timeout_seconds,
