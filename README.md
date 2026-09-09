@@ -35,7 +35,11 @@
 
 > **新手教程**：程序首次启动会自动进入教程；之后也可以从首页再次打开，按步骤了解领域入门、论文精读和资料库。
 
-> **操作演示**：也可以直接查看[完整流程教程视频](docs/assets/tutorial-full-flow.mp4)。
+**操作演示**
+
+![](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
+
+也可以[下载完整流程教程视频](docs/assets/tutorial-full-flow.mp4)。
 
 ## 为什么是 ScholarSprout？
 
