@@ -35,6 +35,8 @@
 
 > **新手教程**：程序首次启动会自动进入教程；之后也可以从首页再次打开，按步骤了解领域入门、论文精读和资料库。
 
+> **操作演示**：也可以直接查看[完整流程教程视频](docs/assets/tutorial-full-flow.mp4)。
+
 ## 为什么是 ScholarSprout？
 
 科研的难点不只是“让 AI 回答一个问题”，而是把下面几步接起来：
@@ -162,10 +164,10 @@ PDF、目录、智能索引和阅读协作区放在同一个工作台里；不�
 
 ### 从源码运行
 
-要求 Python 3.11+：
+要求 Python 3.11+，请从 `main` 分支克隆：
 
 ```bash
-git clone https://github.com/ericernest/ScholarSprout.git
+git clone --branch main --single-branch https://github.com/ericernest/ScholarSprout.git
 cd ScholarSprout
 python -m pip install -e .
 scholarsprout gateway --host 127.0.0.1 --port 8000
