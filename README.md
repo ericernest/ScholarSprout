@@ -9,6 +9,8 @@
 
 > v1 以 Windows 本地使用为主。模型配置、会话、论文、PDF、标注和笔记均由本地后端管理；除调用用户配置的模型与论文检索服务外，不需要额外部署前端服务器。
 
+> **操作演示**：也可以直接查看[完整流程教程视频](docs/assets/tutorial-full-flow.mp4)。
+
 <!-- 截图占位：首页 / 对话工作台 -->
 
 ## 核心功能
@@ -66,10 +68,10 @@
 
 ## 从源码运行
 
-支持 Windows 和 Linux，要求 Python 3.11+：
+支持 Windows 和 Linux，要求 Python 3.11+，请从 `main` 分支克隆：
 
 ```bash
-git clone https://github.com/ericernest/ScholarSprout.git
+git clone --branch main --single-branch https://github.com/ericernest/ScholarSprout.git
 cd ScholarSprout
 python -m pip install -e .
 scholarsprout gateway --host 127.0.0.1 --port 8000
