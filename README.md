@@ -183,7 +183,7 @@ npm run build
 
 首次启动会进入教程，也可以随时打开 [http://127.0.0.1:8000/settings](http://127.0.0.1:8000/settings)。配置分为“模型与数据”和“多渠道”两个页面。
 
-![](https://github.com/user-attachments/assets/ceb08d48-7b45-444f-953a-16bdffea01a0)
+https://github.com/user-attachments/assets/ceb08d48-7b45-444f-953a-16bdffea01a0
 
 ### 基础模型（必填）
 
