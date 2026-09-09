@@ -33,12 +33,6 @@
 
 > 如果你刚开始接触一个方向，从“领域入门”开始；如果手上已经有 PDF，可以直接进入“论文精读”。
 
-> **新手教程**：程序首次启动会进入教程，也可以随时打开[配置页](http://127.0.0.1:8000/settings)。配置分为“模型与数据”和“多渠道”两个页面。
-
-![](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
-
-[在线打开教程视频](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
-
 ## 为什么是 ScholarSprout？
 
 科研的难点不只是“让 AI 回答一个问题”，而是把下面几步接起来：
@@ -187,7 +181,11 @@ npm run build
 
 ## 配置
 
-首次启动会进入教程，也可以随时打开 <http://127.0.0.1:8000/settings>。配置分为“模型与数据”和“多渠道”两个页面。
+首次启动会进入教程，也可以随时打开 [http://127.0.0.1:8000/settings](http://127.0.0.1:8000/settings)。配置分为“模型与数据”和“多渠道”两个页面。
+
+![](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
+
+[在线打开教程视频](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
 
 ### 基础模型（必填）
 
