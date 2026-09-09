@@ -39,7 +39,7 @@
 
 ![](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
 
-也可以[下载完整流程教程视频](docs/assets/tutorial-full-flow.mp4)。
+[在线打开教程视频](https://github.com/user-attachments/assets/e066b1c9-08d4-48b5-8b87-fc251778360c)
 
 ## 为什么是 ScholarSprout？
 
