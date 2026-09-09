@@ -1,4 +1,4 @@
-# NoviceSynapse 功能开发说明
+# ScholarSprout 功能开发说明
 
 这份文档面向论文精读和领域入门功能开发同学。以下功能设计是初步设想，可以讨论修改。
 
@@ -164,7 +164,7 @@ Profile 示例：
   "name": "default_chat",
   "type": "chat",
   "role": "chat",
-  "system_prompt": "你是 NoviceSynapse 的默认科研聊天助手。",
+  "system_prompt": "你是 ScholarSprout 的默认科研聊天助手。",
   "tools": ["get_current_time"],
   "default_skill": "chat.default",
   "skills": ["chat.research_discussion"]
@@ -257,5 +257,5 @@ https://arxiv.org/abs/xxxx.xxxxx
 提交和推送前建议执行：
 
 ```bash
-novicesynapse doctor
+scholarsprout doctor
 ```

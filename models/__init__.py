@@ -1,1 +1,1 @@
-"""组织 NoviceSynapse 的模型客户端模块。"""
+"""组织 ScholarSprout 的模型客户端模块。"""

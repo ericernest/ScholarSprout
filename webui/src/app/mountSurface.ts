@@ -5,6 +5,6 @@ import "../styles/foundation.css";
 
 export function mountSurface(surfaceId: SurfaceId): void {
   const root = document.querySelector<HTMLElement>("#app");
-  if (!root) throw new Error(`SeeFurther: missing #app for ${surfaceId}`);
+  if (!root) throw new Error(`ScholarSprout: missing #app for ${surfaceId}`);
   createApp(LegacySurface, { surfaceId }).mount(root);
 }

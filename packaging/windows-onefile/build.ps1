@@ -1,26 +1,37 @@
 param(
     [switch]$InstallBuildTool,
     [ValidateSet("OneDir", "OneFile", "Both")]
-    [string]$Mode = "OneDir"
+    [string]$Mode = "OneDir",
+    [ValidatePattern('^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$')]
+    [string]$ReleaseVersion = "",
+    [string]$BuildPythonPath = "",
+    [string]$BuildRootPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $PackageDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $PackageDir "..\..")
-$OutputDir = Join-Path $PackageDir "output"
-$WorkDir = Join-Path $PackageDir "work"
+$BuildRoot = if ($BuildRootPath) { $BuildRootPath } else { $PackageDir }
+$OutputDir = Join-Path $BuildRoot "output"
+$WorkDir = Join-Path $BuildRoot "work"
 $BuildVenv = Join-Path $PackageDir ".venv"
-$BuildPython = Join-Path $BuildVenv "Scripts\python.exe"
+$BuildPython = if ($BuildPythonPath) { $BuildPythonPath } else { Join-Path $BuildVenv "Scripts\python.exe" }
 $StaticDir = Join-Path $RepoRoot "gateway\static"
 $BuiltinSkillsDir = Join-Path $RepoRoot "skills\builtin"
 $AgentProfiles = Join-Path $RepoRoot "agents\profiles.json"
 $Launcher = Join-Path $PackageDir "launcher.py"
-$AppIcon = Join-Path $PackageDir "seefurther.ico"
+$AppName = "ScholarSprout"
+$AppIcon = Join-Path $PackageDir "scholarsprout.ico"
+
+New-Item -ItemType Directory -Path $OutputDir, $WorkDir -Force | Out-Null
 
 Push-Location $RepoRoot
 try {
     if ($InstallBuildTool) {
         if (-not (Test-Path -LiteralPath $BuildPython)) {
+            if ($BuildPythonPath) {
+                throw "指定的构建 Python 不存在：$BuildPythonPath"
+            }
             python -m venv $BuildVenv
         }
         & $BuildPython -m pip install --upgrade pip
@@ -36,7 +47,7 @@ try {
         throw "隔离环境中缺少 PyInstaller、Pillow、pystray 或 lark-oapi。请运行：.\packaging\windows-onefile\build.ps1 -InstallBuildTool"
     }
 
-    function Invoke-SeeFurtherBuild([string]$BuildKind) {
+    function Invoke-ScholarSproutBuild([string]$BuildKind) {
         $LayoutFlag = if ($BuildKind -eq "OneFile") { "--onefile" } else { "--onedir" }
         $PyInstallerArgs = @(
             "-m", "PyInstaller",
@@ -44,7 +55,7 @@ try {
             "--clean",
             $LayoutFlag,
             "--windowed",
-            "--name", "SeeFurther",
+            "--name", $AppName,
             "--icon", $AppIcon,
             "--distpath", $OutputDir,
             "--workpath", $WorkDir,
@@ -69,23 +80,29 @@ try {
     }
 
     if ($Mode -in @("OneDir", "Both")) {
-        Invoke-SeeFurtherBuild "OneDir"
-        $OneDirPath = Join-Path $OutputDir "SeeFurther"
-        $OneDirExe = Join-Path $OneDirPath "SeeFurther.exe"
+        Invoke-ScholarSproutBuild "OneDir"
+        $OneDirPath = Join-Path $OutputDir $AppName
+        $OneDirExe = Join-Path $OneDirPath "$AppName.exe"
         if (-not (Test-Path -LiteralPath $OneDirExe)) {
             throw "打包命令结束，但没有生成 $OneDirExe"
         }
-        $ZipPath = Join-Path $OutputDir "SeeFurther-windows-x64.zip"
+        $ZipName = if ($ReleaseVersion) { "$AppName-$ReleaseVersion-windows-x64-portable.zip" } else { "$AppName-windows-x64-portable.zip" }
+        $ZipPath = Join-Path $OutputDir $ZipName
         Compress-Archive -LiteralPath $OneDirPath -DestinationPath $ZipPath -Force
         Write-Host "已生成快速启动目录：$OneDirPath"
         Write-Host "已生成可分发压缩包：$ZipPath"
     }
 
     if ($Mode -in @("OneFile", "Both")) {
-        Invoke-SeeFurtherBuild "OneFile"
-        $OneFileExe = Join-Path $OutputDir "SeeFurther.exe"
+        Invoke-ScholarSproutBuild "OneFile"
+        $OneFileExe = Join-Path $OutputDir "$AppName.exe"
         if (-not (Test-Path -LiteralPath $OneFileExe)) {
             throw "打包命令结束，但没有生成 $OneFileExe"
+        }
+        if ($ReleaseVersion) {
+            $VersionedExe = Join-Path $OutputDir "$AppName-$ReleaseVersion-windows-x64.exe"
+            Copy-Item -LiteralPath $OneFileExe -Destination $VersionedExe -Force
+            Write-Host "已生成版本化单文件：$VersionedExe"
         }
         Write-Host "已生成单文件版本：$OneFileExe"
     }

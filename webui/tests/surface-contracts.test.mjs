@@ -27,7 +27,11 @@ for (const [relativePath, markers] of Object.entries(contracts)) {
   test(`${relativePath} keeps its required controls and scripts`, () => {
     const html = readFileSync(join(staticRoot, ...relativePath.split("/")), "utf8");
     for (const marker of markers) assert.ok(html.includes(marker), `${relativePath} is missing ${marker}`);
-    assert.ok(!html.includes("NoviceSynapse"), `${relativePath} still exposes the retired brand`);
+    assert.ok(!html.includes("Novice" + "Synapse"), `${relativePath} still exposes the retired brand`);
+    assert.ok(!html.includes("研" + "见"), `${relativePath} still exposes the previous Chinese brand`);
+    assert.ok(!html.includes("See" + "Further"), `${relativePath} still exposes the previous English brand`);
+    assert.ok(html.includes("科研萌芽"), `${relativePath} is missing the current Chinese brand`);
+    assert.ok(html.includes("ScholarSprout"), `${relativePath} is missing the current English brand`);
   });
 }
 
@@ -64,7 +68,7 @@ test("first-use tutorial overlays the real surfaces with synchronized detail con
   assert.ok(tutorial.indexOf('id: "reading-note"') < tutorial.indexOf('id: "domain-mode"'));
   assert.ok(tutorial.includes("data-tour-anchor='reading-map-explain'"));
   assert.ok(tutorial.includes("openReadingMap?.()"));
-  assert.ok(paperApp.includes("window.SeeFurtherTutorial.openReadingMap"));
+  assert.ok(paperApp.includes("window.ScholarSproutTutorial.openReadingMap"));
   assert.ok(tutorial.indexOf("上传一篇论文") < tutorial.indexOf("提出一个领域"));
   assert.ok(tutorial.includes("prepareTutorialPaperUpload"));
   assert.ok(tutorial.includes("tour-paper-card"));
@@ -111,6 +115,24 @@ test("chat exposes a dedicated interrupt control and uses the wide workspace", (
   assert.ok(javascript.includes("/cancel"));
   assert.ok(styles.includes("width: calc(100% - clamp(24px, 3.2vw, 52px))"));
   assert.ok(styles.includes("max-width: none"));
+  assert.ok(html.includes("你好，我是科研助手小芽。"));
+  assert.ok(html.includes("<span>科研萌芽·ScholarSprout</span>"));
+});
+
+test("home copy flows naturally within the available width", () => {
+  const html = readFileSync(join(staticRoot, "index.html"), "utf8");
+  assert.ok(html.includes("让每一个科研问题从好奇萌芽。陪你读懂第一篇论文、走进一个领域，在持续探索中长出自己的研究脉络。"));
+  assert.ok(!html.includes('<p class="hero-copy"><span>'));
+});
+
+test("the shared icon represents the ScholarSprout brand", () => {
+  const legacyIcon = readFileSync(join(staticRoot, "favicon.svg"), "utf8");
+  const vueIcon = readFileSync(join(root, "webui", "public", "favicon.svg"), "utf8");
+  for (const icon of [legacyIcon, vueIcon]) {
+    assert.ok(icon.includes('aria-label="科研萌芽·ScholarSprout"'));
+    assert.ok(icon.includes('id="leaf-left"'));
+    assert.ok(icon.includes('id="leaf-right"'));
+  }
 });
 
 test("external-channel answers refresh incrementally without rebuilding every message", () => {
@@ -139,8 +161,8 @@ test("Vue compatibility layer preserves the previous surface design", () => {
   const overrides = readFileSync(join(root, "webui", "public", "styles", "legacy-overrides.css"), "utf8");
   const guide = readFileSync(join(root, "webui", "src", "components", "ProductGuide.vue"), "utf8");
   const home = readFileSync(join(root, "gateway", "static", "index.html"), "utf8");
-  assert.ok(home.includes("研见 · SeeFurther"));
-  assert.ok(home.includes("See Further into Research."));
+  assert.ok(home.includes("科研萌芽·ScholarSprout"));
+  assert.ok(home.includes("Where Research Takes Root."));
   assert.ok(!overrides.includes(".chat-page { max-width"));
   assert.ok(!overrides.includes("focus-within"));
   assert.ok(!overrides.includes("outline: 3px"));

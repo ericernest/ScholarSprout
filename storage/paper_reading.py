@@ -20,7 +20,7 @@ class PaperReadingStorage:
         research_store: LocalResearchStore | None = None,
     ) -> None:
         if base_dir is None:
-            base_dir = Path.home() / ".novicesynapse" / "paper_reading"
+            base_dir = Path.home() / ".scholarsprout" / "paper_reading"
         self.base_dir = Path(base_dir)
         self.research_store = research_store or LocalResearchStore(
             self.base_dir.parent / "research.sqlite3"

@@ -246,7 +246,7 @@ class ArxivSource(PaperSource):
 
     async def _request(self, params: dict[str, Any], *, operation: str) -> Any:
         headers = {
-            "User-Agent": "NoviceSynapse/0.1 paper-reading",
+            "User-Agent": "ScholarSprout/0.1 paper-reading",
             "Accept": "application/atom+xml",
         }
         async with httpx.AsyncClient(
@@ -394,7 +394,7 @@ class SemanticScholarSource(PaperSource):
         operation: str,
     ) -> Any:
         headers = {
-            "User-Agent": "NoviceSynapse/0.1 paper-reading",
+            "User-Agent": "ScholarSprout/0.1 paper-reading",
             "Accept": "application/json",
         }
         api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
@@ -547,7 +547,7 @@ class OpenAlexFallbackSource:
         operation: str = "exact lookup",
     ) -> Any:
         headers = {
-            "User-Agent": "NoviceSynapse/0.1 paper-reading",
+            "User-Agent": "ScholarSprout/0.1 paper-reading",
             "Accept": "application/json",
         }
         async with httpx.AsyncClient(

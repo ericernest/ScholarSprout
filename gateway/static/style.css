@@ -79,13 +79,13 @@ body::before {
 .home-page {
   display: grid;
   place-items: center;
-  padding: 2rem;
+  padding: clamp(1.5rem, 3vw, 3rem);
 }
 
 .hero-card {
   position: relative;
-  width: min(860px, 100%);
-  padding: clamp(2.2rem, 7vw, 5rem);
+  width: min(1220px, 100%);
+  padding: clamp(2.5rem, 4.5vw, 4.75rem);
   border: 1px solid var(--line);
   border-radius: 34px;
   background:
@@ -128,9 +128,15 @@ h1 {
   text-shadow: 0 0 36px rgba(102, 245, 214, 0.2);
 }
 
+.hero-card h1 {
+  font-size: clamp(3.6rem, 6.4vw, 5.75rem);
+  line-height: 0.96;
+  white-space: nowrap;
+}
+
 .hero-copy {
   margin: 1.5rem 0 1.4rem;
-  max-width: 680px;
+  max-width: none;
   color: var(--muted);
   font-size: 1.08rem;
   line-height: 1.85;
@@ -1012,6 +1018,12 @@ textarea::placeholder {
 }
 
 .primary-button,.secondary-button,.send-button{justify-content:center;line-height:1}.send-button{display:inline-flex;align-items:center}
+
+@media (max-width: 900px) {
+  .hero-card h1 {
+    white-space: normal;
+  }
+}
 
 @media (max-width: 640px) {
   .hero-card {

@@ -1,4 +1,4 @@
-"""提供 NoviceSynapse 的配置检查命令逻辑。"""
+"""提供 ScholarSprout 的配置检查命令逻辑。"""
 
 from __future__ import annotations
 

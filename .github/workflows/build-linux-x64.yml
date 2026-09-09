@@ -32,9 +32,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export SEEFURTHER_SKIP_BROWSER=1
-          export NOVICESYNAPSE_DATA_DIR="$RUNNER_TEMP/seefurther-linux-smoke"
-          packaging/linux-x64/output/SeeFurther/SeeFurther &
+          export SCHOLARSPROUT_SKIP_BROWSER=1
+          export SCHOLARSPROUT_DATA_DIR="$RUNNER_TEMP/scholarsprout-linux-smoke"
+          packaging/linux-x64/output/ScholarSprout/ScholarSprout &
           app_pid=$!
           trap 'kill "$app_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 120); do
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SeeFurther-v1.0.0-linux-x86_64
-          path: packaging/linux-x64/output/SeeFurther-v1.0.0-linux-x86_64.tar.gz
+          name: ScholarSprout-v1.0.0-linux-x86_64
+          path: packaging/linux-x64/output/ScholarSprout-v1.0.0-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 7

@@ -350,17 +350,23 @@ class SkillLoaderRegistryTests(unittest.TestCase):
     def test_agent_profiles_register_default_and_special_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = SkillRegistry(user_root=Path(temp_dir) / "user")
-            chat_profile = Profiles().get("chat")
+            profiles = Profiles()
+            chat_profile = profiles.get("chat")
             chat_skill_ids = registry.resolve_skill_ids(list(chat_profile["skills"]))
-            onboarding_profile = Profiles().get("domain_onboarding")
+            onboarding_profile = profiles.get("domain_onboarding")
             onboarding_skill_ids = registry.resolve_skill_ids(
                 list(onboarding_profile["skills"])
             )
-            paper_profile = Profiles().get("paper_reading")
+            paper_profile = profiles.get("paper_reading")
             paper_skill_ids = registry.resolve_skill_ids(list(paper_profile["skills"]))
 
+        for profile in profiles.profiles:
+            self.assertIn("科研萌芽·ScholarSprout", profile["system_prompt"])
+            self.assertNotIn("Novice" + "Synapse", profile["system_prompt"])
         self.assertEqual(chat_profile["default_skill"], "chat.default")
-        self.assertIn("研见 · SeeFurther", chat_profile["system_prompt"])
+        self.assertIn("你是科研助手小芽", chat_profile["system_prompt"])
+        self.assertIn("科研萌芽·ScholarSprout", chat_profile["system_prompt"])
+        self.assertNotIn("研" + "见 · See" + "Further", chat_profile["system_prompt"])
         self.assertIn("唯一允许访问的研究范围", chat_profile["system_prompt"])
         self.assertIn("不得查看或引用其他领域、论文或会话的数据", chat_profile["system_prompt"])
         self.assertNotIn("不要假装", chat_profile["system_prompt"])

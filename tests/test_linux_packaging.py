@@ -13,7 +13,7 @@ def test_linux_package_is_self_contained_and_smoke_tested() -> None:
     assert "gateway/static:gateway/static" in build
     assert "lark_oapi" in build
     assert "start_gateway_server(host=HOST, port=port)" in launcher
-    assert "SEEFURTHER_SKIP_BROWSER" in launcher
+    assert "SCHOLARSPROUT_SKIP_BROWSER" in launcher
     assert "rockylinux:8" in workflow
     assert "python3.11-devel" in workflow
     assert "Smoke test packaged gateway" in workflow

@@ -1,4 +1,4 @@
-"""声明 NoviceSynapse gateway 应用与启动函数。"""
+"""声明 ScholarSprout gateway 应用与启动函数。"""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ from tools.builtin.kg_build_tool import set_kg_builder
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FRONTEND_DIR = STATIC_DIR / "app-v2"
 
-app = FastAPI(title="SeeFurther Gateway")
+app = FastAPI(title="ScholarSprout Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(config_router)
 app.include_router(research_library_router)
@@ -75,7 +75,7 @@ app.include_router(research_library_router)
 # 返回最小健康检查结果。
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "novicesynapse-gateway"}
+    return {"status": "ok", "service": "scholarsprout-gateway"}
 
 
 @app.get("/ready")

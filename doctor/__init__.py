@@ -1,1 +1,1 @@
-"""组织 NoviceSynapse 的 doctor 检查模块。"""
+"""组织 ScholarSprout 的 doctor 检查模块。"""

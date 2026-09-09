@@ -175,7 +175,7 @@ class PipelineTests(unittest.TestCase):
             )
         )
 
-    def test_full_pipeline_reports_empty_recommendations_after_validated_survey_miss(self) -> None:
+    def test_full_pipeline_falls_back_to_ranked_retrieval_after_validated_survey_miss(self) -> None:
         source_papers = [
             paper for paper in make_candidates() if "Survey" not in paper.title
         ]
@@ -206,16 +206,29 @@ class PipelineTests(unittest.TestCase):
         )
 
         self.assertIn(result.status, {"ok", "quality_warning"}, result.error)
-        self.assertEqual(result.output.papers, [])
+        self.assertTrue(result.output.papers)
         self.assertTrue(result.output.evidence_papers)
+        self.assertLessEqual(
+            len(result.output.papers),
+            pipeline.config.recommendation_fallback_limit,
+        )
+        self.assertTrue(
+            all(
+                paper.recommendation_category == "fallback_evidence"
+                and paper.recommendation_reason
+                for paper in result.output.papers
+            )
+        )
         self.assertEqual(
             result.output.reproducibility["recommendation_strategy"],
             "survey_degraded_no_result",
         )
         self.assertTrue(
             any(
-                issue.issue_type == "recommendation_unavailable"
-                for issue in result.quality.issues
+                item.get("reason") == "retrieval_ranked_fallback"
+                for item in result.output.reproducibility[
+                    "recommendation_query_audit"
+                ]
             )
         )
 

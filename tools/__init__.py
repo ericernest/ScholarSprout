@@ -1,5 +1,5 @@
-"""预留 NoviceSynapse 的工具目录。"""
-"""导出 NoviceSynapse 工具基础类型与注册入口。"""
+"""预留 ScholarSprout 的工具目录。"""
+"""导出 ScholarSprout 工具基础类型与注册入口。"""
 
 from .base import BaseTool, ToolSpec
 from .registry import ToolRegistry, create_builtin_tool_registry
@@ -10,7 +10,7 @@ __all__ = [
     "ToolSpec",
     "create_builtin_tool_registry",
 ]
-"""导出 NoviceSynapse 工具基础类型与注册入口。"""
+"""导出 ScholarSprout 工具基础类型与注册入口。"""
 
 from .base import BaseTool, ToolSpec
 from .registry import ToolRegistry, create_builtin_tool_registry
