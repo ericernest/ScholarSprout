@@ -248,10 +248,6 @@ Embedding 用于论文排序与证据匹配。URL 和 API Key 留空时复用基
 - 多渠道：飞书/Lark 长连接；
 - 发布：Windows PyInstaller。
 
-## License
-
-[MIT License](LICENSE)
-
 ## 持续迭代中
 
 科研萌芽 · ScholarSprout 目前处于持续迭代优化中。我们会继续打磨从领域入门、论文精读到研究沉淀的完整体验。
@@ -259,3 +255,7 @@ Embedding 用于论文排序与证据匹配。URL 和 API Key 留空时复用基
 后续将推出第二版，带来更多功能，并上线网页版，让科研学习可以从本地工作台走向更广泛的使用场景。
 
 更多更新，敬请期待。
+
+## License
+
+[MIT License](LICENSE)
