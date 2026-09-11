@@ -145,7 +145,7 @@ PDF、目录、智能索引和阅读协作区放在同一个工作台里；不�
 
 ## 立即开始
 
-### Windows 版
+### 直接使用（Windows）
 
 从 [v1 Release](https://github.com/ericernest/ScholarSprout/releases/tag/v1.0.0) 下载任一版本：
 
@@ -158,9 +158,9 @@ PDF、目录、智能索引和阅读协作区放在同一个工作台里；不�
 
 程序默认监听 `127.0.0.1:8000`；如果端口被占用，会在 `8001-8099` 中选择可用端口并打开浏览器。运行期间可通过系统托盘重新打开页面或选择“退出科研萌芽”。
 
-### 从源码运行
+### 从源码运行（Windows / Linux）
 
-要求 Python 3.11+，请从 `main` 分支克隆：
+**源码运行同时支持 Windows 和 Linux。** 要求 Python 3.11+，请从 `main` 分支克隆：
 
 ```bash
 git clone --branch main --single-branch https://github.com/ericernest/ScholarSprout.git
