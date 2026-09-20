@@ -129,6 +129,10 @@ def handle_feishu_mode_message(
                                  ),
                         "status": result.get("status", "ok"),
                     }
+                    # return {
+                    #     "text": value.strip(),
+                    #     "status": result.get("status","ok"),
+                    # }
 
             data = result.get("data")
 

@@ -20,6 +20,7 @@ from agents.agent import create_agent
 from bus.message_bus import MessageBus
 from channels.base import ChannelMessage
 from channels.feishu import FeishuChannel
+from channels.qq import QQChannel
 from channels.web import WebChannel
 from config.manager import is_setup_complete, load_config, resolve_data_dir
 from config.web import router as config_router
@@ -588,6 +589,19 @@ def start_gateway_server(
         )
 
         app.state.channels[feishu_channel.name] = feishu_channel
+
+    qq_app_id = str(os.getenv("QQ_APP_ID") or "").strip()
+    qq_app_secret = str(os.getenv("QQ_APP_SECRET") or "").strip()
+
+    if qq_app_id and qq_app_secret:
+        qq_channel = QQChannel(
+            bus=message_bus,
+            app_id=qq_app_id,
+            app_secret=qq_app_secret,
+            app_state=app.state,
+        )
+
+        app.state.channels[qq_channel.name] = qq_channel
 
     # 论文精读组件
     app.state.paper_storage = paper_storage
