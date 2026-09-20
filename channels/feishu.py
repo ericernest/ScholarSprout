@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeishuChannel(BaseChannel):
-    """负责飞书消息进入 NoviceSynapse，以及将结果发送回飞书。"""
+    """负责飞书消息进入 ScholarSprout，以及将结果发送回飞书。"""
 
     name = "feishu"
 
@@ -187,8 +187,7 @@ class FeishuChannel(BaseChannel):
         self,
         message: ChannelMessage,
     ) -> None:
-        """发送正式业务回复到飞书。"""
-
+        """把 ScholarSprout 输出发送回飞书。"""
         chat_id = str(
             message.metadata.get("chat_id")
             or message.session_id
@@ -353,8 +352,7 @@ class FeishuChannel(BaseChannel):
         self,
         inbound_message: ChannelMessage,
     ) -> None:
-        """在后台线程中执行 NoviceSynapse 消息处理。"""
-
+        """在后台线程中执行 ScholarSprout Agent。"""
         try:
             session_id = inbound_message.session_id
 
@@ -704,7 +702,9 @@ class FeishuChannel(BaseChannel):
                 preserve_urls=preserve_urls,
             )
 
+
         return format_plain_text(
             content,
             preserve_urls=preserve_urls,
         )
+

@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 内部 bus 事件类型。"""
+"""定义 ScholarSprout 内部 bus 事件类型。"""
 
 from __future__ import annotations
 

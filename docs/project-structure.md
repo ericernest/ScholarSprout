@@ -1,6 +1,6 @@
-# NoviceSynapse 架构介绍
+# ScholarSprout 架构介绍
 
-这份文档用于说明 NoviceSynapse 当前框架结构、目录职责和消息流。功能开发细节请看 [development-guide.md](development-guide.md)。
+这份文档用于说明 ScholarSprout 当前框架结构、目录职责和消息流。功能开发细节请看 [development-guide.md](development-guide.md)。
 
 ## 当前范围
 
@@ -24,7 +24,7 @@
 ## 目录职责
 
 ```text
-NoviceSynapse/
+ScholarSprout/
 |-- agents/
 |   |-- agent.py
 |   |-- profiles.py
@@ -100,10 +100,10 @@ NoviceSynapse/
 
 当前命令：
 
-- `novicesynapse config`
-- `novicesynapse doctor`
-- `novicesynapse gateway --host 127.0.0.1 --port 8000`
-- `novicesynapse agent`
+- `scholarsprout config`
+- `scholarsprout doctor`
+- `scholarsprout gateway --host 127.0.0.1 --port 8000`
+- `scholarsprout agent`
 
 `agent` 当前只是占位命令。
 
@@ -114,7 +114,7 @@ NoviceSynapse/
 职责：
 
 - 定义配置结构
-- 从 `~/.novicesynapse/config.json` 读取配置
+- 从 `~/.scholarsprout/config.json` 读取配置
 - 保存模型配置
 - 提供交互式配置流程
 
@@ -273,7 +273,7 @@ Profile 只有 Default Skill 时，Runtime 直接加载它，不调用 Selector�
 
 职责：
 
-- 从内置目录和 `~/.novicesynapse/skills/` 扫描 Skill
+- 从内置目录和 `~/.scholarsprout/skills/` 扫描 Skill
 - 解析并校验 `SKILL.md` 的 YAML Front Matter
 - 初始扫描只建立元数据索引，被选中后再加载完整正文
 - 按 Profile 的可选 `default_skill` 加载模式通用 Skill

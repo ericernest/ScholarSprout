@@ -26,7 +26,7 @@ const SKILLS = [
 
 const PDFJS_SRC = "/static/vendor/pdfjs/pdf.min.js";
 const PDFJS_WORKER_SRC = "/static/vendor/pdfjs/pdf.worker.min.js";
-const PDF_CACHE_NAME = "novicesynapse-paper-pdf-v1";
+const PDF_CACHE_NAME = "scholarsprout-paper-pdf-v1";
 const READING_MAP_STALE_AFTER_MS = 180000;
 
 const state = {
@@ -705,6 +705,7 @@ async function ensureReadingSession() {
     state.progress = payload.progress || state.progress;
     if (!state.sessionId) throw new Error("创建阅读会话后未返回 session_id。");
     persistState();
+    syncWorkspaceUrl();
     return true;
   } catch (error) {
     toast(`无法创建阅读会话：${error.message}`, true);
@@ -2033,7 +2034,7 @@ function showThinkingCard(detail, target = $("analysis-feed")) {
   const card = create("article", "thinking-card");
   card.append(create("span", "loading-orb"));
   const body = create("div");
-  body.append(create("strong", "", "Synapse Copilot 正在精读"));
+  body.append(create("strong", "", "Reading Pilot 正在精读"));
   body.append(create("p", "", detail || "请稍候…"));
   card.append(body);
   target.append(card);
@@ -2056,7 +2057,7 @@ function showStreamingAnalysisCard(detail, options = {}, target = $("analysis-fe
   }
   const card = create("article", "analysis-card streaming-analysis-card");
   const header = create("header");
-  header.append(create("strong", "", "Synapse Copilot"), create("span", "", detail || "正在分析…"));
+  header.append(create("strong", "", "Reading Pilot"), create("span", "", detail || "正在分析…"));
   const body = create("div", "streaming-analysis-body");
   body.append(create("p", "thinking-status", "正在思考…"));
   card.append(header, body);
@@ -2163,7 +2164,7 @@ function applyReadingPayload(payload, options = {}) {
 function appendAnalysis(text, metadata = {}, target = $("analysis-feed")) {
   const card = create("article", "analysis-card");
   const header = create("header");
-  header.append(create("strong", "", "Synapse Copilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
+  header.append(create("strong", "", "Reading Pilot"), create("span", "", metadata.duration_ms ? `${Math.round(metadata.duration_ms)} ms` : "Agent"));
   card.append(header, renderAgentResponse(text));
   target.append(card);
   target.scrollTop = target.scrollHeight;
@@ -3900,7 +3901,7 @@ function jumpToSection(sectionId) {
 }
 
 async function restoreLocalState() {
-  if (window.SeeFurtherTutorial?.active) {
+  if (window.ScholarSproutTutorial?.active) {
     initializeTutorialPaper();
     return;
   }
@@ -3946,7 +3947,7 @@ async function restoreLocalState() {
 }
 
 function initializeTutorialPaper() {
-  const paper = window.SeeFurtherTutorial.demoReadingPaper;
+  const paper = window.ScholarSproutTutorial.demoReadingPaper;
   state.paperId = paper.paper_id;
   state.sessionId = "tutorial-reading-session";
   state.conversationId = "tutorial-reading-conversation";
@@ -3973,11 +3974,11 @@ function initializeTutorialPaper() {
   $("paper-boot").hidden = true;
   document.body.classList.remove("is-booting");
   renderPaperWorkspace();
-  window.SeeFurtherTutorial.openReadingMap = () => toggleReadingMapPanel(true);
+  window.ScholarSproutTutorial.openReadingMap = () => toggleReadingMapPanel(true);
 }
 
 function persistState() {
-  if (window.SeeFurtherTutorial?.active) return;
+  if (window.ScholarSproutTutorial?.active) return;
   syncReturnChatLink();
   if (state.sessionId) localStorage.setItem(STORAGE.session, state.sessionId);
   else localStorage.removeItem(STORAGE.session);
@@ -3987,6 +3988,16 @@ function persistState() {
   else localStorage.removeItem(STORAGE.paper);
   if (state.currentSection) localStorage.setItem(STORAGE.section, state.currentSection);
   else localStorage.removeItem(STORAGE.section);
+}
+
+function syncWorkspaceUrl() {
+  if (!isDedicatedWorkspace || !state.paperId || !state.sessionId) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("paper_id", state.paperId);
+  params.set("session_id", state.sessionId);
+  if (state.conversationId) params.set("conversation_id", state.conversationId);
+  else params.delete("conversation_id");
+  window.history.replaceState(null, "", `${WORKSPACE_PATH}?${params.toString()}`);
 }
 
 function setNavigatorWidth(width, persist = true) {

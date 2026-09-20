@@ -229,7 +229,7 @@ __marimo__/
 # Local TODO
 TODO.md
 
-# SeeFurther frontend dependencies and Vite caches
+# ScholarSprout frontend dependencies and Vite caches
 webui/node_modules/
 webui/.vite/
 

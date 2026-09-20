@@ -795,12 +795,20 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
                 str(paper_data.get("title") or "论文精读")[:70],
                 user_id="local-web",
             )
-        session = session_mgr.create_session(
-            paper_id=request.paper_id,
-            paper_title=str(paper_data.get("title") or ""),
-            user_id="local-web",
-            conversation_id=conversation_id,
-        )
+        if conversation_id and research_store is not None:
+            existing_session_id = research_store.find_latest_reading_session(
+                paper_id=request.paper_id,
+                conversation_id=conversation_id,
+            )
+            if existing_session_id:
+                session = session_mgr.get_session(existing_session_id)
+        if session is None:
+            session = session_mgr.create_session(
+                paper_id=request.paper_id,
+                paper_title=str(paper_data.get("title") or ""),
+                user_id="local-web",
+                conversation_id=conversation_id,
+            )
     else:
         if not session.paper_id:
             session.paper_id = request.paper_id

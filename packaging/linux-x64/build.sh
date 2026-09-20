@@ -13,7 +13,7 @@ if [[ ! -x "$build_python" ]]; then
   exit 1
 fi
 
-rm -rf "$work_dir" "$output_dir/SeeFurther" "$output_dir/SeeFurther-v1.0.0-linux-x86_64.tar.gz"
+rm -rf "$work_dir" "$output_dir/ScholarSprout" "$output_dir/ScholarSprout-v1.0.0-linux-x86_64.tar.gz"
 mkdir -p "$work_dir" "$output_dir"
 
 cd "$repo_root"
@@ -21,7 +21,7 @@ cd "$repo_root"
   --noconfirm \
   --clean \
   --onedir \
-  --name SeeFurther \
+  --name ScholarSprout \
   --distpath "$output_dir" \
   --workpath "$work_dir" \
   --specpath "$work_dir" \
@@ -35,6 +35,6 @@ cd "$repo_root"
   --collect-submodules skills \
   "$package_dir/launcher.py"
 
-cp "$package_dir/README.txt" "$output_dir/SeeFurther/README.txt"
-tar -C "$output_dir" -czf "$output_dir/SeeFurther-v1.0.0-linux-x86_64.tar.gz" SeeFurther
-sha256sum "$output_dir/SeeFurther-v1.0.0-linux-x86_64.tar.gz"
+cp "$package_dir/README.txt" "$output_dir/ScholarSprout/README.txt"
+tar -C "$output_dir" -czf "$output_dir/ScholarSprout-v1.0.0-linux-x86_64.tar.gz" ScholarSprout
+sha256sum "$output_dir/ScholarSprout-v1.0.0-linux-x86_64.tar.gz"

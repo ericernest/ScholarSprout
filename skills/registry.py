@@ -30,7 +30,7 @@ class SkillRegistry:
         user_root: Path | None = None,
     ) -> None:
         self.builtin_root = builtin_root or Path(__file__).resolve().parent / "builtin"
-        self.user_root = user_root or Path.home() / ".novicesynapse" / "skills"
+        self.user_root = user_root or Path.home() / ".scholarsprout" / "skills"
         self._records: dict[str, SkillRecord] = {}
         self._instructions: dict[str, str] = {}
         self.scan()

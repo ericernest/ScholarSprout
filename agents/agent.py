@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 的轻量 agent。"""
+"""定义 ScholarSprout 的轻量 agent。"""
 
 from __future__ import annotations
 

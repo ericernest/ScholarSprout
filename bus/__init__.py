@@ -1,4 +1,4 @@
-"""导出 NoviceSynapse bus 事件类型与消息总线。"""
+"""导出 ScholarSprout bus 事件类型与消息总线。"""
 
 from .events import (
     AGENT_FINISHED,

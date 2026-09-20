@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 的配置命令交互流程。"""
+"""定义 ScholarSprout 的配置命令交互流程。"""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def run_config_flow() -> None:
     config.client.base_url = base_url or None
     config.client.api_key = api_key
     config.client.model_name = model_name
-    config.storage.data_dir = data_dir or "~/.novicesynapse"
+    config.storage.data_dir = data_dir or "~/.scholarsprout"
 
     try:
         save_config(config)

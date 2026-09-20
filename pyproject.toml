@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "seefurther"
+name = "scholarsprout"
 version = "1.0.0"
-description = "研见 · SeeFurther - a local-first AI research assistant"
+description = "科研萌芽 · ScholarSprout - a local-first AI research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -31,7 +31,7 @@ embeddings = [
 ]
 
 [project.scripts]
-novicesynapse = "cli.main:app"
+scholarsprout = "cli.main:app"
 
 [tool.setuptools.packages.find]
 include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]

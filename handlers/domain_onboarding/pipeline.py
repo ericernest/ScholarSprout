@@ -348,6 +348,11 @@ class DomainOnboardingPipeline:
                     trace.recommendation_query_audit = list(
                         plan.recommendation_query_audit
                     )
+                ranked = self._ensure_recommendation_fallback(
+                    ranked,
+                    plan,
+                    trace,
+                )
             else:
                 plan.recommendation_strategy = "disabled"
                 trace.recommendation_strategy = "disabled"
@@ -1503,6 +1508,65 @@ class DomainOnboardingPipeline:
             trace.recommendation_strategy = "survey_success"
         return self.recommendation_policy.merge_with_evidence(
             evidence,
+            recommendations,
+        )
+
+    def _ensure_recommendation_fallback(
+        self,
+        papers: list[Any],
+        plan: DomainResearchPlan,
+        trace: DomainOnboardingRequestTrace,
+    ) -> list[Any]:
+        """Expose ranked retrieval evidence when survey recommendations are empty."""
+
+        if any(
+            paper.paper_usage in {"recommendation", "both"}
+            for paper in papers
+        ):
+            return papers
+
+        eligible = [
+            paper
+            for paper in papers
+            if paper.context_score > 0.0
+            and paper.relevance_score >= self.config.ranking_min_relevance_score
+        ]
+        if not eligible:
+            eligible = [paper for paper in papers if paper.context_score > 0.0]
+        eligible.sort(key=lambda paper: paper.final_score, reverse=True)
+        fallback = eligible[: self.config.recommendation_fallback_limit]
+        if not fallback:
+            return papers
+
+        reason = (
+            "综述专项检索未返回可验证结果；"
+            "从本轮主题检索的高相关论文中按综合得分选入兜底清单。"
+        )
+        recommendations = [
+            paper.model_copy(
+                update={
+                    "paper_usage": "recommendation",
+                    "recommendation_category": "fallback_evidence",
+                    "recommendation_reason": reason,
+                }
+            )
+            for paper in fallback
+        ]
+        plan.recommendation_query_audit.append(
+            {
+                "query": "",
+                "source": "ranked_retrieval_fallback",
+                "result_count": len(eligible),
+                "survey_count": 0,
+                "score": fallback[0].final_score,
+                "selected": True,
+                "reason": "retrieval_ranked_fallback",
+                "selected_paper_ids": [paper.paper_id for paper in fallback],
+            }
+        )
+        trace.recommendation_query_audit = list(plan.recommendation_query_audit)
+        return self.recommendation_policy.merge_with_evidence(
+            papers,
             recommendations,
         )
 

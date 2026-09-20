@@ -143,6 +143,7 @@ class DomainOnboardingConfig(BaseModel):
     recommendation_min_query_score: float = Field(default=0.35, ge=0.0, le=1.0)
     recommendation_survey_limit: int = Field(default=3, ge=1, le=6)
     recommendation_reference_limit: int = Field(default=3, ge=0, le=8)
+    recommendation_fallback_limit: int = Field(default=6, ge=1, le=12)
     recommendation_references_per_survey: int = Field(default=40, ge=1, le=100)
     recommendation_recent_year_window: int = Field(default=5, ge=2, le=10)
     embedding_batch_size: int = Field(default=32, ge=1, le=128)

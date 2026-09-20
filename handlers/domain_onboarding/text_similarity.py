@@ -76,7 +76,7 @@ class FastEmbedProvider:
         except ImportError as exc:
             raise RuntimeError(
                 "local embeddings require the optional dependency: "
-                "pip install 'NoviceSynapse[embeddings]'"
+                "pip install 'ScholarSprout[embeddings]'"
             ) from exc
         kwargs = {"model_name": self.model_name}
         if cache_dir:

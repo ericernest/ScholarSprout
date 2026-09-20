@@ -53,6 +53,34 @@ class CreatePaperReadingSessionTests(unittest.TestCase):
         self.assertEqual(len(conversation["contexts"]), 1)
         self.assertEqual(conversation["messages"], [])
 
+    def test_create_session_reuses_the_same_paper_in_the_same_conversation(self) -> None:
+        with TemporaryDirectory() as directory:
+            storage = PaperReadingStorage(Path(directory) / "paper_reading")
+            storage.save_paper("paper-1", {
+                "paper_id": "paper-1",
+                "title": "Session Paper",
+                "sections": [{"section_id": "sec:1", "title": "Intro", "content": "Body"}],
+            })
+            state = SimpleNamespace(
+                paper_storage=storage,
+                session_manager=SessionManager(storage=storage),
+            )
+            request = PaperReadingRequest(
+                action="create_session",
+                session_id="",
+                conversation_id="conversation-1",
+                paper_id="paper-1",
+            )
+
+            first = _handle_create_session(request, state)
+            second = _handle_create_session(request, state)
+            conversation = ResearchCatalog(storage.research_store).get_conversation(
+                "conversation-1"
+            )
+
+        self.assertEqual(first["data"]["session_id"], second["data"]["session_id"])
+        self.assertEqual(len(conversation["contexts"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

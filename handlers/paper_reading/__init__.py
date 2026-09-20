@@ -1,4 +1,4 @@
-"""NoviceSynapse 论文精读模块。
+"""ScholarSprout 论文精读模块。
 
 四层架构:
   Layer 1 — Paper Pipeline (论文获取流水线)

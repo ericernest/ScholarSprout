@@ -1,1 +1,1 @@
-"""组织 NoviceSynapse 的 agent 模块。"""
+"""组织 ScholarSprout 的 agent 模块。"""

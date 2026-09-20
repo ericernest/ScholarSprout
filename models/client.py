@@ -1,4 +1,4 @@
-"""提供 NoviceSynapse 的 OpenAI client 封装。"""
+"""提供 ScholarSprout 的 OpenAI client 封装。"""
 
 from __future__ import annotations
 

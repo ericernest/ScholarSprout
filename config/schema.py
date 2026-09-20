@@ -1,4 +1,4 @@
-"""定义 NoviceSynapse 的配置数据结构。"""
+"""定义 ScholarSprout 的配置数据结构。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class EmbeddingConfig:
 # 描述本地持久化数据的目录配置。
 @dataclass(slots=True)
 class StorageConfig:
-    data_dir: str = "~/.novicesynapse"
+    data_dir: str = "~/.scholarsprout"
 
 
 @dataclass(slots=True)

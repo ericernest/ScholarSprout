@@ -24,7 +24,7 @@ curl http://192.168.1.5:8000/health
 也可以直接使用现有 CLI：
 
 ```bash
-novicesynapse gateway --host 0.0.0.0 --port 8000
+scholarsprout gateway --host 0.0.0.0 --port 8000
 ```
 
 ## 配置接口的安全边界
@@ -34,13 +34,13 @@ novicesynapse gateway --host 0.0.0.0 --port 8000
 推荐先通过 SSH 在服务器上配置：
 
 ```bash
-novicesynapse config
+scholarsprout config
 ```
 
 如果确实需要从可信内网浏览器配置，可以临时启用：
 
 ```bash
-NOVICESYNAPSE_ALLOW_REMOTE_CONFIG=1 bash deploy/start_internal.sh
+SCHOLARSPROUT_ALLOW_REMOTE_CONFIG=1 bash deploy/start_internal.sh
 ```
 
 配置完成后应重启服务并去掉这个环境变量。
