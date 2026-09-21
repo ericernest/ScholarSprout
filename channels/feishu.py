@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from threading import Lock, Thread
 from typing import Any
 
@@ -21,8 +22,11 @@ from gateway.feishu_router import (
     parse_mode_switch,
 )
 from gateway.message_flow import process_channel_message
+from handlers.domain_onboarding_handler import (
+    handle_domain_onboarding_message,
+)
 
-from .base import BaseChannel, ChannelMessage
+from .base import BaseChannel, ChannelMessage, format_plain_text
 
 
 logger = logging.getLogger(__name__)
@@ -190,18 +194,14 @@ class FeishuChannel(BaseChannel):
         )
 
         text = self._format_output(
-            message.content
+            message.content,
+            # 领域入门回复直接展示卡片正文，不附带网页入口或论文链接。
+            # 其他模式仍保留用户需要的正常网址。
+            preserve_urls=(message.mode != "domain_onboarding"),
         )
 
-        if (
-            message.mode == "domain_onboarding"
-            and "http://127.0.0.1:8000/library" not in text
-        ):
-            text = (
-                f"{text}\n\n"
-                "详细「入门路线」请在网页端查看：\n"
-                "http://127.0.0.1:8000/library"
-            )
+        if message.mode == "domain_onboarding":
+            text = self._strip_domain_web_prompt(text)
 
         self._send_text_message(
             chat_id,
@@ -370,12 +370,13 @@ class FeishuChannel(BaseChannel):
                 inbound_message.content,
                 str,
             ):
-                (
-                    switched_mode,
-                    remaining_content,
-                ) = parse_mode_switch(
-                    inbound_message.content
+                switched_mode, remaining_content = (
+                    self._parse_daily_chat_switch(inbound_message.content)
                 )
+                if not switched_mode:
+                    switched_mode, remaining_content = parse_mode_switch(
+                        inbound_message.content
+                    )
 
             # -------------------------------------------------
             # 模式切换
@@ -396,9 +397,12 @@ class FeishuChannel(BaseChannel):
                 #
                 # 只返回模式切换提示，不调用模型。
                 if not remaining_content:
-                    reply_text = mode_switch_reply(
-                        switched_mode
-                    )
+                    if switched_mode == "chat":
+                        reply_text = "已切换到「日常聊天」模式。"
+                    else:
+                        reply_text = mode_switch_reply(
+                            switched_mode
+                        )
 
                     def switch_handler(
                         message: ChannelMessage,
@@ -479,6 +483,15 @@ class FeishuChannel(BaseChannel):
                 message: ChannelMessage,
                 app_state: Any,
             ) -> dict[str, Any]:
+                # 领域入门直接复用完整卡片 Handler。不要再经过飞书 Router
+                # 的网页入口型回复，确保飞书中收到的是卡片正文。
+                if current_mode == "domain_onboarding":
+                    message.mode = "domain_onboarding"
+                    return handle_domain_onboarding_message(
+                        message,
+                        app_state,
+                    )
+
                 return handle_feishu_mode_message(
                     message,
                     app_state,
@@ -502,6 +515,57 @@ class FeishuChannel(BaseChannel):
                     "feishu_message_id"
                 ),
             )
+
+    @staticmethod
+    def _strip_domain_web_prompt(text: str) -> str:
+        """删除领域入门回复中的网页跳转引导，保留前面的卡片正文。"""
+
+        cleaned = str(text or "")
+        prompt_patterns = (
+            # 兼容提示和 URL 在同一行或分成两行的旧回复。
+            r"(?:[ \t]{2,}|\n+)?详细\s*[「『]?入门路线[」』]?\s*"
+            r"请(?:在|前往)?网页端查看\s*[：:]?\s*(?:https?://\S+)?",
+            r"(?:[ \t]{2,}|\n+)?请(?:点击|前往|在)\s*"
+            r"(?:网页端|Web\s*端)\s*(?:查看|访问|打开)\s*[：:]?\s*"
+            r"(?:https?://\S+)?",
+        )
+        for pattern in prompt_patterns:
+            cleaned = re.sub(
+                pattern,
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def _parse_daily_chat_switch(
+        content: str,
+    ) -> tuple[str | None, str]:
+        """为飞书补充“日常聊天”纯命令和命令加正文入口。"""
+
+        raw_text = str(content or "").strip()
+        lowered = raw_text.lower()
+        commands = {
+            "日常聊天", "日常聊天模式", "切换日常聊天",
+            "切换到日常聊天", "切换到日常聊天模式", "进入日常聊天",
+            "/日常聊天", "/聊天", "/chat",
+        }
+        compact = re.sub(r"\s+", "", lowered)
+        if compact in {re.sub(r"\s+", "", item.lower()) for item in commands}:
+            return "chat", ""
+
+        separator = re.compile(r"^[\s,，:：;；、\-—]+")
+        for command in sorted(commands, key=len, reverse=True):
+            if not lowered.startswith(command.lower()):
+                continue
+            tail = raw_text[len(command):]
+            match = separator.match(tail)
+            if match:
+                return "chat", tail[match.end():].strip()
+
+        return None, ""
 
     @staticmethod
     def _extract_text(
@@ -603,11 +667,16 @@ class FeishuChannel(BaseChannel):
     @staticmethod
     def _format_output(
         content: Any,
+        *,
+        preserve_urls: bool = True,
     ) -> str:
-        """将统一 Channel 输出转换成飞书文本。"""
+        """将统一 Channel 输出转换成不含 Markdown 源码的飞书文本。"""
 
         if isinstance(content, str):
-            return content
+            return format_plain_text(
+                content,
+                preserve_urls=preserve_urls,
+            )
 
         if isinstance(content, dict):
             for key in (
@@ -619,12 +688,23 @@ class FeishuChannel(BaseChannel):
                 value = content.get(key)
 
                 if isinstance(value, str):
-                    return value
+                    return format_plain_text(
+                        value,
+                        preserve_urls=preserve_urls,
+                    )
 
-            return json.dumps(
-                content,
-                ensure_ascii=False,
-                default=str,
+            return format_plain_text(
+                json.dumps(
+                    content,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                preserve_urls=preserve_urls,
             )
 
-        return str(content)
+
+        return format_plain_text(
+            content,
+            preserve_urls=preserve_urls,
+        )
+

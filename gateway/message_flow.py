@@ -173,6 +173,13 @@ def build_channel_output(message: ChannelMessage, content: Any) -> ChannelMessag
         mode=message.mode,
         content=content,
         user_id=message.user_id,
+        # 外部 Channel 需要原平台 message_id 才能把异步结果回复到正确消息。
+        # 私有流式回调以 ``_`` 开头，不能复制到待持久化的 outbound metadata。
+        metadata={
+            key: value
+            for key, value in message.metadata.items()
+            if not str(key).startswith("_")
+        },
     )
     outbound_id = str(message.metadata.get("_outbound_message_id") or "").strip()
     if outbound_id:
