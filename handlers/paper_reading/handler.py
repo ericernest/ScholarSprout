@@ -177,6 +177,77 @@ def _reading_map_response_json(
 
 # ── 主入口 ──
 
+def _authorize_paper_reading_request(
+    request: PaperReadingRequest, app_state: Any, *, user_id: str
+) -> str:
+    """Return an empty string when a hosted web user may access this request.
+
+    Existing reading-session and conversation identifiers are ownership checked.
+    Paper-level mutable/detail actions additionally require an explicit paper-reading
+    access grant or an already-owned reading session. Local desktop mode keeps the
+    legacy unscoped behavior through the ``local-web`` identity.
+    """
+    if not user_id or user_id == "local-web":
+        return ""
+    research_store = getattr(app_state, "research_storage", None)
+    if research_store is None:
+        storage = getattr(app_state, "paper_storage", None)
+        research_store = getattr(storage, "research_store", None)
+    if research_store is None:
+        return "论文精读存储尚未初始化"
+
+    payload = request.model_dump()
+    try:
+        conversation_id = str(payload.get("conversation_id") or "").strip()
+        if conversation_id and research_store.conversation_exists(conversation_id):
+            research_store.require_conversation_owner(conversation_id, user_id)
+
+        checked_sessions: set[str] = set()
+        for key, value in payload.items():
+            if not str(key).endswith("session_id"):
+                continue
+            session_id = str(value or "").strip()
+            if not session_id or session_id in checked_sessions:
+                continue
+            checked_sessions.add(session_id)
+            if research_store.reading_session_exists(session_id):
+                research_store.require_reading_session_owner(session_id, user_id)
+            elif research_store.conversation_exists(session_id):
+                research_store.require_conversation_owner(session_id, user_id)
+    except KeyError:
+        return "论文精读记录不存在"
+
+    paper_id = str(getattr(request, "paper_id", "") or "").strip()
+    if request.action in {"create_session", "start_reading"} and paper_id:
+        session_id = str(getattr(request, "session_id", "") or "").strip()
+        has_owned_session = (
+            bool(session_id)
+            and research_store.reading_session_exists(session_id)
+        )
+        if not has_owned_session and not research_store.user_can_start_paper_reading(
+            paper_id, user_id
+        ):
+            return "论文不存在"
+        return ""
+
+    protected_paper_actions = {
+        "get_paper_detail",
+        "regenerate_reading_map",
+        "reparse_paper",
+    }
+    if request.action not in protected_paper_actions:
+        return ""
+
+    if not paper_id:
+        session_id = str(getattr(request, "session_id", "") or "").strip()
+        if session_id and research_store.reading_session_exists(session_id):
+            record = research_store.get_reading_session_record(session_id)
+            paper_id = str((record or {}).get("paper_id") or "").strip()
+    if not paper_id or not research_store.user_has_paper_reading_access(paper_id, user_id):
+        return "论文不存在"
+    return ""
+
+
 def handle_paper_reading_message(
     message: ChannelMessage,
     app_state: Any,
@@ -230,14 +301,27 @@ def handle_paper_reading_message(
     if handler_fn is None:
         return _error(f"未知 action: {request.action}")
 
+    trusted_user_id = message.user_id or "local-web"
+    if message.channel == "web":
+        authorization_error = _authorize_paper_reading_request(
+            request, app_state, user_id=trusted_user_id
+        )
+        if authorization_error:
+            return _error(authorization_error, action=request.action)
+
     try:
         if request.action == "start_reading":
             result = handler_fn(
                 request,
                 app_state,
+                user_id=trusted_user_id,
                 on_text_delta=message.metadata.get("_stream_text_delta"),
                 on_reasoning_delta=message.metadata.get("_stream_reasoning_delta"),
                 cancel_event=message.metadata.get("_stream_cancel_event"),
+            )
+        elif request.action in {"create_session", "upload_paper"}:
+            result = handler_fn(
+                request, app_state, user_id=trusted_user_id
             )
         else:
             result = handler_fn(request, app_state)
@@ -305,7 +389,9 @@ def _handle_search_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     return _ok("search_paper", {"query": query, "count": len(papers), "papers": papers})
 
 
-def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
+def _handle_upload_paper(
+    request: PaperReadingRequest, app_state: Any, *, user_id: str = "local-web"
+) -> dict:
     """上传 PDF 论文。"""
     pipeline = getattr(app_state, "paper_pipeline", None)
     storage = getattr(app_state, "paper_storage", None)
@@ -322,10 +408,27 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
             arxiv_id=_arxiv_id_from_url(request.pdf_url) or None,
             source_url=request.pdf_url or None,
         )
-        if research_store is not None and request.pdf_url and not request.paper_id
+        if research_store is not None and request.pdf_url
         else None
     )
-    reusable_paper_id = request.paper_id or matched_by_identity
+    explicit_existing = (
+        storage.load_paper(request.paper_id) if request.paper_id else None
+    )
+    explicit_is_accessible = bool(
+        request.paper_id
+        and (
+            user_id == "local-web"
+            or explicit_existing is None
+            or (
+                research_store is not None
+                and research_store.user_has_paper_reading_access(request.paper_id, user_id)
+            )
+            or matched_by_identity == request.paper_id
+        )
+    )
+    reusable_paper_id = (
+        request.paper_id if explicit_is_accessible else matched_by_identity
+    )
     if request.pdf_url and reusable_paper_id:
         existing = storage.load_paper(reusable_paper_id)
         if (
@@ -337,6 +440,10 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
                 research_store.ensure_library_item(
                     reusable_paper_id,
                     reading_status="unread",
+                    user_id=user_id,
+                )
+                research_store.grant_paper_reading_access(
+                    reusable_paper_id, user_id, source="upload"
                 )
             return _ok(
                 "upload_paper",
@@ -360,11 +467,16 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
     matched_by_hash = (
         research_store.find_paper_by_file_hash(file_hash)
-        if research_store is not None and not request.paper_id
+        if research_store is not None
         else None
     )
     # Explicit attachments win; otherwise reuse a binary/identity match.
-    paper_id = request.paper_id or matched_by_hash or matched_by_identity or str(uuid4())
+    paper_id = (
+        (request.paper_id if explicit_is_accessible else None)
+        or matched_by_hash
+        or matched_by_identity
+        or str(uuid4())
+    )
     if matched_by_hash:
         existing = storage.load_paper(paper_id)
         if (
@@ -372,7 +484,12 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
             and existing.get("parse_status") != "failed"
             and storage.get_upload_path(paper_id) is not None
         ):
-            research_store.ensure_library_item(paper_id, reading_status="unread")
+            research_store.ensure_library_item(
+                paper_id, reading_status="unread", user_id=user_id
+            )
+            research_store.grant_paper_reading_access(
+                paper_id, user_id, source="upload"
+            )
             return _ok(
                 "upload_paper",
                 _upload_response_data(paper_id, existing, deduplicated=True),
@@ -386,7 +503,12 @@ def _handle_upload_paper(request: PaperReadingRequest, app_state: Any) -> dict:
     storage.save_upload(paper_id, pdf_bytes, sha256=file_hash)
     storage.save_paper(paper_id, quick_payload)
     if research_store is not None:
-        research_store.ensure_library_item(paper_id, reading_status="unread")
+        research_store.ensure_library_item(
+            paper_id, reading_status="unread", user_id=user_id
+        )
+        research_store.grant_paper_reading_access(
+            paper_id, user_id, source="upload"
+        )
     _schedule_background_parse(app_state, paper_id, pdf_bytes)
 
     return _ok(
@@ -769,7 +891,9 @@ def _run_reading_map_generation(app_state: Any, paper_id: str, *, generation_id:
         )
 
 
-def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict:
+def _handle_create_session(
+    request: PaperReadingRequest, app_state: Any, *, user_id: str = "local-web"
+) -> dict:
     """Create the conversation carrier for a paper workspace without an LLM turn."""
     session_mgr = getattr(app_state, "session_manager", None)
     storage = getattr(app_state, "paper_storage", None)
@@ -793,12 +917,13 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
         if not conversation_id and research_store is not None:
             conversation_id = research_store.create_conversation(
                 str(paper_data.get("title") or "论文精读")[:70],
-                user_id="local-web",
+                user_id=user_id,
             )
         if conversation_id and research_store is not None:
             existing_session_id = research_store.find_latest_reading_session(
                 paper_id=request.paper_id,
                 conversation_id=conversation_id,
+                user_id=user_id if user_id != "local-web" else None,
             )
             if existing_session_id:
                 session = session_mgr.get_session(existing_session_id)
@@ -806,7 +931,7 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
             session = session_mgr.create_session(
                 paper_id=request.paper_id,
                 paper_title=str(paper_data.get("title") or ""),
-                user_id="local-web",
+                user_id=user_id,
                 conversation_id=conversation_id,
             )
     else:
@@ -818,7 +943,12 @@ def _handle_create_session(request: PaperReadingRequest, app_state: Any) -> dict
     sections = paper_data.get("sections", []) or []
     session_mgr.set_total_sections(session.session_id, len(sections))
     if research_store is not None:
-        research_store.ensure_library_item(request.paper_id, reading_status="reading")
+        research_store.ensure_library_item(
+            request.paper_id, reading_status="reading", user_id=user_id
+        )
+        research_store.grant_paper_reading_access(
+            request.paper_id, user_id, source="reading_session"
+        )
 
     return _ok(
         "create_session",
@@ -844,6 +974,7 @@ def _handle_start_reading(
     request: PaperReadingRequest,
     app_state: Any,
     *,
+    user_id: str = "local-web",
     on_text_delta: Any | None = None,
     on_reasoning_delta: Any | None = None,
     cancel_event: threading.Event | None = None,
@@ -869,20 +1000,24 @@ def _handle_start_reading(
         if not conversation_id and research_store is not None:
             conversation_id = research_store.create_conversation(
                 str((paper_data_for_title or {}).get("title") or "论文精读")[:70],
-                user_id="local-web",
+                user_id=user_id,
             )
         session = session_mgr.create_session(
             paper_id=request.paper_id,
             paper_title=(paper_data_for_title or {}).get("title", ""),
-            user_id="local-web",
+            user_id=user_id,
             conversation_id=conversation_id,
         )
 
     paper_data = _load_paper_data(storage, session.paper_id or request.paper_id)
     research_store = getattr(storage, "research_store", None)
     if research_store is not None and (session.paper_id or request.paper_id):
+        active_paper_id = session.paper_id or request.paper_id
         research_store.ensure_library_item(
-            session.paper_id or request.paper_id, reading_status="reading"
+            active_paper_id, reading_status="reading", user_id=user_id
+        )
+        research_store.grant_paper_reading_access(
+            active_paper_id, user_id, source="reading_session"
         )
     if paper_data and not session.paper_title:
         session.paper_title = paper_data.get("title", "")

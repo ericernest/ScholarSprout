@@ -1,0 +1,1 @@
+"""Website authentication for ScholarSprout."""

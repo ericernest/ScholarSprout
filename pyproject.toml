@@ -31,10 +31,10 @@ embeddings = [
 ]
 
 [project.scripts]
-scholarsprout = "cli.main:app"
+scholarsprout = "cli.bootstrap:app"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
+include = ["agents*", "auth*", "bus*", "channels*", "cli*", "config*", "doctor*", "evaluation*", "gateway*", "handlers*", "memory*", "models*", "runtime*", "skills*", "storage*", "tools*"]
 
 [tool.setuptools.package-data]
 agents = ["profiles.json"]

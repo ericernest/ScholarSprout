@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
+from auth.dependencies import resolve_research_scope_user_id, resolve_research_user_id
 from storage import LocalResearchStore, ResearchCatalog
 
 router = APIRouter(prefix="/api/research", tags=["research-library"])
@@ -77,17 +78,22 @@ def _catalog(request: Request) -> ResearchCatalog:
 
 @router.get("/summary")
 def research_summary(request: Request) -> dict[str, int]:
-    return _catalog(request).counts()
+    scope_user_id = resolve_research_scope_user_id(request)
+    return _catalog(request).counts(user_id=scope_user_id)
 
 
 @router.get("/conversations")
 def conversations(request: Request, search: Search = "", limit: Limit = 100) -> list[dict]:
-    return _catalog(request).list_conversations(search=search, limit=limit)
+    scope_user_id = resolve_research_scope_user_id(request)
+    return _catalog(request).list_conversations(
+        search=search, limit=limit, user_id=scope_user_id
+    )
 
 
 @router.get("/conversations/{conversation_id}")
 def conversation_detail(conversation_id: str, request: Request) -> dict:
-    item = _catalog(request).get_conversation(conversation_id)
+    scope_user_id = resolve_research_scope_user_id(request)
+    item = _catalog(request).get_conversation(conversation_id, user_id=scope_user_id)
     if item is None:
         raise HTTPException(status_code=404, detail="会话不存在。")
     return item
@@ -97,8 +103,15 @@ def conversation_detail(conversation_id: str, request: Request) -> dict:
 def conversation_context_candidates(
     conversation_id: str, request: Request, search: Search = "", limit: Limit = 100
 ) -> list[dict]:
-    return _catalog(request).list_context_candidates(
-        conversation_id=conversation_id, search=search, limit=limit
+    scope_user_id = resolve_research_scope_user_id(request)
+    catalog = _catalog(request)
+    if catalog.get_conversation(conversation_id, user_id=scope_user_id) is None:
+        raise HTTPException(status_code=404, detail="会话不存在。")
+    return catalog.list_context_candidates(
+        conversation_id=conversation_id,
+        search=search,
+        limit=limit,
+        user_id=scope_user_id,
     )
 
 
@@ -109,29 +122,44 @@ def import_conversation_contexts(
     store = getattr(request.app.state, "research_storage", None)
     if not isinstance(store, LocalResearchStore):
         raise HTTPException(status_code=503, detail="研究资料库尚未初始化。")
-    try:
-        linked = store.link_research_artifacts(
-            conversation_id, payload.artifact_ids, relation="discussed"
+    owner_user_id = resolve_research_user_id(request)
+    scope_user_id = resolve_research_scope_user_id(request)
+    if store.conversation_exists(conversation_id):
+        if scope_user_id is not None:
+            try:
+                store.require_conversation_owner(conversation_id, scope_user_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="会话不存在。") from error
+    else:
+        store.ensure_conversation(
+            conversation_id, title="新会话", user_id=owner_user_id
         )
-    except KeyError:
-        store.ensure_conversation(conversation_id, title="新会话", user_id="local-web")
-        linked = store.link_research_artifacts(
-            conversation_id, payload.artifact_ids, relation="discussed"
-        )
+    linked = store.link_research_artifacts(
+        conversation_id,
+        payload.artifact_ids,
+        relation="discussed",
+        user_id=scope_user_id,
+    )
     if not linked:
         raise HTTPException(status_code=404, detail="没有找到可引入的研究结果。")
-    detail = ResearchCatalog(store).get_conversation(conversation_id)
+    detail = ResearchCatalog(store).get_conversation(
+        conversation_id, user_id=scope_user_id
+    )
     return {"linked_artifact_ids": linked, "contexts": detail.get("contexts", []) if detail else []}
 
 
 @router.get("/domain-onboardings")
 def domain_onboardings(request: Request, search: Search = "", limit: Limit = 100) -> list[dict]:
-    return _catalog(request).list_domain_onboardings(search=search, limit=limit)
+    scope_user_id = resolve_research_scope_user_id(request)
+    return _catalog(request).list_domain_onboardings(
+        search=search, limit=limit, user_id=scope_user_id
+    )
 
 
 @router.get("/domain-onboardings/{artifact_id}")
 def domain_onboarding_detail(artifact_id: str, request: Request) -> dict:
-    item = _catalog(request).get_domain_onboarding(artifact_id)
+    scope_user_id = resolve_research_scope_user_id(request)
+    item = _catalog(request).get_domain_onboarding(artifact_id, user_id=scope_user_id)
     if item is None:
         raise HTTPException(status_code=404, detail="领域入门记录不存在。")
     return item
@@ -140,7 +168,8 @@ def domain_onboarding_detail(artifact_id: str, request: Request) -> dict:
 @router.get("/domain-onboardings/{artifact_id}/workspace")
 def domain_onboarding_workspace(artifact_id: str, request: Request) -> dict:
     """Return a workbench snapshot for an active job or a persisted artifact."""
-    item = _catalog(request).get_domain_onboarding(artifact_id)
+    scope_user_id = resolve_research_scope_user_id(request)
+    item = _catalog(request).get_domain_onboarding(artifact_id, user_id=scope_user_id)
     if item is None:
         raise HTTPException(status_code=404, detail="领域入门记录不存在。")
     job_store = getattr(request.app.state, "domain_onboarding_job_store", None)
@@ -190,7 +219,10 @@ def domain_onboarding_workspace(artifact_id: str, request: Request) -> dict:
 
 @router.get("/paper-readings")
 def paper_readings(request: Request, search: Search = "", limit: Limit = 100) -> list[dict]:
-    return _catalog(request).list_paper_readings(search=search, limit=limit)
+    scope_user_id = resolve_research_scope_user_id(request)
+    return _catalog(request).list_paper_readings(
+        search=search, limit=limit, user_id=scope_user_id
+    )
 
 
 @router.get("/papers")
@@ -202,18 +234,21 @@ def papers(
     reading_scope: Literal["all", "reviewed", "unreviewed"] = "all",
     limit: Limit = 100,
 ) -> list[dict]:
+    scope_user_id = resolve_research_scope_user_id(request)
     return _catalog(request).list_papers(
         search=search,
         library_only=library_only,
         folder_id=folder_id,
         reading_scope=reading_scope,
         limit=limit,
+        user_id=scope_user_id,
     )
 
 
 @router.get("/paper-folders")
 def paper_folders(request: Request) -> list[dict]:
-    return _catalog(request).list_folders()
+    scope_user_id = resolve_research_scope_user_id(request)
+    return _catalog(request).list_folders(user_id=scope_user_id)
 
 
 @router.post("/paper-folders", status_code=201)
@@ -221,8 +256,11 @@ def create_paper_folder(payload: FolderCreate, request: Request) -> dict:
     if not payload.name.strip():
         raise HTTPException(status_code=422, detail="文件夹名称不能为空。")
     try:
+        scope_user_id = resolve_research_scope_user_id(request)
         return _catalog(request).create_folder(
-            payload.name.strip(), parent_folder_id=payload.parent_folder_id
+            payload.name.strip(),
+            parent_folder_id=payload.parent_folder_id,
+            user_id=scope_user_id,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -237,10 +275,12 @@ def update_paper_folder(
     if not payload.name.strip():
         raise HTTPException(status_code=422, detail="文件夹名称不能为空。")
     try:
+        scope_user_id = resolve_research_scope_user_id(request)
         item = _catalog(request).update_folder(
             folder_id,
             name=payload.name.strip(),
             parent_folder_id=payload.parent_folder_id,
+            user_id=scope_user_id,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -254,7 +294,8 @@ def update_paper_folder(
 @router.delete("/paper-folders/{folder_id}")
 def delete_paper_folder(folder_id: str, request: Request) -> dict:
     try:
-        deleted = _catalog(request).delete_folder(folder_id)
+        scope_user_id = resolve_research_scope_user_id(request)
+        deleted = _catalog(request).delete_folder(folder_id, user_id=scope_user_id)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     if not deleted:
@@ -264,11 +305,13 @@ def delete_paper_folder(folder_id: str, request: Request) -> dict:
 
 @router.put("/papers/{paper_id}/library")
 def save_library_item(paper_id: str, payload: LibraryItemUpdate, request: Request) -> dict:
+    scope_user_id = resolve_research_scope_user_id(request)
     if not _catalog(request).set_library_item(
         paper_id,
         reading_status=payload.reading_status,
         note=payload.note.strip(),
         folder_id=payload.folder_id,
+        user_id=scope_user_id,
     ):
         raise HTTPException(status_code=404, detail="论文不存在。")
     return {"paper_id": paper_id, "saved": True}
@@ -290,12 +333,21 @@ def create_paper_reading_session(paper_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="论文不存在。")
     if paper_storage is None or paper_storage.load_paper(paper_id) is None:
         raise HTTPException(status_code=409, detail="请先导入或上传这篇论文的 PDF。")
+    owner_user_id = resolve_research_user_id(request)
+    scope_user_id = resolve_research_scope_user_id(request)
+    if scope_user_id is not None and not store.user_can_start_paper_reading(
+        paper_id, scope_user_id
+    ):
+        raise HTTPException(status_code=404, detail="论文不存在。")
     session = session_manager.create_session(
         paper_id=paper_id,
         paper_title=str(paper["title"] or paper_id),
-        user_id="default",
+        user_id=owner_user_id,
     )
-    store.ensure_library_item(paper_id, reading_status="reading")
+    store.grant_paper_reading_access(paper_id, owner_user_id, source="reading_session")
+    store.ensure_library_item(
+        paper_id, reading_status="reading", user_id=owner_user_id
+    )
     return {
         "paper_id": paper_id,
         "reading_session_id": session.session_id,
@@ -305,7 +357,8 @@ def create_paper_reading_session(paper_id: str, request: Request) -> dict:
 
 @router.delete("/papers/{paper_id}/library")
 def delete_library_item(paper_id: str, request: Request) -> dict:
-    if not _catalog(request).remove_library_item(paper_id):
+    scope_user_id = resolve_research_scope_user_id(request)
+    if not _catalog(request).remove_library_item(paper_id, user_id=scope_user_id):
         raise HTTPException(status_code=404, detail="论文不在论文库中。")
     return {"paper_id": paper_id, "removed": True}
 
@@ -315,8 +368,9 @@ def move_paper_to_folder(
     paper_id: str, payload: PaperFolderAssignment, request: Request
 ) -> dict:
     try:
+        scope_user_id = resolve_research_scope_user_id(request)
         moved = _catalog(request).move_library_item(
-            paper_id, folder_id=payload.folder_id
+            paper_id, folder_id=payload.folder_id, user_id=scope_user_id
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -327,7 +381,8 @@ def move_paper_to_folder(
 
 @router.get("/papers/{paper_id}/note")
 def paper_note(paper_id: str, request: Request) -> dict:
-    item = _catalog(request).get_paper_note(paper_id)
+    scope_user_id = resolve_research_scope_user_id(request)
+    item = _catalog(request).get_paper_note(paper_id, user_id=scope_user_id)
     if item is None:
         raise HTTPException(status_code=404, detail="论文不存在。")
     return item
@@ -335,7 +390,10 @@ def paper_note(paper_id: str, request: Request) -> dict:
 
 @router.put("/papers/{paper_id}/note")
 def save_paper_note(paper_id: str, payload: PaperNoteUpdate, request: Request) -> dict:
-    item = _catalog(request).set_paper_note(paper_id, payload.content_markdown)
+    scope_user_id = resolve_research_scope_user_id(request)
+    item = _catalog(request).set_paper_note(
+        paper_id, payload.content_markdown, user_id=scope_user_id
+    )
     if item is None:
         raise HTTPException(status_code=404, detail="论文不存在。")
     return item
@@ -347,8 +405,11 @@ def annotations(
     request: Request,
     reading_session_id: str | None = Query(default=None, max_length=180),
 ) -> list[dict]:
+    scope_user_id = resolve_research_scope_user_id(request)
     return _catalog(request).list_annotations(
-        paper_id, reading_session_id=reading_session_id
+        paper_id,
+        reading_session_id=reading_session_id,
+        user_id=scope_user_id,
     )
 
 
@@ -361,6 +422,7 @@ def save_annotation(
 ) -> dict:
     if not annotation_id.strip() or len(annotation_id) > 180:
         raise HTTPException(status_code=422, detail="标注 ID 无效。")
+    scope_user_id = resolve_research_scope_user_id(request)
     item = _catalog(request).upsert_annotation(
         annotation_id=annotation_id,
         paper_id=paper_id,
@@ -372,6 +434,7 @@ def save_annotation(
         selected_text=payload.selected_text.strip(),
         rects=[rect.model_dump() for rect in payload.rects],
         note_text=payload.note_text.strip(),
+        user_id=scope_user_id,
     )
     if item is None:
         raise HTTPException(status_code=404, detail="论文不存在。")
@@ -380,6 +443,9 @@ def save_annotation(
 
 @router.delete("/papers/{paper_id}/annotations/{annotation_id}")
 def delete_annotation(paper_id: str, annotation_id: str, request: Request) -> dict:
-    if not _catalog(request).delete_annotation(paper_id, annotation_id):
+    scope_user_id = resolve_research_scope_user_id(request)
+    if not _catalog(request).delete_annotation(
+        paper_id, annotation_id, user_id=scope_user_id
+    ):
         raise HTTPException(status_code=404, detail="标注不存在。")
     return {"annotation_id": annotation_id, "deleted": True}

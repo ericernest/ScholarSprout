@@ -10,10 +10,11 @@ import time
 from threading import Event, Lock
 from typing import Any, Callable
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from auth.dependencies import resolve_research_scope_user_id, resolve_research_user_id
 from bus.events import OUTBOUND
 from channels.base import BaseChannel, ChannelMessage
 from storage.message_recorder import record_inbound, record_outbound
@@ -64,6 +65,7 @@ def _start_stream_generation(generation_id: str, message: ChannelMessage) -> Non
         _STREAM_GENERATIONS[generation_id] = {
             "generation_id": generation_id,
             "session_id": message.session_id,
+            "user_id": message.user_id,
             "mode": message.mode,
             "status": "running",
             "text": "",
@@ -121,6 +123,7 @@ def get_stream_generation(
     generation_id: str,
     *,
     session_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Return a reconnectable snapshot for a browser that left mid-stream."""
     normalized = str(generation_id or "").strip()
@@ -134,15 +137,25 @@ def get_stream_generation(
             return None
         if session_id and str(item.get("session_id") or "") != str(session_id):
             return None
+        if user_id is not None and str(item.get("user_id") or "") != str(user_id):
+            return None
         snapshot = copy.deepcopy(item)
     snapshot.pop("updated_monotonic", None)
     return snapshot
 
 
-def cancel_stream_generation(generation_id: str) -> bool:
+def cancel_stream_generation(
+    generation_id: str, *, user_id: str | None = None
+) -> bool:
     """Explicitly cancel a generation without conflating it with navigation."""
+    normalized = str(generation_id or "").strip()
+    if user_id is not None:
+        with _STREAM_GENERATIONS_LOCK:
+            item = _STREAM_GENERATIONS.get(normalized)
+            if item is None or str(item.get("user_id") or "") != str(user_id):
+                return False
     with _STREAM_CANCEL_LOCK:
-        event = _STREAM_CANCEL_EVENTS.get(str(generation_id or "").strip())
+        event = _STREAM_CANCEL_EVENTS.get(normalized)
     if event is None:
         return False
     event.set()
@@ -234,6 +247,67 @@ def _install_external_stream_persistence(message: ChannelMessage, app_state: Any
     message.metadata["_stream_text_delta"] = persist_delta
 
 
+def _bind_and_validate_web_identity(
+    source: Any, message: ChannelMessage, app_state: Any
+) -> None:
+    """Bind web messages to the server-side session identity and reject foreign ids."""
+    if not isinstance(source, Request):
+        return
+
+    owner_user_id = resolve_research_user_id(source)
+    scope_user_id = resolve_research_scope_user_id(source)
+    # Never trust a browser-supplied user_id.  The authenticated session is the
+    # only identity that reaches handlers and persistence.
+    message.user_id = owner_user_id
+    if scope_user_id is None:
+        return
+
+    store = getattr(app_state, "research_storage", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Research storage is not initialized.")
+
+    conversation_ids: set[str] = set()
+    reading_session_ids: set[str] = set()
+
+    def classify(identifier: Any, *, prefer_reading: bool = False) -> None:
+        value = str(identifier or "").strip()
+        if not value:
+            return
+        if prefer_reading and store.reading_session_exists(value):
+            reading_session_ids.add(value)
+            return
+        if store.conversation_exists(value):
+            conversation_ids.add(value)
+            return
+        if store.reading_session_exists(value):
+            reading_session_ids.add(value)
+
+    classify(message.session_id, prefer_reading=message.mode == "paper_reading")
+    content = message.content
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            content = parsed
+    if isinstance(content, dict):
+        classify(content.get("conversation_id"))
+        classify(
+            content.get("session_id"),
+            prefer_reading=message.mode == "paper_reading",
+        )
+
+    try:
+        for conversation_id in conversation_ids:
+            store.require_conversation_owner(conversation_id, scope_user_id)
+        for reading_session_id in reading_session_ids:
+            store.require_reading_session_owner(reading_session_id, scope_user_id)
+    except KeyError as error:
+        # Missing and foreign resources intentionally share the same response.
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
 # 执行 channel inbound、handler 处理、channel outbound 的标准流程。
 def process_channel_message(
     channel: BaseChannel,
@@ -263,6 +337,7 @@ async def process_channel_input(
     selected_channel_name = channel_name or app_state.default_channel_name
     channel = app_state.channels[selected_channel_name]
     inbound_message = await channel.receive_message(source, mode)
+    _bind_and_validate_web_identity(source, inbound_message, app_state)
 
     return await run_in_threadpool(
         process_channel_message,
@@ -288,6 +363,7 @@ async def process_channel_stream(
     selected_channel_name = channel_name or app_state.default_channel_name
     channel = app_state.channels[selected_channel_name]
     inbound_message = await channel.receive_message(source, mode)
+    _bind_and_validate_web_identity(source, inbound_message, app_state)
 
     async def events():
         loop = asyncio.get_running_loop()

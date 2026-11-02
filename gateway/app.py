@@ -24,6 +24,9 @@ from channels.qq import QQChannel
 from channels.web import WebChannel
 from config.manager import is_setup_complete, load_config, resolve_data_dir
 from config.web import router as config_router
+from auth.dependencies import resolve_research_scope_user_id, resolve_research_user_id
+from auth.service import AuthService
+from auth.router import router as auth_router
 from gateway.research_library import router as research_library_router
 from handlers.chat_handler import handle_chat_message
 from handlers.domain_onboarding.audit import create_audit_sink_from_env
@@ -70,6 +73,7 @@ FRONTEND_DIR = STATIC_DIR / "app-v2"
 app = FastAPI(title="ScholarSprout Gateway")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(config_router)
+app.include_router(auth_router)
 app.include_router(research_library_router)
 
 
@@ -118,6 +122,12 @@ def _frontend_page(relative_path: str, legacy_path: Path) -> FileResponse:
     """
     built_path = FRONTEND_DIR / relative_path
     return FileResponse(built_path if built_path.is_file() else legacy_path)
+
+
+# 返回网站登录页。认证功能启用后，用户可从这里完成邮箱或 GitHub 登录。
+@app.get("/login")
+def login_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "login.html")
 
 
 # 返回首页。
@@ -206,16 +216,22 @@ async def chat_stream(request: Request) -> StreamingResponse:
 
 
 @app.post("/chat/generations/{generation_id}/cancel")
-def cancel_chat_generation(generation_id: str) -> dict[str, object]:
+def cancel_chat_generation(generation_id: str, request: Request) -> dict[str, object]:
+    scope_user_id = resolve_research_scope_user_id(request)
     return {
         "generation_id": generation_id,
-        "cancelled": cancel_stream_generation(generation_id),
+        "cancelled": cancel_stream_generation(generation_id, user_id=scope_user_id),
     }
 
 
 @app.get("/chat/generations/{generation_id}")
-def get_chat_generation(generation_id: str, session_id: str) -> dict[str, object]:
-    snapshot = get_stream_generation(generation_id, session_id=session_id)
+def get_chat_generation(
+    generation_id: str, session_id: str, request: Request
+) -> dict[str, object]:
+    scope_user_id = resolve_research_scope_user_id(request)
+    snapshot = get_stream_generation(
+        generation_id, session_id=session_id, user_id=scope_user_id
+    )
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Generation not found.")
     return snapshot
@@ -242,11 +258,24 @@ async def paper_reading_stream(request: Request) -> StreamingResponse:
     )
 
 
+def _require_paper_reading_asset_access(paper_id: str, request: Request) -> None:
+    scope_user_id = resolve_research_scope_user_id(request)
+    if scope_user_id is None:
+        return
+    research_store = getattr(request.app.state, "research_storage", None)
+    if not isinstance(research_store, LocalResearchStore):
+        raise HTTPException(status_code=503, detail="Research storage is not initialized.")
+    if not research_store.user_has_paper_reading_access(paper_id, scope_user_id):
+        # Missing and foreign resources deliberately share the same response.
+        raise HTTPException(status_code=404, detail="PDF upload not found.")
+
+
 @app.get("/paper_reading/uploads/{paper_id}.pdf")
 def paper_reading_upload_pdf(paper_id: str, request: Request) -> FileResponse:
     storage = getattr(request.app.state, "paper_storage", None)
     if storage is None:
         raise HTTPException(status_code=503, detail="Paper reading storage is not initialized.")
+    _require_paper_reading_asset_access(paper_id, request)
 
     upload_path = storage.get_upload_path(paper_id)
     if upload_path is None or not upload_path.exists():
@@ -271,6 +300,7 @@ def paper_reading_figure(
     storage = getattr(request.app.state, "paper_storage", None)
     if storage is None:
         raise HTTPException(status_code=503, detail="Paper reading storage is not initialized.")
+    _require_paper_reading_asset_access(paper_id, request)
 
     figure_path = storage.get_figure_path(paper_id, asset_name)
     if figure_path is None:
@@ -307,11 +337,29 @@ async def create_domain_onboarding_job(request: Request) -> JSONResponse:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
     query = payload.get("query", payload.get("content", ""))
+    owner_user_id = resolve_research_user_id(request)
+    scope_user_id = resolve_research_scope_user_id(request)
+    requested_session_id = str(payload.get("session_id") or "").strip() or None
+    research_store = getattr(request.app.state, "research_storage", None)
+    if (
+        scope_user_id is not None
+        and requested_session_id
+        and research_store is not None
+        and research_store.conversation_exists(requested_session_id)
+    ):
+        try:
+            research_store.require_conversation_owner(
+                requested_session_id, scope_user_id
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="Conversation not found."
+            ) from error
     try:
         job_request = DomainOnboardingRequest(
             query=query,
-            session_id=payload.get("session_id"),
-            user_id=payload.get("user_id"),
+            session_id=requested_session_id,
+            user_id=owner_user_id,
             metadata=payload.get("metadata") or {},
             language=payload.get("language", "zh-CN"),
         )
@@ -457,9 +505,19 @@ def _require_domain_job_access(
     task_id: str, request: Request, job: dict[str, object] | None
 ) -> None:
     manager = getattr(request.app.state, "domain_onboarding_job_manager", None)
-    if job is None or manager is None or not manager.authorize(
-        task_id, _domain_job_access_token(request)
-    ):
+    scope_user_id = resolve_research_scope_user_id(request)
+    if job is None or manager is None:
+        raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    if scope_user_id is not None:
+        job_request = job.get("request") if isinstance(job, dict) else None
+        job_user_id = (
+            str(job_request.get("user_id") or "").strip()
+            if isinstance(job_request, dict)
+            else ""
+        )
+        if job_user_id != str(scope_user_id):
+            raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
+    if not manager.authorize(task_id, _domain_job_access_token(request)):
         # Deliberately use the same response for missing and unauthorized jobs.
         raise HTTPException(status_code=404, detail="Domain onboarding job not found.")
 
@@ -523,6 +581,9 @@ def start_gateway_server(
     data_root = resolve_data_dir(config)
     research_storage = LocalResearchStore(data_root / "research.sqlite3")
     research_storage.initialize()
+    # Authentication tables share the existing SQLite database so later ownership
+    # migrations can add user_id relationships without introducing a second DB.
+    app.state.auth_service = AuthService(str(research_storage.database_path))
     memory_service = ConversationMemoryService(research_storage, model, recent_message_limit=8)
     paper_storage = PaperReadingStorage(
         data_root / "paper_reading", research_store=research_storage

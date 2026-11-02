@@ -18,7 +18,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _now() -> str:
@@ -165,6 +165,53 @@ class LocalResearchStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS user_paper_folders (
+                    folder_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    parent_folder_id TEXT REFERENCES user_paper_folders(folder_id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_library_items (
+                    user_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    reading_status TEXT NOT NULL CHECK(reading_status IN ('unread', 'reading', 'read', 'archived')),
+                    note TEXT NOT NULL DEFAULT '',
+                    folder_id TEXT REFERENCES user_paper_folders(folder_id) ON DELETE SET NULL,
+                    added_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, paper_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS user_paper_notes (
+                    user_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    content_markdown TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, paper_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS user_paper_annotations (
+                    user_id TEXT NOT NULL,
+                    annotation_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    reading_session_id TEXT REFERENCES paper_reading_sessions(reading_session_id) ON DELETE SET NULL,
+                    annotation_type TEXT NOT NULL CHECK(annotation_type IN ('highlight', 'note')),
+                    color TEXT NOT NULL CHECK(color IN ('yellow', 'green', 'blue', 'pink')),
+                    page_number INTEGER NOT NULL CHECK(page_number > 0),
+                    section_id TEXT,
+                    selected_text TEXT NOT NULL,
+                    anchor_schema_version TEXT NOT NULL,
+                    anchor_json TEXT NOT NULL,
+                    note_text TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, annotation_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -209,6 +256,7 @@ class LocalResearchStore:
 
                 CREATE TABLE IF NOT EXISTS domain_onboardings (
                     artifact_id TEXT PRIMARY KEY REFERENCES work_artifacts(artifact_id) ON DELETE CASCADE,
+                    user_id TEXT,
                     query TEXT NOT NULL,
                     language TEXT NOT NULL CHECK(language IN ('zh-CN', 'en-US')),
                     current_stage TEXT NOT NULL,
@@ -252,6 +300,14 @@ class LocalResearchStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     completed_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_reading_access (
+                    user_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+                    source TEXT NOT NULL DEFAULT 'paper_reading',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, paper_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS paper_reading_blocks (
@@ -319,7 +375,17 @@ class LocalResearchStore:
                     ON conversation_memory_facts(conversation_id, status, updated_at DESC);
                 """
             )
+            phase3_migration_needed = connection.execute(
+                "SELECT 1 FROM schema_versions WHERE version = ?", (SCHEMA_VERSION,)
+            ).fetchone() is None
             self._ensure_column(connection, "conversations", "user_id", "TEXT")
+            self._ensure_column(connection, "domain_onboardings", "user_id", "TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_domain_onboardings_user ON domain_onboardings(user_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_reading_access_paper ON paper_reading_access(paper_id, user_id)"
+            )
             self._ensure_column(
                 connection, "messages", "mode", "TEXT NOT NULL DEFAULT 'chat'"
             )
@@ -357,6 +423,61 @@ class LocalResearchStore:
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_folders_parent_name
                    ON paper_folders(COALESCE(parent_folder_id, ''), name COLLATE NOCASE)"""
             )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_library_items_folder ON user_library_items(user_id, folder_id, updated_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_library_items_paper ON user_library_items(paper_id, user_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_paper_annotations_paper ON user_paper_annotations(user_id, paper_id, page_number, created_at)"
+            )
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_user_paper_folders_parent_name
+                   ON user_paper_folders(user_id, COALESCE(parent_folder_id, ''), name COLLATE NOCASE)"""
+            )
+            if phase3_migration_needed:
+                # Phase 2 already recorded explicit per-user paper access. Preserve only
+                # that provable membership in the new private library layer; do not copy
+                # legacy notes/folders from the old global tables.
+                connection.execute(
+                    """INSERT OR IGNORE INTO user_library_items(
+                           user_id, paper_id, reading_status, note, folder_id, added_at, updated_at)
+                       SELECT access.user_id, access.paper_id,
+                              CASE WHEN EXISTS(
+                                  SELECT 1 FROM paper_reading_sessions reading
+                                  LEFT JOIN conversations owner_conversation
+                                    ON owner_conversation.conversation_id = reading.conversation_id
+                                  WHERE reading.paper_id = access.paper_id
+                                    AND COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id) = access.user_id
+                              ) THEN 'reading' ELSE 'unread' END,
+                              '', NULL, access.created_at, access.created_at
+                       FROM paper_reading_access access
+                       WHERE access.user_id <> '' AND access.user_id <> 'local-web'"""
+                )
+                # Carry forward only annotations whose owner is provable from an owned
+                # reading session. Unowned legacy annotations stay in the legacy table.
+                connection.execute(
+                    """INSERT OR IGNORE INTO user_paper_annotations(
+                           user_id, annotation_id, paper_id, reading_session_id,
+                           annotation_type, color, page_number, section_id, selected_text,
+                           anchor_schema_version, anchor_json, note_text, created_at, updated_at)
+                       SELECT COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id),
+                              annotation.annotation_id, annotation.paper_id,
+                              annotation.reading_session_id, annotation.annotation_type,
+                              annotation.color, annotation.page_number, annotation.section_id,
+                              annotation.selected_text, annotation.anchor_schema_version,
+                              annotation.anchor_json, annotation.note_text,
+                              annotation.created_at, annotation.updated_at
+                       FROM paper_annotations annotation
+                       JOIN paper_reading_sessions reading
+                         ON reading.reading_session_id = annotation.reading_session_id
+                       LEFT JOIN conversations owner_conversation
+                         ON owner_conversation.conversation_id = reading.conversation_id
+                       WHERE COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id) IS NOT NULL
+                         AND COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id) <> ''
+                         AND COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id) <> 'local-web'"""
+                )
             self._ensure_column(
                 connection,
                 "paper_reading_sessions",
@@ -530,9 +651,22 @@ class LocalResearchStore:
         reading_status: str = "unread",
         note: str = "",
         folder_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         now = _now()
         with self._connection() as connection:
+            if user_id and user_id != "local-web":
+                connection.execute(
+                    """INSERT INTO user_library_items(
+                           user_id, paper_id, reading_status, note, folder_id, added_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(user_id, paper_id) DO UPDATE SET
+                       reading_status = excluded.reading_status,
+                       note = excluded.note, folder_id = excluded.folder_id,
+                       updated_at = excluded.updated_at""",
+                    (user_id, paper_id, reading_status, note, folder_id, now, now),
+                )
+                return
             connection.execute(
                 """INSERT INTO library_items(paper_id, reading_status, note, folder_id, added_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?)
@@ -542,10 +676,31 @@ class LocalResearchStore:
                 (paper_id, reading_status, note, folder_id, now, now),
             )
 
-    def ensure_library_item(self, paper_id: str, *, reading_status: str = "unread") -> None:
+    def ensure_library_item(
+        self,
+        paper_id: str,
+        *,
+        reading_status: str = "unread",
+        user_id: str | None = None,
+    ) -> None:
         """Add pipeline-created papers without overwriting user-managed notes or folders."""
         now = _now()
         with self._connection() as connection:
+            if user_id and user_id != "local-web":
+                connection.execute(
+                    """INSERT OR IGNORE INTO user_library_items(
+                           user_id, paper_id, reading_status, note, folder_id, added_at, updated_at)
+                       VALUES (?, ?, ?, '', NULL, ?, ?)""",
+                    (user_id, paper_id, reading_status, now, now),
+                )
+                if reading_status == "reading":
+                    connection.execute(
+                        """UPDATE user_library_items
+                           SET reading_status = 'reading', updated_at = ?
+                           WHERE user_id = ? AND paper_id = ? AND reading_status = 'unread'""",
+                        (now, user_id, paper_id),
+                    )
+                return
             connection.execute(
                 """INSERT OR IGNORE INTO library_items(
                    paper_id, reading_status, note, folder_id, added_at, updated_at)
@@ -702,11 +857,35 @@ class LocalResearchStore:
             raise ValueError("conversation_id must not be empty")
         now = _now()
         with self._connection() as connection:
+            # Serialize the existence/owner check with creation so a known id
+            # cannot be raced into another user's conversation between checks.
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT user_id FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    user_id
+                    and user_id != "local-web"
+                    and str(existing["user_id"] or "") != str(user_id)
+                ):
+                    raise KeyError(conversation_id)
+                connection.execute(
+                    "UPDATE conversations SET last_active_at = ? WHERE conversation_id = ?",
+                    (now, conversation_id),
+                )
+                return conversation_id
+            if user_id and user_id != "local-web" and parent_conversation_id:
+                parent = connection.execute(
+                    "SELECT user_id FROM conversations WHERE conversation_id = ?",
+                    (parent_conversation_id,),
+                ).fetchone()
+                if parent is None or str(parent["user_id"] or "") != str(user_id):
+                    raise KeyError(parent_conversation_id)
             connection.execute(
                 """INSERT INTO conversations(conversation_id, title, user_id, state, parent_conversation_id,
-                   forked_from_message_id, created_at, last_active_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
-                   ON CONFLICT(conversation_id) DO UPDATE SET
-                   user_id = COALESCE(excluded.user_id, conversations.user_id), last_active_at = excluded.last_active_at""",
+                   forked_from_message_id, created_at, last_active_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)""",
                 (conversation_id, title or "新会话", user_id, parent_conversation_id, forked_from_message_id, now, now),
             )
         return conversation_id
@@ -719,6 +898,8 @@ class LocalResearchStore:
         forked_from_message_id: str | None = None,
         user_id: str | None = None,
     ) -> str:
+        if user_id and user_id != "local-web" and parent_conversation_id:
+            self.require_conversation_owner(parent_conversation_id, user_id)
         conversation_id = _id("conversation")
         now = _now()
         with self._connection() as connection:
@@ -728,6 +909,194 @@ class LocalResearchStore:
                 (conversation_id, title, user_id, parent_conversation_id, forked_from_message_id, now, now),
             )
         return conversation_id
+
+    def conversation_exists(self, conversation_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return row is not None
+
+    def require_conversation_owner(self, conversation_id: str, user_id: str) -> None:
+        """Fail closed when a hosted user does not own a conversation."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT user_id FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if row is None or str(row["user_id"] or "") != str(user_id):
+            # Use KeyError for both missing and foreign ids so API callers can
+            # deliberately return the same 404 without disclosing existence.
+            raise KeyError(conversation_id)
+
+    def domain_onboarding_exists(self, artifact_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM domain_onboardings WHERE artifact_id = ?",
+                (artifact_id,),
+            ).fetchone()
+        return row is not None
+
+    def require_domain_onboarding_owner(self, artifact_id: str, user_id: str) -> None:
+        """Require a persisted domain workspace to belong to ``user_id``.
+
+        New rows carry ``domain_onboardings.user_id`` directly. Phase-1 rows can
+        still prove ownership through the conversation that created the artifact.
+        Unowned legacy rows deliberately do not fall through to the current user.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT COALESCE(
+                              NULLIF(domain.user_id, ''),
+                              (SELECT conversation.user_id
+                               FROM conversation_artifacts owner_link
+                               JOIN conversations conversation
+                                 ON conversation.conversation_id = owner_link.conversation_id
+                               WHERE owner_link.artifact_id = domain.artifact_id
+                               ORDER BY CASE owner_link.relation WHEN 'created' THEN 0 ELSE 1 END,
+                                        owner_link.linked_at ASC
+                               LIMIT 1)
+                           ) AS owner_user_id
+                   FROM domain_onboardings domain
+                   WHERE domain.artifact_id = ?""",
+                (artifact_id,),
+            ).fetchone()
+        if row is None or str(row["owner_user_id"] or "") != str(user_id):
+            raise KeyError(artifact_id)
+
+    def grant_paper_reading_access(
+        self, paper_id: str, user_id: str | None, *, source: str = "paper_reading"
+    ) -> bool:
+        """Record that an authenticated user explicitly imported/opened a paper."""
+        normalized_user = str(user_id or "").strip()
+        normalized_paper = str(paper_id or "").strip()
+        if not normalized_user or normalized_user == "local-web" or not normalized_paper:
+            return False
+        with self._connection() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO paper_reading_access(user_id, paper_id, source, created_at)
+                   SELECT ?, paper_id, ?, ? FROM papers WHERE paper_id = ?""",
+                (normalized_user, str(source or "paper_reading"), _now(), normalized_paper),
+            )
+        return self.user_has_paper_reading_access(normalized_paper, normalized_user)
+
+    def user_has_paper_reading_access(self, paper_id: str, user_id: str) -> bool:
+        """Check access granted directly or inherited from an owned reading session."""
+        normalized_user = str(user_id or "").strip()
+        normalized_paper = str(paper_id or "").strip()
+        if not normalized_user or not normalized_paper:
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT 1
+                   FROM paper_reading_access access
+                   WHERE access.paper_id = ? AND access.user_id = ?
+                   UNION ALL
+                   SELECT 1
+                   FROM paper_reading_sessions reading
+                   LEFT JOIN conversations conversation
+                     ON conversation.conversation_id = reading.conversation_id
+                   WHERE reading.paper_id = ?
+                     AND COALESCE(NULLIF(reading.user_id, ''), conversation.user_id) = ?
+                   LIMIT 1""",
+                (normalized_paper, normalized_user, normalized_paper, normalized_user),
+            ).fetchone()
+        return row is not None
+
+    def user_can_start_paper_reading(self, paper_id: str, user_id: str) -> bool:
+        """Allow starting from an already accessible paper or an owned domain recommendation."""
+        if self.user_has_paper_reading_access(paper_id, user_id):
+            return True
+        normalized_user = str(user_id or "").strip()
+        normalized_paper = str(paper_id or "").strip()
+        if not normalized_user or not normalized_paper:
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT 1
+                   FROM domain_recommendations recommendation
+                   JOIN domain_onboardings domain
+                     ON domain.artifact_id = recommendation.artifact_id
+                   WHERE recommendation.paper_id = ?
+                     AND COALESCE(
+                           NULLIF(domain.user_id, ''),
+                           (SELECT owner_conversation.user_id
+                            FROM conversation_artifacts owner_link
+                            JOIN conversations owner_conversation
+                              ON owner_conversation.conversation_id = owner_link.conversation_id
+                            WHERE owner_link.artifact_id = domain.artifact_id
+                            ORDER BY CASE owner_link.relation WHEN 'created' THEN 0 ELSE 1 END,
+                                     owner_link.linked_at ASC
+                            LIMIT 1)
+                         ) = ?
+                   LIMIT 1""",
+                (normalized_paper, normalized_user),
+            ).fetchone()
+        return row is not None
+
+    def reading_session_exists(self, session_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM paper_reading_sessions WHERE reading_session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return row is not None
+
+    def require_reading_session_owner(self, session_id: str, user_id: str) -> None:
+        """Require ownership of a persisted paper-reading session."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT COALESCE(NULLIF(reading.user_id, ''), conversation.user_id) AS owner_user_id
+                   FROM paper_reading_sessions reading
+                   JOIN conversations conversation
+                     ON conversation.conversation_id = reading.conversation_id
+                   WHERE reading.reading_session_id = ?""",
+                (session_id,),
+            ).fetchone()
+        if row is None or str(row["owner_user_id"] or "") != str(user_id):
+            raise KeyError(session_id)
+
+    def filter_owned_research_artifact_ids(
+        self, artifact_ids: list[str], user_id: str
+    ) -> list[str]:
+        """Keep only research artifacts whose ownership is already provable."""
+        clean_ids = list(dict.fromkeys(item.strip() for item in artifact_ids if item.strip()))
+        if not clean_ids:
+            return []
+        placeholders = ",".join("?" for _ in clean_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT DISTINCT work.artifact_id
+                    FROM work_artifacts work
+                    LEFT JOIN paper_reading_sessions reading
+                      ON reading.artifact_id = work.artifact_id
+                    LEFT JOIN conversations reading_conversation
+                      ON reading_conversation.conversation_id = reading.conversation_id
+                    LEFT JOIN domain_onboardings domain
+                      ON domain.artifact_id = work.artifact_id
+                    WHERE work.artifact_id IN ({placeholders})
+                      AND (
+                        (work.artifact_kind = 'paper_reading'
+                         AND COALESCE(NULLIF(reading.user_id, ''), reading_conversation.user_id) = ?)
+                        OR
+                        (work.artifact_kind = 'domain_onboarding'
+                         AND COALESCE(
+                               NULLIF(domain.user_id, ''),
+                               (SELECT owned_conversation.user_id
+                                FROM conversation_artifacts owned_link
+                                JOIN conversations owned_conversation
+                                  ON owned_conversation.conversation_id = owned_link.conversation_id
+                                WHERE owned_link.artifact_id = work.artifact_id
+                                ORDER BY CASE owned_link.relation WHEN 'created' THEN 0 ELSE 1 END,
+                                         owned_link.linked_at ASC
+                                LIMIT 1)
+                             ) = ?)
+                      )""",
+                (*clean_ids, user_id, user_id),
+            ).fetchall()
+        allowed = {str(row["artifact_id"]) for row in rows}
+        return [artifact_id for artifact_id in clean_ids if artifact_id in allowed]
 
     def append_message(
         self,
@@ -834,14 +1203,17 @@ class LocalResearchStore:
         current_stage: str = "queued",
         conversation_id: str | None = None,
         artifact_id: str | None = None,
+        user_id: str | None = None,
     ) -> str:
+        if user_id and user_id != "local-web" and conversation_id:
+            self.require_conversation_owner(conversation_id, user_id)
         artifact_id = self._create_artifact(
             "domain_onboarding", title, "queued", artifact_id=artifact_id
         )
         with self._connection() as connection:
             connection.execute(
-                "INSERT INTO domain_onboardings(artifact_id, query, language, current_stage) VALUES (?, ?, ?, ?)",
-                (artifact_id, query, language, current_stage),
+                "INSERT INTO domain_onboardings(artifact_id, user_id, query, language, current_stage) VALUES (?, ?, ?, ?, ?)",
+                (artifact_id, user_id, query, language, current_stage),
             )
             if conversation_id:
                 self._link_artifact(connection, conversation_id, artifact_id, "created")
@@ -890,7 +1262,33 @@ class LocalResearchStore:
                 language=str(response.get("language") or "zh-CN"),
                 current_stage="completed",
                 conversation_id=conversation_id,
+                user_id=user_id,
             )
+        elif user_id and user_id != "local-web":
+            # A pre-created job artifact may not have had a direct owner column yet.
+            # Only fill a missing owner when the supplied conversation is already
+            # proven to belong to this authenticated user; never overwrite another owner.
+            with self._connection() as connection:
+                existing = connection.execute(
+                    "SELECT user_id FROM domain_onboardings WHERE artifact_id = ?",
+                    (artifact_id,),
+                ).fetchone()
+            if existing is not None:
+                existing_owner = str(existing["user_id"] or "")
+                if existing_owner and existing_owner != str(user_id):
+                    raise KeyError(artifact_id)
+                if not existing_owner:
+                    if not conversation_id:
+                        self.require_domain_onboarding_owner(artifact_id, user_id)
+                    else:
+                        self.require_conversation_owner(conversation_id, user_id)
+                    with self._connection() as connection:
+                        connection.execute(
+                            """UPDATE domain_onboardings SET user_id = ?
+                               WHERE artifact_id = ? AND (user_id IS NULL OR user_id = '')""",
+                            (user_id, artifact_id),
+                        )
+
         status = str(response.get("status") or "internal_error")
         if status == "cancelled":
             state = "cancelled"
@@ -1013,17 +1411,23 @@ class LocalResearchStore:
         conversation_id: str,
         parent_reading_session_id: str | None = None,
         fork_context: str = "",
+        user_id: str | None = None,
     ) -> str:
+        if user_id and user_id != "local-web":
+            self.require_conversation_owner(conversation_id, user_id)
+            if parent_reading_session_id:
+                self.require_reading_session_owner(parent_reading_session_id, user_id)
         artifact_id = self._create_artifact("paper_reading", title, "running")
         reading_session_id = _id("reading")
         now = _now()
         with self._connection() as connection:
             connection.execute(
                 """INSERT INTO paper_reading_sessions(reading_session_id, artifact_id, paper_id, conversation_id, parent_reading_session_id,
-                   fork_context, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-                (reading_session_id, artifact_id, paper_id, conversation_id, parent_reading_session_id, fork_context, now, now),
+                   user_id, fork_context, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+                (reading_session_id, artifact_id, paper_id, conversation_id, parent_reading_session_id, user_id, fork_context, now, now),
             )
             self._link_artifact(connection, conversation_id, artifact_id, "created")
+        self.grant_paper_reading_access(paper_id, user_id, source="reading_session")
         return reading_session_id
 
     def save_reading_state(
@@ -1094,6 +1498,14 @@ class LocalResearchStore:
         self.ensure_paper_reference(paper_id, title=paper_title)
         parent_session_id = str(data.get("parent_session_id") or "") or None
         conversation_id = str(data.get("conversation_id") or session_id)
+        owner_user_id = str(data.get("user_id") or "") or None
+        if owner_user_id and owner_user_id != "local-web":
+            if self.reading_session_exists(session_id):
+                self.require_reading_session_owner(session_id, owner_user_id)
+            if self.conversation_exists(conversation_id):
+                self.require_conversation_owner(conversation_id, owner_user_id)
+            if parent_session_id and self.reading_session_exists(parent_session_id):
+                self.require_reading_session_owner(parent_session_id, owner_user_id)
         dialogue_conversation_id = f"paper-reading-dialogue:{session_id}"
         parent_dialogue_id = (
             f"paper-reading-dialogue:{parent_session_id}" if parent_session_id else conversation_id
@@ -1101,12 +1513,12 @@ class LocalResearchStore:
         self.ensure_conversation(
             conversation_id,
             title=paper_title[:70],
-            user_id=str(data.get("user_id") or "") or None,
+            user_id=owner_user_id,
         )
         self.ensure_conversation(
             dialogue_conversation_id,
             title=f"{paper_title[:54]} · 右栏讨论",
-            user_id=str(data.get("user_id") or "") or None,
+            user_id=owner_user_id,
             parent_conversation_id=parent_dialogue_id,
         )
         artifact_id = f"paper-reading:{session_id}"
@@ -1138,7 +1550,7 @@ class LocalResearchStore:
                    paper_id = excluded.paper_id, conversation_id = excluded.conversation_id,
                    dialogue_conversation_id = excluded.dialogue_conversation_id,
                    parent_reading_session_id = excluded.parent_reading_session_id,
-                   user_id = excluded.user_id, fork_context = excluded.fork_context, state = excluded.state,
+                   user_id = COALESCE(paper_reading_sessions.user_id, excluded.user_id), fork_context = excluded.fork_context, state = excluded.state,
                    current_section_id = excluded.current_section_id, current_paragraph_index = excluded.current_paragraph_index,
                    total_sections = excluded.total_sections, active_skills_json = excluded.active_skills_json,
                    completed_sections_json = excluded.completed_sections_json, section_statuses_json = excluded.section_statuses_json,
@@ -1150,7 +1562,7 @@ class LocalResearchStore:
                     conversation_id,
                     dialogue_conversation_id,
                     parent_session_id,
-                    str(data.get("user_id") or "") or None,
+                    owner_user_id,
                     str(data.get("fork_context") or ""),
                     state,
                     str(position.get("section_id") or "") or None,
@@ -1263,7 +1675,7 @@ class LocalResearchStore:
         }
 
     def find_latest_reading_session(
-        self, *, paper_id: str, conversation_id: str
+        self, *, paper_id: str, conversation_id: str, user_id: str | None = None
     ) -> str:
         """Return the latest top-level reading session for one paper in a chat."""
         paper_id = str(paper_id or "").strip()
@@ -1272,18 +1684,26 @@ class LocalResearchStore:
             return ""
         with self._connection() as connection:
             row = connection.execute(
-                """SELECT reading_session_id
-                   FROM paper_reading_sessions
-                   WHERE paper_id = ? AND conversation_id = ?
-                     AND parent_reading_session_id IS NULL
-                   ORDER BY updated_at DESC, created_at DESC
+                """SELECT reading.reading_session_id
+                   FROM paper_reading_sessions reading
+                   LEFT JOIN conversations owner_conversation
+                     ON owner_conversation.conversation_id = reading.conversation_id
+                   WHERE reading.paper_id = ? AND reading.conversation_id = ?
+                     AND reading.parent_reading_session_id IS NULL
+                     AND (? IS NULL OR COALESCE(NULLIF(reading.user_id, ''), owner_conversation.user_id) = ?)
+                   ORDER BY reading.updated_at DESC, reading.created_at DESC
                    LIMIT 1""",
-                (paper_id, conversation_id),
+                (paper_id, conversation_id, user_id, user_id),
             ).fetchone()
         return str(row["reading_session_id"]) if row is not None else ""
 
     def link_research_artifacts(
-        self, conversation_id: str, artifact_ids: list[str], *, relation: str = "discussed"
+        self,
+        conversation_id: str,
+        artifact_ids: list[str],
+        *,
+        relation: str = "discussed",
+        user_id: str | None = None,
     ) -> list[str]:
         """Attach existing research workspaces to a chat without changing their owner."""
         clean_ids = list(dict.fromkeys(item.strip() for item in artifact_ids if item.strip()))
@@ -1291,6 +1711,11 @@ class LocalResearchStore:
             return []
         if relation not in {"created", "continued", "discussed"}:
             raise ValueError("unsupported artifact relation")
+        if user_id is not None:
+            self.require_conversation_owner(conversation_id, user_id)
+            clean_ids = self.filter_owned_research_artifact_ids(clean_ids, user_id)
+            if not clean_ids:
+                return []
         with self._connection() as connection:
             conversation = connection.execute(
                 "SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)

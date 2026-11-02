@@ -235,3 +235,70 @@ webui/.vite/
 
 # Local domain-onboarding review notes
 docs/领域入门-问题与改进建议.md
+
+# ============================================================
+# Local development / multi-user isolation upgrade artifacts
+# ============================================================
+
+# IDE / Python cache
+.vscode/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local databases and backups
+*.sqlite3
+*.db
+*.bak
+
+# Logs
+*.log
+botpy.log*
+
+# Local secrets
+.env
+.env.local
+.env.*.local
+
+# Isolation source backups
+.conversation-isolation-backup-*/
+.research-mode-isolation-backup-*/
+.paper-library-isolation-backup-*/
+.cli-bootstrap-backup-*/
+
+# Exact installer payloads
+_conversation_isolation_exact/
+_research_mode_isolation_exact/
+_paper_library_isolation_exact/
+_cli_bootstrap_exact/
+
+# Local upgrade packages
+ScholarSprout-cli-bootstrap-phase3.1-current.zip
+ScholarSprout-paper-library-isolation-phase3-current-exact.zip
+ScholarSprout-research-mode-isolation-phase2-current-exact.zip
+
+# Local installer manifests
+MANIFEST.txt
+MANIFEST_direct.txt
+
+# Temporary upgrade documentation
+README_cli_bootstrap.md
+README_direct_install.md
+README_paper_library_isolation.md
+README_research_mode_isolation.md
+
+# Local upgrade / audit scripts
+apply_cli_bootstrap.ps1
+apply_conversation_isolation.ps1
+apply_paper_library_isolation.ps1
+apply_research_mode_isolation.ps1
+
+check_cli_bootstrap.ps1
+check_conversation_isolation.ps1
+check_paper_library_isolation.ps1
+check_research_mode_isolation.ps1
+
+audit_conversation_ownership.ps1
+audit_conversation_ownership.py
+audit_research_mode_ownership.py
+backup_research_db.ps1
